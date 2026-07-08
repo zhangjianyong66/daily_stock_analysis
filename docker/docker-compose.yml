@@ -8,12 +8,19 @@
 #   同时启动: docker-compose -f ./docker/docker-compose.yml up -d analyzer server
 
 name: daily-stock-analysis
-version: '3.8'
 
 x-common: &common
   build:
     context: ..
     dockerfile: docker/Dockerfile
+    network: ${DOCKER_BUILD_NETWORK:-default}
+    args:
+      HTTP_PROXY: ${DOCKER_BUILD_HTTP_PROXY:-}
+      HTTPS_PROXY: ${DOCKER_BUILD_HTTPS_PROXY:-}
+      NO_PROXY: ${DOCKER_BUILD_NO_PROXY:-}
+      http_proxy: ${DOCKER_BUILD_http_proxy:-}
+      https_proxy: ${DOCKER_BUILD_https_proxy:-}
+      no_proxy: ${DOCKER_BUILD_no_proxy:-}
   restart: unless-stopped
 
   # 环境变量（从 .env 文件加载）。不要将 ../.env 作为单文件 volume 挂载到 /app/.env，
@@ -39,9 +46,10 @@ x-common: &common
     - WEBUI_HOST=0.0.0.0
     # API_PORT 从 .env 文件读取，无需在此硬编码
 
-    # 代理设置（如果需要）
-    # - http_proxy=http://host.docker.internal:10809
-    # - https_proxy=http://host.docker.internal:10809
+    # 运行时代理设置优先写入 ../.env。Linux bridge 网络中容器访问宿主机本地代理通常使用 172.17.0.1。
+    # 构建阶段代理由 scripts/docker-up.sh 自动通过 build args 传入。
+    # - http_proxy=http://172.17.0.1:10808
+    # - https_proxy=http://172.17.0.1:10808
   logging:
     driver: "json-file"
     options:

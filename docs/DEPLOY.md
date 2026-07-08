@@ -72,6 +72,12 @@ docker-compose -f ./docker/docker-compose.yml ps
 ./scripts/docker-up.sh logs server      # 查看 server 日志
 ```
 
+如果宿主机通过 `HTTP_PROXY` / `HTTPS_PROXY` 访问 GitHub、Docker Hub、npm 或 PyPI，优先使用 `scripts/docker-up.sh`。脚本会把代理环境变量整理为 Docker build args；当代理地址是 `127.0.0.1`、`localhost` 或 `[::1]` 时，会自动使用 `DOCKER_BUILD_NETWORK=host`，让构建阶段的 `npm ci`、`pip install` 和 GitHub 依赖克隆可以访问宿主机本地代理。本地代理场景下脚本默认只传 HTTPS 代理给 build，避免 Debian `apt-get` 的 HTTP 源被代理拒绝。需要手动覆盖时可显式设置：
+
+```bash
+DOCKER_BUILD_NETWORK=host ./scripts/docker-up.sh restart
+```
+
 ### 3.1 资源建议
 
 默认 `docker/docker-compose.yml` 为每个服务设置 `limits.memory: 1G`、`reservations.memory: 512M`，这是完整分析场景的推荐起点。
@@ -309,6 +315,14 @@ find /opt/stock-analyzer/reports -mtime +30 -delete
 # 清理缓存重新构建
 docker-compose -f ./docker/docker-compose.yml build --no-cache
 ```
+
+如果失败发生在 `npm ci`、`pip install -r requirements.txt` 或 `git clone https://github.com/...`，通常是构建阶段没有拿到代理。确认宿主机能访问 GitHub 后，使用仓库脚本重试：
+
+```bash
+./scripts/docker-up.sh restart
+```
+
+脚本会自动把宿主机代理整理后传给 Docker build；本地 `127.0.0.1` 代理会自动切到 host build network，并默认不把 HTTP 代理传给 apt 阶段。
 
 ### 2. API 访问超时
 

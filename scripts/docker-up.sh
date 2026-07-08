@@ -41,6 +41,10 @@ usage() {
 
 环境变量:
   ENV_FILE=/path/to/.env   指定 Docker Compose 使用的 env 文件，默认项目根目录 .env
+  HTTP_PROXY/HTTPS_PROXY    构建阶段访问外网使用的代理；本地 127.0.0.1 代理会自动启用 host build network
+  DOCKER_BUILD_HTTP_PROXY   覆盖传入 Docker build 的 HTTP 代理；本地代理默认不传 HTTP，避免 apt 走代理被拒绝
+  DOCKER_BUILD_HTTPS_PROXY  覆盖传入 Docker build 的 HTTPS 代理
+  DOCKER_BUILD_NETWORK      覆盖 Docker build 网络模式，默认按代理情况自动选择 default 或 host
 EOF
 }
 
@@ -117,6 +121,77 @@ run_compose() {
   $compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" "$@"
 }
 
+has_local_proxy() {
+  local proxy
+  for proxy in "${HTTP_PROXY:-}" "${HTTPS_PROXY:-}" "${http_proxy:-}" "${https_proxy:-}"; do
+    case "$proxy" in
+      http://127.0.0.1:*|https://127.0.0.1:*|http://localhost:*|https://localhost:*|http://[::1]:*|https://[::1]:*)
+        return 0
+        ;;
+    esac
+  done
+
+  return 1
+}
+
+prepare_build_env() {
+  if [[ -z "${HTTP_PROXY:-}" && -n "${http_proxy:-}" ]]; then
+    export HTTP_PROXY="$http_proxy"
+  fi
+  if [[ -z "${HTTPS_PROXY:-}" && -n "${https_proxy:-}" ]]; then
+    export HTTPS_PROXY="$https_proxy"
+  fi
+  if [[ -z "${NO_PROXY:-}" && -n "${no_proxy:-}" ]]; then
+    export NO_PROXY="$no_proxy"
+  fi
+  if [[ -z "${http_proxy:-}" && -n "${HTTP_PROXY:-}" ]]; then
+    export http_proxy="$HTTP_PROXY"
+  fi
+  if [[ -z "${https_proxy:-}" && -n "${HTTPS_PROXY:-}" ]]; then
+    export https_proxy="$HTTPS_PROXY"
+  fi
+  if [[ -z "${no_proxy:-}" && -n "${NO_PROXY:-}" ]]; then
+    export no_proxy="$NO_PROXY"
+  fi
+
+  if [[ -z "${DOCKER_BUILD_NETWORK:-}" ]]; then
+    if has_local_proxy; then
+      export DOCKER_BUILD_NETWORK=host
+      info "检测到本机代理，Docker 构建阶段使用 host 网络以访问 ${HTTPS_PROXY:-${HTTP_PROXY:-local proxy}}"
+    else
+      export DOCKER_BUILD_NETWORK=default
+    fi
+  fi
+
+  if [[ -z "${DOCKER_BUILD_HTTPS_PROXY+x}" ]]; then
+    export DOCKER_BUILD_HTTPS_PROXY="${HTTPS_PROXY:-}"
+  fi
+  if [[ -z "${DOCKER_BUILD_https_proxy+x}" ]]; then
+    export DOCKER_BUILD_https_proxy="${https_proxy:-${DOCKER_BUILD_HTTPS_PROXY:-}}"
+  fi
+  if [[ -z "${DOCKER_BUILD_NO_PROXY+x}" ]]; then
+    export DOCKER_BUILD_NO_PROXY="${NO_PROXY:-}"
+  fi
+  if [[ -z "${DOCKER_BUILD_no_proxy+x}" ]]; then
+    export DOCKER_BUILD_no_proxy="${no_proxy:-${DOCKER_BUILD_NO_PROXY:-}}"
+  fi
+
+  if [[ -z "${DOCKER_BUILD_HTTP_PROXY+x}" ]]; then
+    if has_local_proxy; then
+      export DOCKER_BUILD_HTTP_PROXY=""
+    else
+      export DOCKER_BUILD_HTTP_PROXY="${HTTP_PROXY:-}"
+    fi
+  fi
+  if [[ -z "${DOCKER_BUILD_http_proxy+x}" ]]; then
+    if has_local_proxy; then
+      export DOCKER_BUILD_http_proxy=""
+    else
+      export DOCKER_BUILD_http_proxy="${http_proxy:-${DOCKER_BUILD_HTTP_PROXY:-}}"
+    fi
+  fi
+}
+
 main() {
   case "$ACTION" in
     -h|--help|help)
@@ -132,6 +207,7 @@ main() {
   docker_bin="$(docker_cmd)"
   compose="$(compose_cmd "$docker_bin")"
   services="$(resolve_services)"
+  prepare_build_env
 
   case "$ACTION" in
     build-up)

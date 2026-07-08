@@ -118,6 +118,13 @@ npm install
 npm run build
 ```
 
+### Docker 构建代理
+
+- `scripts/docker-up.sh` 会把宿主机 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 及小写同名变量整理为 `DOCKER_BUILD_*` build args 传入。
+- 当代理地址是 `127.0.0.1`、`localhost` 或 `[::1]` 时，脚本默认设置 `DOCKER_BUILD_NETWORK=host`，让构建阶段的 `npm ci`、`pip install` 和 GitHub 依赖克隆能访问宿主机本地代理；本地代理场景默认不传 HTTP 代理，避免 Debian `apt-get` 的 HTTP 源被代理拒绝。
+- 如需覆盖构建网络，可显式执行：`DOCKER_BUILD_NETWORK=default ./scripts/docker-up.sh restart` 或 `DOCKER_BUILD_NETWORK=host ./scripts/docker-up.sh restart`。
+- 运行中的 Docker 容器不会自动继承宿主机系统代理；Linux bridge 网络下访问宿主机本地代理通常使用 `172.17.0.1:<端口>`，例如在 `.env` 中配置 `HTTP_PROXY=http://172.17.0.1:10808` / `HTTPS_PROXY=http://172.17.0.1:10808`，重启容器后生效。
+
 ### PR / CI 证据
 
 ```bash
