@@ -59,6 +59,19 @@ docker-compose -f ./docker/docker-compose.yml ps
 
 > 不知道怎么访问？→ [云服务器 Web 界面访问指南](deploy-webui-cloud.md)
 
+也可以使用仓库封装的一键脚本。脚本默认构建并启动 `server`，也就是 WebUI/API 服务；只有需要后台定时自动分析时才启动 `analyzer`。
+
+```bash
+./scripts/docker-up.sh                  # 构建并启动 server
+./scripts/docker-up.sh up               # 直接启动 server
+./scripts/docker-up.sh restart          # 构建并强制重建启动 server
+./scripts/docker-up.sh stop             # 停止 server
+./scripts/docker-up.sh up analyzer      # 启动定时分析服务
+./scripts/docker-up.sh up all           # 同时启动 server 和 analyzer
+./scripts/docker-up.sh down             # 停止并删除整个 compose stack
+./scripts/docker-up.sh logs server      # 查看 server 日志
+```
+
 ### 3.1 资源建议
 
 默认 `docker/docker-compose.yml` 为每个服务设置 `limits.memory: 1G`、`reservations.memory: 512M`，这是完整分析场景的推荐起点。
