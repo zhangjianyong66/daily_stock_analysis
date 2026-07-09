@@ -44,7 +44,7 @@ x-common: &common
 
     # Web/API service bind address (must be 0.0.0.0 inside container)
     - WEBUI_HOST=0.0.0.0
-    # API_PORT 从 .env 文件读取，无需在此硬编码
+    # WEBUI_PORT 从 .env 文件读取；API_PORT 仅保留旧部署兼容
 
     # 运行时代理设置优先写入 ../.env。Linux bridge 网络中容器访问宿主机本地代理通常使用 172.17.0.1。
     # 构建阶段代理由 scripts/docker-up.sh 自动通过 build args 传入。
@@ -74,7 +74,7 @@ services:
   server:
     <<: *common
     container_name: stock-server
-    command: ["python", "main.py", "--serve-only", "--host", "0.0.0.0", "--port", "${API_PORT:-8000}"]
+    command: ["python", "main.py", "--serve-only", "--host", "0.0.0.0", "--port", "${WEBUI_PORT:-${API_PORT:-8000}}"]
     # 若使用 network_mode: host，则以下 ports 映射无效，端口由 command 中的 --port 指定
     ports:
-      - "${API_PORT:-8000}:${API_PORT:-8000}"
+      - "${WEBUI_PORT:-${API_PORT:-8000}}:${WEBUI_PORT:-${API_PORT:-8000}}"

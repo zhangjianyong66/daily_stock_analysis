@@ -74,6 +74,14 @@ def test_docker_compose_default_memory_recommendation_is_not_512m() -> None:
     assert "MAX_WORKERS=1" in compose_text
 
 
+def test_docker_compose_server_port_uses_webui_port_with_api_port_compatibility() -> None:
+    compose_text = (REPO_ROOT / "docker" / "docker-compose.yml").read_text(encoding="utf-8")
+
+    port_expr = "${WEBUI_PORT:-${API_PORT:-8000}}"
+    assert f'"{port_expr}"' in compose_text
+    assert f'"{port_expr}:{port_expr}"' in compose_text
+
+
 def test_docker_memory_guides_describe_resource_profiles() -> None:
     doc_paths = (
         "docs/DEPLOY.md",

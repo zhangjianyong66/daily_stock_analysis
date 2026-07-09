@@ -120,6 +120,7 @@ npm run build
 
 ### Docker 构建代理
 
+- Docker Compose 的 `server` 端口优先使用 `.env` 中的 `WEBUI_PORT`；旧部署仍可通过 `API_PORT` 兼容覆盖。排查 8000 端口冲突时，先确认 `WEBUI_PORT`、`API_PORT` 与 `docker-compose config` 渲染结果是否一致。
 - `scripts/docker-up.sh` 会把宿主机 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 及小写同名变量整理为 `DOCKER_BUILD_*` build args 传入。
 - 当代理地址是 `127.0.0.1`、`localhost` 或 `[::1]` 时，脚本默认设置 `DOCKER_BUILD_NETWORK=host`，让构建阶段的 `npm ci`、`pip install` 和 GitHub 依赖克隆能访问宿主机本地代理；本地代理场景默认不传 HTTP 代理，避免 Debian `apt-get` 的 HTTP 源被代理拒绝。
 - 如需覆盖构建网络，可显式执行：`DOCKER_BUILD_NETWORK=default ./scripts/docker-up.sh restart` 或 `DOCKER_BUILD_NETWORK=host ./scripts/docker-up.sh restart`。
