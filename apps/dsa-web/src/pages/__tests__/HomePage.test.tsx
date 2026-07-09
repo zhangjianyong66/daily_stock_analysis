@@ -641,6 +641,129 @@ describe('HomePage', () => {
     expect(analysisApi.getStatus).toHaveBeenCalledWith('task-1');
   });
 
+  it('submits all configured stock and ETF codes after confirmation', async () => {
+    vi.mocked(historyApi.getList).mockResolvedValue({
+      total: 0,
+      page: 1,
+      limit: 20,
+      items: [],
+    });
+    vi.mocked(systemConfigApi.getWatchlist).mockResolvedValue(['600519', '510300', '159915.SZ']);
+    vi.mocked(analysisApi.analyzeAsync).mockResolvedValue({
+      accepted: [
+        { taskId: 'stock-task-1', stockCode: '600519', status: 'pending' },
+        { taskId: 'etf-task-1', stockCode: '510300', status: 'pending' },
+        { taskId: 'etf-task-2', stockCode: '159915.SZ', status: 'pending' },
+      ],
+      duplicates: [],
+      message: 'accepted',
+    });
+
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: '批量分析配置' }));
+
+    expect(await screen.findByText('将提交 3 个配置标的：600519、510300、159915.SZ')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '确认提交' }));
+
+    await waitFor(() => {
+      expect(analysisApi.analyzeAsync).toHaveBeenCalledWith(expect.objectContaining({
+        stockCodes: ['600519', '510300', '159915.SZ'],
+        reportType: 'detailed',
+        notify: true,
+      }));
+    });
+    expect(screen.getByText('已提交 3 个配置标的分析任务')).toBeInTheDocument();
+  });
+
+  it('shows a message and skips submission when the watchlist is empty', async () => {
+    vi.mocked(historyApi.getList).mockResolvedValue({
+      total: 0,
+      page: 1,
+      limit: 20,
+      items: [],
+    });
+    vi.mocked(systemConfigApi.getWatchlist).mockResolvedValue([]);
+
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: '批量分析配置' }));
+
+    expect(await screen.findByText('当前自选队列没有可批量分析的配置标的')).toBeInTheDocument();
+    expect(analysisApi.analyzeAsync).not.toHaveBeenCalled();
+    expect(screen.queryByText(/将提交/)).not.toBeInTheDocument();
+  });
+
+  it('shows accepted and duplicate counts from configured batch submission', async () => {
+    vi.mocked(historyApi.getList).mockResolvedValue({
+      total: 0,
+      page: 1,
+      limit: 20,
+      items: [],
+    });
+    vi.mocked(systemConfigApi.getWatchlist).mockResolvedValue(['510300', '159915']);
+    vi.mocked(analysisApi.analyzeAsync).mockResolvedValue({
+      accepted: [
+        { taskId: 'etf-task-1', stockCode: '510300', status: 'pending' },
+      ],
+      duplicates: [
+        { stockCode: '159915', existingTaskId: 'existing-task-1', message: 'Symbol already queued' },
+      ],
+      message: 'partial accepted',
+    });
+
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: '批量分析配置' }));
+    fireEvent.click(await screen.findByRole('button', { name: '确认提交' }));
+
+    expect(await screen.findByText('已提交 1 个配置标的分析任务，1 个已在队列中')).toBeInTheDocument();
+  });
+
+  it('passes the current notification toggle state to configured batch submission', async () => {
+    vi.mocked(historyApi.getList).mockResolvedValue({
+      total: 0,
+      page: 1,
+      limit: 20,
+      items: [],
+    });
+    vi.mocked(systemConfigApi.getWatchlist).mockResolvedValue(['510300']);
+    vi.mocked(analysisApi.analyzeAsync).mockResolvedValue({
+      accepted: [{ taskId: 'etf-task-1', stockCode: '510300', status: 'pending' }],
+      duplicates: [],
+      message: 'accepted',
+    });
+
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByLabelText('推送通知'));
+    fireEvent.click(screen.getByRole('button', { name: '批量分析配置' }));
+    fireEvent.click(await screen.findByRole('button', { name: '确认提交' }));
+
+    await waitFor(() => {
+      expect(analysisApi.analyzeAsync).toHaveBeenCalledWith(expect.objectContaining({
+        stockCodes: ['510300'],
+        notify: false,
+      }));
+    });
+  });
+
   it('keeps report language unset when only the UI language is English', async () => {
     window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'en');
     vi.mocked(historyApi.getList).mockResolvedValue({

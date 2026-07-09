@@ -1,13 +1,13 @@
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BarChart3, Check, SlidersHorizontal, X } from 'lucide-react';
+import { BarChart3, Check, ListChecks, SlidersHorizontal, X } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { getParsedApiError, type ParsedApiError } from '../api/error';
 import { analysisApi } from '../api/analysis';
 import { historyApi } from '../api/history';
 import { agentApi, type SkillInfo } from '../api/agent';
 import { systemConfigApi } from '../api/systemConfig';
-import { ApiErrorAlert, Button, Drawer, EmptyState, InlineAlert } from '../components/common';
+import { ApiErrorAlert, Button, ConfirmDialog, Drawer, EmptyState, InlineAlert } from '../components/common';
 import { DashboardStateBlock } from '../components/dashboard';
 import { StockAutocomplete } from '../components/StockAutocomplete';
 import { StockHistoryTrendDrawer, StockBar } from '../components/history';
@@ -23,12 +23,15 @@ import type { SetupStatusResponse } from '../types/systemConfig';
 import { normalizeReportLanguage } from '../utils/reportLanguage';
 import type { MarketReviewPayload, StockBarItem, TaskInfo } from '../types/analysis';
 import type { RunFlowSnapshotSource } from '../types/runFlow';
+import { includesStockCode } from '../utils/stockCode';
 
 type MarketReviewNotice = {
   variant: 'success' | 'warning' | 'danger';
   title: string;
   message: string;
 } | null;
+
+type BatchConfiguredNotice = MarketReviewNotice;
 
 type RunFlowDrawerState =
   | { open: false }
@@ -43,6 +46,20 @@ type StockAnalysisNavigationState = {
 
 const DUPLICATE_BANNER_AUTO_DISMISS_MS = 5000;
 
+function getConfiguredStockCodes(watchlist: string[]): string[] {
+  const result: string[] = [];
+  for (const code of watchlist) {
+    const trimmed = code.trim();
+    if (!trimmed) {
+      continue;
+    }
+    if (!includesStockCode(result, trimmed)) {
+      result.push(trimmed);
+    }
+  }
+  return result;
+}
+
 const HomePage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -51,6 +68,11 @@ const HomePage: React.FC = () => {
   const [isSubmittingMarketReview, setIsSubmittingMarketReview] = useState(false);
   const [marketReviewNotice, setMarketReviewNotice] = useState<MarketReviewNotice>(null);
   const [marketReviewError, setMarketReviewError] = useState<ParsedApiError | null>(null);
+  const [isPreparingBatchConfigured, setIsPreparingBatchConfigured] = useState(false);
+  const [isSubmittingBatchConfigured, setIsSubmittingBatchConfigured] = useState(false);
+  const [batchConfiguredCodes, setBatchConfiguredCodes] = useState<string[]>([]);
+  const [batchConfiguredNotice, setBatchConfiguredNotice] = useState<BatchConfiguredNotice>(null);
+  const [batchConfiguredError, setBatchConfiguredError] = useState<ParsedApiError | null>(null);
   const [marketReviewReport, setMarketReviewReport] = useState<string | null>(null);
   const [marketReviewPayload, setMarketReviewPayload] = useState<MarketReviewPayload | null>(null);
   const [analysisSkills, setAnalysisSkills] = useState<SkillInfo[]>([]);
@@ -632,6 +654,74 @@ const HomePage: React.FC = () => {
     }
   }, [notify, pollMarketReviewStatus, scrollMarketReviewFeedbackIntoView, t]);
 
+  const handlePrepareBatchConfiguredAnalysis = useCallback(async () => {
+    setBatchConfiguredNotice(null);
+    setBatchConfiguredError(null);
+
+    setIsPreparingBatchConfigured(true);
+    try {
+      const watchlist = await systemConfigApi.getWatchlist();
+      const configuredCodes = getConfiguredStockCodes(watchlist);
+      if (configuredCodes.length === 0) {
+        setBatchConfiguredCodes([]);
+        setBatchConfiguredNotice({
+          variant: 'warning',
+          title: t('home.batchConfiguredEmptyTitle'),
+          message: t('home.batchConfiguredEmptyMessage'),
+        });
+        scrollMarketReviewFeedbackIntoView();
+        return;
+      }
+      setBatchConfiguredCodes(configuredCodes);
+    } catch (err: unknown) {
+      setBatchConfiguredCodes([]);
+      setBatchConfiguredError(getParsedApiError(err));
+      scrollMarketReviewFeedbackIntoView();
+    } finally {
+      setIsPreparingBatchConfigured(false);
+    }
+  }, [scrollMarketReviewFeedbackIntoView, t]);
+
+  const handleCancelBatchConfiguredAnalysis = useCallback(() => {
+    if (!isSubmittingBatchConfigured) {
+      setBatchConfiguredCodes([]);
+    }
+  }, [isSubmittingBatchConfigured]);
+
+  const handleConfirmBatchConfiguredAnalysis = useCallback(async () => {
+    if (batchConfiguredCodes.length === 0 || isSubmittingBatchConfigured) {
+      return;
+    }
+
+    setIsSubmittingBatchConfigured(true);
+    setBatchConfiguredNotice(null);
+    setBatchConfiguredError(null);
+    try {
+      const result = await analysisApi.analyzeAsync({
+        stockCodes: batchConfiguredCodes,
+        reportType: 'detailed',
+        notify,
+      });
+      const acceptedCount = 'accepted' in result ? result.accepted.length : 1;
+      const duplicateCount = 'duplicates' in result ? result.duplicates.length : 0;
+      setBatchConfiguredCodes([]);
+      setBatchConfiguredNotice({
+        variant: acceptedCount > 0 ? 'success' : 'warning',
+        title: t('home.batchConfiguredSubmittedTitle'),
+        message: duplicateCount > 0
+          ? t('home.batchConfiguredSubmittedWithDuplicates', { accepted: acceptedCount, duplicates: duplicateCount })
+          : t('home.batchConfiguredSubmittedAcceptedOnly', { accepted: acceptedCount }),
+      });
+      await refreshActiveTasks();
+      scrollMarketReviewFeedbackIntoView();
+    } catch (err: unknown) {
+      setBatchConfiguredError(getParsedApiError(err));
+      scrollMarketReviewFeedbackIntoView();
+    } finally {
+      setIsSubmittingBatchConfigured(false);
+    }
+  }, [batchConfiguredCodes, isSubmittingBatchConfigured, notify, refreshActiveTasks, scrollMarketReviewFeedbackIntoView, t]);
+
   const mergedStockBarItems = useMemo<StockBarItem[]>(() => {
     const latestMarketReview = marketReviewHistoryItems[0];
     const stockItems = stockBarItems.filter((item) => item.stockCode !== 'MARKET');
@@ -785,6 +875,18 @@ const HomePage: React.FC = () => {
                 type="button"
                 variant="secondary"
                 size="md"
+                isLoading={isPreparingBatchConfigured || isSubmittingBatchConfigured}
+                loadingText={t('home.batchConfiguredSubmitting')}
+                onClick={() => void handlePrepareBatchConfiguredAnalysis()}
+                className="h-10 flex-1 whitespace-nowrap md:flex-none"
+              >
+                <ListChecks className="h-4 w-4" aria-hidden="true" />
+                {t('home.batchConfiguredAnalyze')}
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                size="md"
                 isLoading={isSubmittingMarketReview}
                 loadingText={t('home.submitMarketReview')}
                 onClick={() => void handleTriggerMarketReview()}
@@ -900,6 +1002,27 @@ const HomePage: React.FC = () => {
                   title={marketReviewNotice.title}
                   message={marketReviewNotice.message}
                   className="rounded-xl px-3 py-2 text-xs shadow-none"
+                />
+              </div>
+            ) : null}
+
+            {batchConfiguredNotice ? (
+              <div className="mb-3">
+                <InlineAlert
+                  variant={batchConfiguredNotice.variant}
+                  title={batchConfiguredNotice.title}
+                  message={batchConfiguredNotice.message}
+                  className="rounded-xl px-3 py-2 text-xs shadow-none"
+                />
+              </div>
+            ) : null}
+
+            {batchConfiguredError ? (
+              <div className="mb-3">
+                <ApiErrorAlert
+                  error={batchConfiguredError}
+                  className="mb-1"
+                  onDismiss={() => setBatchConfiguredError(null)}
                 />
               </div>
             ) : null}
@@ -1079,6 +1202,19 @@ const HomePage: React.FC = () => {
         </Drawer>
       ) : null}
 
+      <ConfirmDialog
+        isOpen={batchConfiguredCodes.length > 0}
+        title={t('home.batchConfiguredConfirmTitle')}
+        message={t('home.batchConfiguredConfirmMessage', {
+          count: batchConfiguredCodes.length,
+          codes: batchConfiguredCodes.join('、'),
+        })}
+        confirmText={t('home.batchConfiguredConfirmSubmit')}
+        confirmDisabled={isSubmittingBatchConfigured}
+        cancelDisabled={isSubmittingBatchConfigured}
+        onConfirm={() => void handleConfirmBatchConfiguredAnalysis()}
+        onCancel={handleCancelBatchConfiguredAnalysis}
+      />
     </div>
   );
 };

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [新功能] Web 首页新增“批量分析配置”入口，可从当前自选队列批量提交所有配置编码的异步分析任务。
 - [修复] Docker 一键启动脚本在构建阶段自动整理宿主机代理，并在检测到本地 127.0.0.1 代理时使用 host build network 且默认不把 HTTP 代理传给 apt，避免 `pip install` 克隆 GitHub 依赖、`npm ci` 访问外网或 Debian HTTP 源被代理拒绝。
 - [改进] GitHub Actions 每日分析工作流补齐 TickFlow 数据源环境变量映射，并收敛 README 数据源稳定性说明到完整指南。
 - [修复] WebUI 启动时显式 `--host` / `--port` 不再被 `.env` 中的 `WEBUI_HOST` / `WEBUI_PORT` 覆盖，未传 CLI 参数时统一使用解析后的运行时配置。
