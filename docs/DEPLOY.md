@@ -72,10 +72,12 @@ docker-compose -f ./docker/docker-compose.yml ps
 ./scripts/docker-up.sh logs server      # 查看 server 日志
 ```
 
-如果宿主机通过 `HTTP_PROXY` / `HTTPS_PROXY` 访问 GitHub、Docker Hub、npm 或 PyPI，优先使用 `scripts/docker-up.sh`。脚本会把代理环境变量整理为 Docker build args；当代理地址是 `127.0.0.1`、`localhost` 或 `[::1]` 时，会自动使用 `DOCKER_BUILD_NETWORK=host`，让构建阶段的 `npm ci`、`pip install` 和 GitHub 依赖克隆可以访问宿主机本地代理。本地代理场景下脚本默认只传 HTTPS 代理给 build，避免 Debian `apt-get` 的 HTTP 源被代理拒绝。需要手动覆盖时可显式设置：
+如果 Docker build 需要通过宿主机代理访问 GitHub、Docker Hub、npm、PyPI 或 apt 源，优先使用 `scripts/docker-up.sh`。脚本默认使用 `DOCKER_BUILD_NETWORK=host`、`DOCKER_BUILD_HTTPS_PROXY=http://127.0.0.1:10808`、空 HTTP build 代理，并把 Debian apt 源切到清华 HTTPS 镜像，避免 Debian 默认 HTTP 源通过本机代理时出现 403，也避免 `deb.debian.org` HTTPS 在部分代理规则下 TLS 握手失败。需要手动覆盖时可显式设置：
 
 ```bash
 DOCKER_BUILD_NETWORK=host ./scripts/docker-up.sh restart
+DOCKER_BUILD_HTTPS_PROXY=http://127.0.0.1:10808 ./scripts/docker-up.sh restart
+DEBIAN_APT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian ./scripts/docker-up.sh restart
 ```
 
 ### 3.1 资源建议

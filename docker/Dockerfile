@@ -13,6 +13,8 @@ ARG NO_PROXY
 ARG http_proxy
 ARG https_proxy
 ARG no_proxy
+ARG DEBIAN_APT_MIRROR
+ARG DEBIAN_SECURITY_APT_MIRROR
 
 WORKDIR /app/apps/dsa-web
 
@@ -31,6 +33,8 @@ ARG NO_PROXY
 ARG http_proxy
 ARG https_proxy
 ARG no_proxy
+ARG DEBIAN_APT_MIRROR
+ARG DEBIAN_SECURITY_APT_MIRROR
 
 # 设置工作目录
 WORKDIR /app
@@ -38,6 +42,14 @@ WORKDIR /app
 # 设置时区为上海
 ENV TZ=Asia/Shanghai
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
+# 可选替换 Debian apt 源；docker-up.sh 默认使用 HTTPS 镜像以适配宿主机 10808 代理。
+RUN if [ -n "$DEBIAN_SECURITY_APT_MIRROR" ]; then \
+        sed -i "s#http://deb.debian.org/debian-security#$DEBIAN_SECURITY_APT_MIRROR#g" /etc/apt/sources.list.d/debian.sources; \
+    fi; \
+    if [ -n "$DEBIAN_APT_MIRROR" ]; then \
+        sed -i "s#http://deb.debian.org/debian#$DEBIAN_APT_MIRROR#g" /etc/apt/sources.list.d/debian.sources; \
+    fi
 
 # 安装系统依赖（wkhtmltopdf 含 wkhtmltoimage，用于 Markdown 转图片 Issue #289）
 RUN apt-get update && apt-get install -y --no-install-recommends \

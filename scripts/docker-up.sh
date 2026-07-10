@@ -7,6 +7,9 @@ ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env}"
 ENV_EXAMPLE="$ROOT_DIR/.env.example"
 ACTION="${1:-build-up}"
 TARGET="${2:-server}"
+DEFAULT_DOCKER_BUILD_PROXY="http://127.0.0.1:10808"
+DEFAULT_DEBIAN_APT_MIRROR="https://mirrors.tuna.tsinghua.edu.cn/debian"
+DEFAULT_DEBIAN_SECURITY_APT_MIRROR="https://mirrors.tuna.tsinghua.edu.cn/debian-security"
 
 usage() {
   cat <<'EOF'
@@ -41,10 +44,12 @@ usage() {
 
 环境变量:
   ENV_FILE=/path/to/.env   指定 Docker Compose 使用的 env 文件，默认项目根目录 .env
-  HTTP_PROXY/HTTPS_PROXY    构建阶段访问外网使用的代理；本地 127.0.0.1 代理会自动启用 host build network
+  HTTP_PROXY/HTTPS_PROXY    可作为运行环境代理输入；Docker build 默认使用 127.0.0.1:10808
   DOCKER_BUILD_HTTP_PROXY   覆盖传入 Docker build 的 HTTP 代理；本地代理默认不传 HTTP，避免 apt 走代理被拒绝
-  DOCKER_BUILD_HTTPS_PROXY  覆盖传入 Docker build 的 HTTPS 代理
-  DOCKER_BUILD_NETWORK      覆盖 Docker build 网络模式，默认按代理情况自动选择 default 或 host
+  DOCKER_BUILD_HTTPS_PROXY  覆盖传入 Docker build 的 HTTPS 代理，默认 http://127.0.0.1:10808
+  DOCKER_BUILD_NETWORK      覆盖 Docker build 网络模式，默认 host
+  DEBIAN_APT_MIRROR         覆盖 Docker build 阶段 Debian 主源，默认清华 HTTPS 镜像
+  DEBIAN_SECURITY_APT_MIRROR 覆盖 Docker build 阶段 Debian security 源，默认清华 HTTPS 镜像
 EOF
 }
 
@@ -155,19 +160,14 @@ prepare_build_env() {
   fi
 
   if [[ -z "${DOCKER_BUILD_NETWORK:-}" ]]; then
-    if has_local_proxy; then
-      export DOCKER_BUILD_NETWORK=host
-      info "检测到本机代理，Docker 构建阶段使用 host 网络以访问 ${HTTPS_PROXY:-${HTTP_PROXY:-local proxy}}"
-    else
-      export DOCKER_BUILD_NETWORK=default
-    fi
+    export DOCKER_BUILD_NETWORK=host
   fi
 
   if [[ -z "${DOCKER_BUILD_HTTPS_PROXY+x}" ]]; then
-    export DOCKER_BUILD_HTTPS_PROXY="${HTTPS_PROXY:-}"
+    export DOCKER_BUILD_HTTPS_PROXY="$DEFAULT_DOCKER_BUILD_PROXY"
   fi
   if [[ -z "${DOCKER_BUILD_https_proxy+x}" ]]; then
-    export DOCKER_BUILD_https_proxy="${https_proxy:-${DOCKER_BUILD_HTTPS_PROXY:-}}"
+    export DOCKER_BUILD_https_proxy="$DOCKER_BUILD_HTTPS_PROXY"
   fi
   if [[ -z "${DOCKER_BUILD_NO_PROXY+x}" ]]; then
     export DOCKER_BUILD_NO_PROXY="${NO_PROXY:-}"
@@ -177,19 +177,23 @@ prepare_build_env() {
   fi
 
   if [[ -z "${DOCKER_BUILD_HTTP_PROXY+x}" ]]; then
-    if has_local_proxy; then
-      export DOCKER_BUILD_HTTP_PROXY=""
-    else
-      export DOCKER_BUILD_HTTP_PROXY="${HTTP_PROXY:-}"
-    fi
+    export DOCKER_BUILD_HTTP_PROXY=""
   fi
   if [[ -z "${DOCKER_BUILD_http_proxy+x}" ]]; then
-    if has_local_proxy; then
-      export DOCKER_BUILD_http_proxy=""
-    else
-      export DOCKER_BUILD_http_proxy="${http_proxy:-${DOCKER_BUILD_HTTP_PROXY:-}}"
-    fi
+    export DOCKER_BUILD_http_proxy=""
   fi
+
+  if [[ -z "${DEBIAN_APT_MIRROR:-}" ]]; then
+    export DEBIAN_APT_MIRROR="$DEFAULT_DEBIAN_APT_MIRROR"
+  fi
+  if [[ -z "${DEBIAN_SECURITY_APT_MIRROR:-}" ]]; then
+    export DEBIAN_SECURITY_APT_MIRROR="$DEFAULT_DEBIAN_SECURITY_APT_MIRROR"
+  fi
+
+  info "Docker 构建阶段使用网络: $DOCKER_BUILD_NETWORK"
+  info "Docker 构建阶段 HTTPS 代理: ${DOCKER_BUILD_HTTPS_PROXY:-未设置}"
+  info "Docker 构建阶段 Debian 源: $DEBIAN_APT_MIRROR"
+  info "Docker 构建阶段 Debian security 源: $DEBIAN_SECURITY_APT_MIRROR"
 }
 
 main() {

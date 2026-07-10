@@ -121,8 +121,8 @@ npm run build
 ### Docker 构建代理
 
 - Docker Compose 的 `server` 端口优先使用 `.env` 中的 `WEBUI_PORT`；旧部署仍可通过 `API_PORT` 兼容覆盖。排查 8000 端口冲突时，先确认 `WEBUI_PORT`、`API_PORT` 与 `docker-compose config` 渲染结果是否一致。
-- `scripts/docker-up.sh` 会把宿主机 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 及小写同名变量整理为 `DOCKER_BUILD_*` build args 传入。
-- 当代理地址是 `127.0.0.1`、`localhost` 或 `[::1]` 时，脚本默认设置 `DOCKER_BUILD_NETWORK=host`，让构建阶段的 `npm ci`、`pip install` 和 GitHub 依赖克隆能访问宿主机本地代理；本地代理场景默认不传 HTTP 代理，避免 Debian `apt-get` 的 HTTP 源被代理拒绝。
+- `scripts/docker-up.sh` 默认设置 `DOCKER_BUILD_NETWORK=host`、`DOCKER_BUILD_HTTPS_PROXY=http://127.0.0.1:10808`、空 `DOCKER_BUILD_HTTP_PROXY` / `DOCKER_BUILD_http_proxy`，并把 Debian apt 源切到清华 HTTPS 镜像，确保构建阶段可通过宿主机 10808 代理访问 npm、PyPI/GitHub 与 apt 源。
+- `scripts/docker-up.sh` 仍会补齐宿主机 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 及小写同名变量，构建代理以脚本默认值为准；显式导出的 `DOCKER_BUILD_*`、`DEBIAN_APT_MIRROR`、`DEBIAN_SECURITY_APT_MIRROR` 优先级高于脚本默认值。
 - 如需覆盖构建网络，可显式执行：`DOCKER_BUILD_NETWORK=default ./scripts/docker-up.sh restart` 或 `DOCKER_BUILD_NETWORK=host ./scripts/docker-up.sh restart`。
 - 运行中的 Docker 容器不会自动继承宿主机系统代理；Linux bridge 网络下访问宿主机本地代理通常使用 `172.17.0.1:<端口>`，例如在 `.env` 中配置 `HTTP_PROXY=http://172.17.0.1:10808` / `HTTPS_PROXY=http://172.17.0.1:10808`，重启容器后生效。
 
