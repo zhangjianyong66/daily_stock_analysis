@@ -126,6 +126,16 @@ npm run build
 - 如需覆盖构建网络，可显式执行：`DOCKER_BUILD_NETWORK=default ./scripts/docker-up.sh restart` 或 `DOCKER_BUILD_NETWORK=host ./scripts/docker-up.sh restart`。
 - 运行中的 Docker 容器不会自动继承宿主机系统代理；Linux bridge 网络下访问宿主机本地代理通常使用 `172.17.0.1:<端口>`，例如在 `.env` 中配置 `HTTP_PROXY=http://172.17.0.1:10808` / `HTTPS_PROXY=http://172.17.0.1:10808`，重启容器后生效。
 
+### 本机 / ECS2 当前部署备注
+
+- 本机 Docker 中 `daily-stock-analysis` 的 Web/API 服务通常由 `stock-server` 容器提供，启动命令为 `python main.py --serve-only --host 0.0.0.0 --port ${WEBUI_PORT:-${API_PORT:-8000}}`。
+- 当前本机 8000 端口可能被其他项目占用；如 `.env` 中设置 `WEBUI_PORT=8001` / `API_PORT=8001`，`stock-server` 会映射为宿主机 `0.0.0.0:8001->8001/tcp`。
+- 本机 frpc 由用户级 systemd 服务 `~/.config/systemd/user/frpc.service` 管理，配置入口为 `~/.frpc/frpc.ini`。该文件包含 frps token，禁止提交仓库。
+- 当前本机 frpc 代理包含本机 SSH、其他项目域名以及本项目 `[dsa-stock]`。`[dsa-stock]` 使用 `type = http`、`local_ip = 127.0.0.1`、`local_port = 8001`、`custom_domains = stock.zhangjianyong.top`，通过 ECS2 frps HTTP vhost 暴露 DSA。
+- ECS2 的历史/运维记录在 `/home/zhangjianyong/project/server_environment/docs/ecs2-environment.md`；ECS2 nginx 常用配置目录为 `/usr/local/nginx/conf/conf.d/`，frps 配置为 `/etc/frp/frps.ini`。
+- ECS2 上 `stock.zhangjianyong.top` 当前由 nginx `/usr/local/nginx/conf/conf.d/stock.conf` 管理，HTTPS 入口反代到 ECS2 frps HTTP vhost `http://127.0.0.1:8080`，再由本机 frpc `[dsa-stock]` 转发到本机 DSA `127.0.0.1:8001`。
+- `stock.zhangjianyong.top` 证书使用 Let's Encrypt，nginx 证书路径为 `/usr/local/nginx/conf/cert/stock.zhangjianyong.top.pem` 和 `/usr/local/nginx/conf/cert/stock.zhangjianyong.top.key`；ECS2 `/root/ssl_auto_renew/domains.conf` 已包含该域名映射，root crontab 继续执行 `/root/ssl_auto_renew/ssl_auto_renew.sh apply auto` 与 `check`。
+
 ### PR / CI 证据
 
 ```bash
