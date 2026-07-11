@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修复] 普通分析任务新增队列级超时兜底并释放重复提交锁，数据源 manager 为股票名称、日线和实时行情调用增加 provider 级等待预算与 fallback，避免单个外部源卡住导致任务长期显示执行中。
+- [修复] 管理员认证开关在 Docker `env_file` 注入但容器内无 `/app/.env` 文件时也能读取 `ADMIN_AUTH_ENABLED` 环境变量，避免重建容器后公网 WebUI 误判为未启用认证。
+- [修复] Web 首页历史日期参数改为稳定生成 `YYYY-MM-DD`，避免 iPad/Safari 将日期格式化为 `M/D/YYYY` 后导致历史股票栏接口失败、首页只显示单条记录。
 - [新功能] Web 首页新增“批量分析配置”入口，可从当前自选队列批量提交所有配置编码的异步分析任务。
 - [修复] Docker Compose 启动 `server` 时优先使用 `.env` 中的 `WEBUI_PORT`，并保留 `API_PORT` 兼容，避免 WebUI 端口已改但容器仍绑定默认 8000。
 - [修复] Docker 一键启动脚本默认使用宿主机 `127.0.0.1:10808` HTTPS 构建代理、host build network 与清华 Debian HTTPS 镜像源，并保持 HTTP build 代理为空，避免 npm/PyPI/GitHub 依赖或 Debian apt 源在构建阶段因本机代理规则出现 403 或 TLS 握手失败。

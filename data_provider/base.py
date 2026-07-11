@@ -17,7 +17,7 @@
 import logging
 import random
 import time
-from threading import BoundedSemaphore, RLock, Thread
+from threading import BoundedSemaphore, Event, RLock, Thread
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Callable, Optional, List, Tuple, Dict, Any
@@ -65,6 +65,14 @@ def summarize_exception(exc: Exception) -> Tuple[str, str]:
     error_type = type(root).__name__
     message = str(exc).strip() or str(root).strip() or error_type
     return error_type, " ".join(message.split())
+
+
+def _config_float(config: Any, field_name: str, default: float) -> float:
+    """Read a numeric runtime config value with conservative fallback."""
+    try:
+        return float(getattr(config, field_name, default))
+    except (TypeError, ValueError):
+        return float(default)
 
 
 def normalize_stock_code(stock_code: str) -> str:
@@ -738,11 +746,46 @@ class DataFetcherManager:
                 self._fetcher_call_locks[fetcher_id] = lock
             return lock
 
-    def _call_fetcher_method(self, fetcher: BaseFetcher, method_name: str, *args, **kwargs):
-        """Serialize shared fetcher state access through manager-owned per-instance locks."""
+    def _call_fetcher_method(
+        self,
+        fetcher: BaseFetcher,
+        method_name: str,
+        *args,
+        timeout_seconds: Optional[float] = None,
+        capability: str = "",
+        **kwargs,
+    ):
+        """Serialize shared fetcher access and optionally enforce a caller-side timeout."""
         method = getattr(fetcher, method_name)
-        with self._get_fetcher_call_lock(fetcher):
-            return method(*args, **kwargs)
+        wait_seconds = float(timeout_seconds or 0)
+        if wait_seconds <= 0:
+            with self._get_fetcher_call_lock(fetcher):
+                return method(*args, **kwargs)
+
+        done = Event()
+        box: Dict[str, Any] = {}
+
+        def _worker() -> None:
+            try:
+                with self._get_fetcher_call_lock(fetcher):
+                    box["result"] = method(*args, **kwargs)
+            except Exception as exc:  # pragma: no cover - surfaced in caller thread
+                box["error"] = exc
+            finally:
+                done.set()
+
+        worker = Thread(
+            target=_worker,
+            name=f"fetcher_timeout_{fetcher.name}_{method_name}",
+            daemon=True,
+        )
+        worker.start()
+        if not done.wait(timeout=wait_seconds):
+            label = capability or method_name
+            raise TimeoutError(f"{fetcher.name}.{method_name} {label} timeout after {wait_seconds:g}s")
+        if "error" in box:
+            raise box["error"]
+        return box.get("result")
 
     @classmethod
     def _filter_daily_fetchers_for_market(
@@ -1269,6 +1312,7 @@ class DataFetcherManager:
             DataFetchError: 所有数据源都失败时抛出
         """
         from .us_index_mapping import is_us_index_code, is_us_stock_code
+        from src.config import get_config
 
         # Normalize code (strip SH/SZ prefix etc.)
         stock_code = normalize_stock_code(stock_code)
@@ -1276,6 +1320,7 @@ class DataFetcherManager:
         fetchers = self._get_fetchers_snapshot()
         errors = []
         request_start = time.time()
+        daily_timeout = _config_float(get_config(), "data_source_daily_timeout_seconds", 45.0)
 
         # 快速路径：美股使用专用数据源路由；港股先过滤不支持港股日线的数据源
         #   - 配置长桥凭据后: Longbridge 为首选, YFinance/AkShare 兜底
@@ -1344,6 +1389,8 @@ class DataFetcherManager:
                             start_date=start_date,
                             end_date=end_date,
                             days=days,
+                            timeout_seconds=daily_timeout,
+                            capability="daily_data",
                         )
                         if df is not None and not df.empty:
                             duration_ms = int((time.time() - attempt_start) * 1000)
@@ -1422,7 +1469,9 @@ class DataFetcherManager:
                     stock_code=stock_code,
                     start_date=start_date,
                     end_date=end_date,
-                    days=days
+                    days=days,
+                    timeout_seconds=daily_timeout,
+                    capability="daily_data",
                 )
                 
                 if df is not None and not df.empty:
@@ -1747,6 +1796,7 @@ class DataFetcherManager:
         from src.config import get_config
 
         config = get_config()
+        realtime_timeout = _config_float(config, "data_source_realtime_timeout_seconds", 12.0)
 
         # 如果实时行情功能被禁用，直接返回 None
         if not config.enable_realtime_quote:
@@ -1827,10 +1877,43 @@ class DataFetcherManager:
         
         errors = []
         failed_sources: List[str] = []
+        timed_out_fetcher_ids = set()
         # primary_quote holds the first successful result; we may supplement
         # missing fields (volume_ratio, turnover_rate, etc.) from later sources.
         primary_quote = None
         primary_fallback_from: Optional[str] = None
+
+        def _call_realtime_source(fetcher_obj, *call_args, route_source: str, fallback_source: Optional[str], **call_kwargs):
+            provider_name = fetcher_obj.name
+            if id(fetcher_obj) in timed_out_fetcher_ids:
+                record_provider_run(
+                    data_type="realtime_quote",
+                    provider=provider_name,
+                    operation="get_realtime_quote",
+                    success=False,
+                    latency_ms=int((time.time() - attempt_start) * 1000),
+                    error_type="provider_timeout_skip",
+                    error_message="provider skipped after manager-level timeout in current request",
+                    fallback_to=fallback_source,
+                    record_count=0,
+                )
+                if primary_quote is None:
+                    failed_sources.append(route_source)
+                return None
+
+            record_provider_run_started(
+                data_type="realtime_quote",
+                provider=provider_name,
+                operation="get_realtime_quote",
+            )
+            return self._call_fetcher_method(
+                fetcher_obj,
+                'get_realtime_quote',
+                *call_args,
+                timeout_seconds=realtime_timeout,
+                capability="realtime_quote",
+                **call_kwargs,
+            )
         
         for source_index, source in enumerate(source_priority):
             attempt_start = time.time()
@@ -1842,62 +1925,65 @@ class DataFetcherManager:
                 if source == "efinance":
                     fetcher = self._get_fetcher_by_name("EfinanceFetcher", capability="realtime_quote")
                     if fetcher is not None and hasattr(fetcher, 'get_realtime_quote'):
-                        record_provider_run_started(
-                            data_type="realtime_quote",
-                            provider=fetcher.name,
-                            operation="get_realtime_quote",
+                        quote = _call_realtime_source(
+                            fetcher,
+                            stock_code,
+                            route_source=source,
+                            fallback_source=fallback_to,
                         )
-                        quote = self._call_fetcher_method(fetcher, 'get_realtime_quote', stock_code)
                 
                 elif source == "akshare_em":
                     fetcher = self._get_fetcher_by_name("AkshareFetcher", capability="realtime_quote")
                     if fetcher is not None and hasattr(fetcher, 'get_realtime_quote'):
-                        record_provider_run_started(
-                            data_type="realtime_quote",
-                            provider=fetcher.name,
-                            operation="get_realtime_quote",
+                        quote = _call_realtime_source(
+                            fetcher,
+                            stock_code,
+                            source="em",
+                            route_source=source,
+                            fallback_source=fallback_to,
                         )
-                        quote = self._call_fetcher_method(fetcher, 'get_realtime_quote', stock_code, source="em")
                 
                 elif source == "akshare_sina":
                     fetcher = self._get_fetcher_by_name("AkshareFetcher", capability="realtime_quote")
                     if fetcher is not None and hasattr(fetcher, 'get_realtime_quote'):
-                        record_provider_run_started(
-                            data_type="realtime_quote",
-                            provider=fetcher.name,
-                            operation="get_realtime_quote",
+                        quote = _call_realtime_source(
+                            fetcher,
+                            stock_code,
+                            source="sina",
+                            route_source=source,
+                            fallback_source=fallback_to,
                         )
-                        quote = self._call_fetcher_method(fetcher, 'get_realtime_quote', stock_code, source="sina")
                 
                 elif source in ("tencent", "akshare_qq"):
                     fetcher = self._get_fetcher_by_name("AkshareFetcher", capability="realtime_quote")
                     if fetcher is not None and hasattr(fetcher, 'get_realtime_quote'):
-                        record_provider_run_started(
-                            data_type="realtime_quote",
-                            provider=fetcher.name,
-                            operation="get_realtime_quote",
+                        quote = _call_realtime_source(
+                            fetcher,
+                            stock_code,
+                            source="tencent",
+                            route_source=source,
+                            fallback_source=fallback_to,
                         )
-                        quote = self._call_fetcher_method(fetcher, 'get_realtime_quote', stock_code, source="tencent")
                 
                 elif source == "tushare":
                     fetcher = self._get_fetcher_by_name("TushareFetcher", capability="realtime_quote")
                     if fetcher is not None and hasattr(fetcher, 'get_realtime_quote'):
-                        record_provider_run_started(
-                            data_type="realtime_quote",
-                            provider=fetcher.name,
-                            operation="get_realtime_quote",
+                        quote = _call_realtime_source(
+                            fetcher,
+                            raw_stock_code or stock_code,
+                            route_source=source,
+                            fallback_source=fallback_to,
                         )
-                        quote = self._call_fetcher_method(fetcher, 'get_realtime_quote', raw_stock_code or stock_code)
 
                 elif source == "tickflow":
                     fetcher = self._get_fetcher_by_name("TickFlowFetcher", capability="realtime_quote")
                     if fetcher is not None and hasattr(fetcher, 'get_realtime_quote'):
-                        record_provider_run_started(
-                            data_type="realtime_quote",
-                            provider=fetcher.name,
-                            operation="get_realtime_quote",
+                        quote = _call_realtime_source(
+                            fetcher,
+                            raw_stock_code or stock_code,
+                            route_source=source,
+                            fallback_source=fallback_to,
                         )
-                        quote = self._call_fetcher_method(fetcher, 'get_realtime_quote', raw_stock_code or stock_code)
 
                 provider_name = fetcher.name if fetcher is not None else source
                 
@@ -1956,6 +2042,8 @@ class DataFetcherManager:
             except Exception as e:
                 error_msg = f"[{source}] 失败: {str(e)}"
                 error_type, error_reason = summarize_exception(e)
+                if fetcher is not None and isinstance(unwrap_exception(e), TimeoutError):
+                    timed_out_fetcher_ids.add(id(fetcher))
                 record_provider_run(
                     data_type="realtime_quote",
                     provider=getattr(fetcher, "name", source),
@@ -2046,12 +2134,27 @@ class DataFetcherManager:
             return None
         attempt_start = time.time()
         try:
+            from src.config import get_config
+
+            realtime_timeout = _config_float(get_config(), "data_source_realtime_timeout_seconds", 12.0)
             record_provider_run_started(
                 data_type="realtime_quote",
                 provider=fetcher.name,
                 operation="get_realtime_quote",
             )
-            q = self._call_fetcher_method(fetcher, 'get_realtime_quote', stock_code, **kw)
+            call_kwargs = dict(kw)
+            call_kwargs.update(
+                {
+                    "timeout_seconds": realtime_timeout,
+                    "capability": "realtime_quote",
+                }
+            )
+            q = self._call_fetcher_method(
+                fetcher,
+                'get_realtime_quote',
+                stock_code,
+                **call_kwargs,
+            )
             if q is not None and q.has_basic_data():
                 record_provider_run(
                     data_type="realtime_quote",
@@ -2275,6 +2378,9 @@ class DataFetcherManager:
 
         # 3. 依次尝试各个数据源
         from .akshare_fetcher import _is_us_code
+        from src.config import get_config
+
+        name_timeout = _config_float(get_config(), "data_source_stock_name_timeout_seconds", 8.0)
         is_us = _is_us_code(stock_code)
         _US_CAPABLE_FETCHERS = {"YfinanceFetcher", "LongbridgeFetcher", "FinnhubFetcher", "AlphaVantageFetcher"}
         for fetcher in self._get_fetchers_snapshot():
@@ -2285,13 +2391,25 @@ class DataFetcherManager:
             if not self._is_fetcher_available(fetcher, capability="stock_name"):
                 continue
             try:
-                name = self._call_fetcher_method(fetcher, 'get_stock_name', stock_code)
+                name = self._call_fetcher_method(
+                    fetcher,
+                    'get_stock_name',
+                    stock_code,
+                    timeout_seconds=name_timeout,
+                    capability="stock_name",
+                )
                 if is_meaningful_stock_name(name, stock_code):
                     self._cache_stock_name(stock_code, name)
                     logger.info(f"[股票名称] 从 {fetcher.name} 获取: {stock_code} -> {name}")
                     return name
             except Exception as e:
-                logger.debug(f"[股票名称] {fetcher.name} 获取失败: {e}")
+                error_type, error_reason = summarize_exception(e)
+                logger.debug(
+                    "[股票名称] %s 获取失败: error_type=%s, reason=%s",
+                    fetcher.name,
+                    error_type,
+                    error_reason,
+                )
                 continue
 
         # 4. 所有数据源都失败

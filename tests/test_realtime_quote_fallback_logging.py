@@ -5,6 +5,8 @@ import asyncio
 import importlib.util
 import logging
 import sys
+import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -162,6 +164,43 @@ def test_manager_fallback_from_records_highest_priority_failed_source(mock_get_c
     assert quote.source == RealtimeSource.AKSHARE_EM
     assert quote.fallback_from == "efinance"
     assert quote.fetched_at is not None
+
+
+@patch("src.config.get_config")
+def test_manager_realtime_timeout_falls_back_to_next_source(mock_get_config):
+    release_blocked = threading.Event()
+    blocked_entered = threading.Event()
+    fallback_quote = _make_quote(source=RealtimeSource.AKSHARE_EM)
+
+    class BlockingFetcher(_DummyFetcher):
+        def get_realtime_quote(self, *args, **kwargs):
+            blocked_entered.set()
+            release_blocked.wait(timeout=2)
+            return None
+
+    mock_get_config.return_value = SimpleNamespace(
+        enable_realtime_quote=True,
+        realtime_source_priority="efinance,akshare_em",
+        data_source_realtime_timeout_seconds=0.01,
+        realtime_cache_ttl=600,
+    )
+    manager = DataFetcherManager(
+        fetchers=[
+            BlockingFetcher("EfinanceFetcher", 0),
+            _DummyFetcher("AkshareFetcher", 1, result=fallback_quote),
+        ]
+    )
+
+    try:
+        started = time.monotonic()
+        quote = manager.get_realtime_quote("600519")
+    finally:
+        release_blocked.set()
+
+    assert blocked_entered.wait(timeout=0.5)
+    assert time.monotonic() - started < 1
+    assert quote is fallback_quote
+    assert quote.fallback_from == "efinance"
 
 
 @patch("src.config.get_config")

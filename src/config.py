@@ -160,6 +160,10 @@ def parse_prompt_cache_diagnostics_level(value: Optional[str]) -> str:
 
 
 AGENT_MAX_STEPS_DEFAULT = 10
+ANALYSIS_TASK_TIMEOUT_SECONDS_DEFAULT = 1200
+DATA_SOURCE_STOCK_NAME_TIMEOUT_SECONDS_DEFAULT = 8.0
+DATA_SOURCE_DAILY_TIMEOUT_SECONDS_DEFAULT = 45.0
+DATA_SOURCE_REALTIME_TIMEOUT_SECONDS_DEFAULT = 12.0
 FUNDAMENTAL_STAGE_TIMEOUT_SECONDS_DEFAULT = 8.0
 NEWS_STRATEGY_WINDOWS: Dict[str, int] = {
     "ultra_short": 1,
@@ -1010,6 +1014,7 @@ class Config:
     
     # === 系统配置 ===
     max_workers: int = 3  # 低并发防封禁
+    analysis_task_timeout_seconds: int = ANALYSIS_TASK_TIMEOUT_SECONDS_DEFAULT
     debug: bool = False
     http_proxy: Optional[str] = None  # HTTP 代理 (例如: http://127.0.0.1:10809)
     https_proxy: Optional[str] = None # HTTPS 代理
@@ -1046,6 +1051,10 @@ class Config:
     realtime_source_priority: str = "tencent,akshare_sina,efinance,akshare_em"
     # 实时行情缓存时间（秒）
     realtime_cache_ttl: int = 600
+    # 数据源 manager 层单 provider 调用等待预算（秒）；0 表示关闭 manager 层兜底
+    data_source_stock_name_timeout_seconds: float = DATA_SOURCE_STOCK_NAME_TIMEOUT_SECONDS_DEFAULT
+    data_source_daily_timeout_seconds: float = DATA_SOURCE_DAILY_TIMEOUT_SECONDS_DEFAULT
+    data_source_realtime_timeout_seconds: float = DATA_SOURCE_REALTIME_TIMEOUT_SECONDS_DEFAULT
     # 熔断器冷却时间（秒）
     circuit_breaker_cooldown: int = 300
 
@@ -1930,6 +1939,12 @@ class Config:
             log_dir=os.getenv('LOG_DIR', './logs'),
             log_level=os.getenv('LOG_LEVEL', 'INFO'),
             max_workers=parse_env_int(os.getenv('MAX_WORKERS'), 3, field_name='MAX_WORKERS', minimum=1),
+            analysis_task_timeout_seconds=parse_env_int(
+                os.getenv('ANALYSIS_TASK_TIMEOUT_SECONDS'),
+                ANALYSIS_TASK_TIMEOUT_SECONDS_DEFAULT,
+                field_name='ANALYSIS_TASK_TIMEOUT_SECONDS',
+                minimum=0,
+            ),
             debug=os.getenv('DEBUG', 'false').lower() == 'true',
             config_validate_mode=os.getenv('CONFIG_VALIDATE_MODE', 'warn').lower(),
             http_proxy=os.getenv('HTTP_PROXY'),
@@ -1996,6 +2011,24 @@ class Config:
             # - tushare: Tushare Pro，需要2000积分，数据全面
             realtime_source_priority=cls._resolve_realtime_source_priority(),
             realtime_cache_ttl=parse_env_int(os.getenv('REALTIME_CACHE_TTL'), 600, field_name='REALTIME_CACHE_TTL', minimum=0),
+            data_source_stock_name_timeout_seconds=parse_env_float(
+                os.getenv('DATA_SOURCE_STOCK_NAME_TIMEOUT_SECONDS'),
+                DATA_SOURCE_STOCK_NAME_TIMEOUT_SECONDS_DEFAULT,
+                field_name='DATA_SOURCE_STOCK_NAME_TIMEOUT_SECONDS',
+                minimum=0.0,
+            ),
+            data_source_daily_timeout_seconds=parse_env_float(
+                os.getenv('DATA_SOURCE_DAILY_TIMEOUT_SECONDS'),
+                DATA_SOURCE_DAILY_TIMEOUT_SECONDS_DEFAULT,
+                field_name='DATA_SOURCE_DAILY_TIMEOUT_SECONDS',
+                minimum=0.0,
+            ),
+            data_source_realtime_timeout_seconds=parse_env_float(
+                os.getenv('DATA_SOURCE_REALTIME_TIMEOUT_SECONDS'),
+                DATA_SOURCE_REALTIME_TIMEOUT_SECONDS_DEFAULT,
+                field_name='DATA_SOURCE_REALTIME_TIMEOUT_SECONDS',
+                minimum=0.0,
+            ),
             circuit_breaker_cooldown=parse_env_int(os.getenv('CIRCUIT_BREAKER_COOLDOWN'), 300, field_name='CIRCUIT_BREAKER_COOLDOWN', minimum=0),
             enable_fundamental_pipeline=os.getenv('ENABLE_FUNDAMENTAL_PIPELINE', 'true').lower() == 'true',
             fundamental_stage_timeout_seconds=parse_env_float(

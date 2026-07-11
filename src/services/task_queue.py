@@ -20,7 +20,7 @@ import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor, Future
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Optional, Dict, List, Any, TYPE_CHECKING, Tuple, Literal, Callable
 
@@ -197,6 +197,7 @@ class AnalysisTaskQueue:
         # 任务历史保留数量（内存中）
         self._max_history = 100
         self._max_flow_events_per_task = 200
+        self._analysis_task_timeout_seconds = 1200
         
         self._initialized = True
         logger.info(f"[TaskQueue] 初始化完成，最大并发: {max_workers}")
@@ -215,6 +216,11 @@ class AnalysisTaskQueue:
     def max_workers(self) -> int:
         """Return current executor max worker setting."""
         return self._max_workers
+
+    @property
+    def analysis_task_timeout_seconds(self) -> int:
+        """Return current max runtime for in-memory tasks."""
+        return self._analysis_task_timeout_seconds
 
     def _has_inflight_tasks_locked(self) -> bool:
         """Check whether queue has any pending/processing tasks."""
@@ -272,6 +278,74 @@ class AnalysisTaskQueue:
         if log:
             logger.info("[TaskQueue] 最大并发已更新: %s -> %s", previous, target)
         return "applied"
+
+    def sync_task_timeout_seconds(self, timeout_seconds: int) -> Literal["applied", "unchanged"]:
+        """Sync task timeout setting from runtime config."""
+        try:
+            target = max(0, int(timeout_seconds))
+        except (TypeError, ValueError):
+            logger.warning("[TaskQueue] 忽略非法 ANALYSIS_TASK_TIMEOUT_SECONDS 值: %r", timeout_seconds)
+            return "unchanged"
+
+        with self._data_lock:
+            if target == self._analysis_task_timeout_seconds:
+                return "unchanged"
+            self._analysis_task_timeout_seconds = target
+        logger.info("[TaskQueue] 任务超时阈值已更新: %ss", target)
+        return "applied"
+
+    def _release_analyzing_stock_locked(self, task: TaskInfo) -> None:
+        """Release dedupe lock only when it still belongs to the task."""
+        dedupe_key = _dedupe_stock_code_key(task.stock_code)
+        if self._analyzing_stocks.get(dedupe_key) == task.task_id:
+            del self._analyzing_stocks[dedupe_key]
+
+    def _expire_stale_tasks_locked(self) -> List[TaskInfo]:
+        """Mark over-budget in-memory tasks failed and release their dedupe lock."""
+        timeout_seconds = self._analysis_task_timeout_seconds
+        if timeout_seconds <= 0:
+            return []
+
+        now = datetime.now()
+        expired: List[TaskInfo] = []
+        for task in self._tasks.values():
+            if task.status not in (TaskStatus.PENDING, TaskStatus.PROCESSING, TaskStatus.CANCEL_REQUESTED):
+                continue
+            anchor = task.started_at or task.created_at
+            if now - anchor < timedelta(seconds=timeout_seconds):
+                continue
+
+            task.status = TaskStatus.FAILED
+            task.completed_at = now
+            task.progress = max(task.progress, 99)
+            task.error = f"任务执行超过 {timeout_seconds}s，已超时并标记失败"
+            task.message = "分析任务执行超时，请稍后重试"
+            self._release_analyzing_stock_locked(task)
+            expired.append(task.copy())
+
+        return expired
+
+    def _expire_stale_tasks(self) -> List[TaskInfo]:
+        """Expire stale tasks and broadcast terminal events outside the data lock."""
+        with self._data_lock:
+            expired = self._expire_stale_tasks_locked()
+
+        self._broadcast_expired_tasks(expired)
+        return expired
+
+    def _broadcast_expired_tasks(self, expired: List[TaskInfo]) -> None:
+        """Broadcast timeout failures after stale tasks were marked under lock."""
+        for task in expired:
+            logger.error(
+                "[TaskQueue] 任务超时: %s (%s), timeout=%ss",
+                task.task_id,
+                task.stock_code,
+                self._analysis_task_timeout_seconds,
+            )
+            self._broadcast_event("task_failed", task.to_dict())
+
+        if expired:
+            self._cleanup_old_tasks()
     
     # ========== 任务提交与查询 ==========
     
@@ -286,6 +360,7 @@ class AnalysisTaskQueue:
             True 表示正在分析中
         """
         dedupe_key = _dedupe_stock_code_key(stock_code)
+        self._expire_stale_tasks()
         with self._data_lock:
             return dedupe_key in self._analyzing_stocks
     
@@ -300,6 +375,7 @@ class AnalysisTaskQueue:
             任务 ID，如果没有则返回 None
         """
         dedupe_key = _dedupe_stock_code_key(stock_code)
+        self._expire_stale_tasks()
         with self._data_lock:
             return self._analyzing_stocks.get(dedupe_key)
 
@@ -404,7 +480,9 @@ class AnalysisTaskQueue:
             if normalized
         ]
 
+        expired: List[TaskInfo] = []
         with self._data_lock:
+            expired = self._expire_stale_tasks_locked()
             for stock_code in canonical_codes:
                 dedupe_key = _dedupe_stock_code_key(stock_code)
                 if dedupe_key in self._analyzing_stocks:
@@ -460,6 +538,7 @@ class AnalysisTaskQueue:
             for task_info in accepted:
                 self._broadcast_event("task_created", task_info.to_dict())
 
+        self._broadcast_expired_tasks(expired)
         return accepted, duplicates
 
     def submit_background_task(
@@ -514,9 +593,7 @@ class AnalysisTaskQueue:
 
             task = self._tasks.pop(task_id, None)
             if task:
-                dedupe_key = _dedupe_stock_code_key(task.stock_code)
-                if self._analyzing_stocks.get(dedupe_key) == task_id:
-                    del self._analyzing_stocks[dedupe_key]
+                self._release_analyzing_stock_locked(task)
     
     def get_task(self, task_id: str) -> Optional[TaskInfo]:
         """
@@ -528,6 +605,7 @@ class AnalysisTaskQueue:
         Returns:
             TaskInfo 或 None
         """
+        self._expire_stale_tasks()
         with self._data_lock:
             task = self._tasks.get(task_id)
             return task.copy() if task else None
@@ -577,6 +655,7 @@ class AnalysisTaskQueue:
         Returns:
             任务列表（副本）
         """
+        self._expire_stale_tasks()
         with self._data_lock:
             return [
                 task.copy() for task in self._tasks.values()
@@ -593,6 +672,7 @@ class AnalysisTaskQueue:
         Returns:
             任务列表（副本）
         """
+        self._expire_stale_tasks()
         with self._data_lock:
             tasks = sorted(
                 self._tasks.values(),
@@ -608,6 +688,7 @@ class AnalysisTaskQueue:
         Returns:
             统计信息字典
         """
+        self._expire_stale_tasks()
         with self._data_lock:
             stats = {
                 "total": len(self._tasks),
@@ -655,6 +736,43 @@ class AnalysisTaskQueue:
 
         self._broadcast_event(event_type, task_snapshot.to_dict())
         return task_snapshot
+
+    def _mark_task_completed_if_active(self, task_id: str, result: Dict[str, Any]) -> Optional[TaskInfo]:
+        """Apply a completed state only while the task is still in-flight."""
+        with self._data_lock:
+            task = self._tasks.get(task_id)
+            if not task or task.status not in (TaskStatus.PENDING, TaskStatus.PROCESSING, TaskStatus.CANCEL_REQUESTED):
+                return None
+
+            task.status = TaskStatus.COMPLETED
+            task.progress = 100
+            task.completed_at = datetime.now()
+            task.result = result
+            task.message = "分析完成"
+            task.stock_name = result.get("stock_name", task.stock_name)
+            self._release_analyzing_stock_locked(task)
+            return task.copy()
+
+    def _mark_task_failed_if_active(
+        self,
+        task_id: str,
+        error_msg: str,
+        *,
+        message_prefix: str = "分析失败",
+        message_limit: int = 50,
+    ) -> Optional[TaskInfo]:
+        """Apply a failed state only while the task is still in-flight."""
+        with self._data_lock:
+            task = self._tasks.get(task_id)
+            if not task or task.status not in (TaskStatus.PENDING, TaskStatus.PROCESSING, TaskStatus.CANCEL_REQUESTED):
+                return None
+
+            task.status = TaskStatus.FAILED
+            task.completed_at = datetime.now()
+            task.error = error_msg[:200]
+            task.message = f"{message_prefix}: {error_msg[:message_limit]}"
+            self._release_analyzing_stock_locked(task)
+            return task.copy()
     
     # ========== 任务执行 ==========
     
@@ -734,23 +852,12 @@ class AnalysisTaskQueue:
             diag_token = None
             
             if result:
-                # 更新任务状态为完成
-                with self._data_lock:
-                    task = self._tasks.get(task_id)
-                    if task:
-                        task.status = TaskStatus.COMPLETED
-                        task.progress = 100
-                        task.completed_at = datetime.now()
-                        task.result = result
-                        task.message = "分析完成"
-                        task.stock_name = result.get("stock_name", task.stock_name)
-                        
-                        # 从分析中集合移除
-                        dedupe_key = _dedupe_stock_code_key(task.stock_code)
-                        if dedupe_key in self._analyzing_stocks:
-                            del self._analyzing_stocks[dedupe_key]
-                
-                self._broadcast_event("task_completed", task.to_dict())
+                task_snapshot = self._mark_task_completed_if_active(task_id, result)
+                if task_snapshot is None:
+                    logger.warning("[TaskQueue] 忽略迟到任务完成: %s (%s)", task_id, stock_code)
+                    return result
+
+                self._broadcast_event("task_completed", task_snapshot.to_dict())
                 logger.info(f"[TaskQueue] 任务完成: {task_id} ({stock_code})")
                 
                 # 清理过期任务
@@ -766,21 +873,13 @@ class AnalysisTaskQueue:
                 reset_run_diagnostic_context(diag_token)
             error_msg = str(e)
             logger.error(f"[TaskQueue] 任务失败: {task_id} ({stock_code}), 错误: {error_msg}")
-            
-            with self._data_lock:
-                task = self._tasks.get(task_id)
-                if task:
-                    task.status = TaskStatus.FAILED
-                    task.completed_at = datetime.now()
-                    task.error = error_msg[:200]  # 限制错误信息长度
-                    task.message = f"分析失败: {error_msg[:50]}"
-                    
-                    # 从分析中集合移除
-                    dedupe_key = _dedupe_stock_code_key(task.stock_code)
-                    if dedupe_key in self._analyzing_stocks:
-                        del self._analyzing_stocks[dedupe_key]
-            
-            self._broadcast_event("task_failed", task.to_dict())
+
+            task_snapshot = self._mark_task_failed_if_active(task_id, error_msg)
+            if task_snapshot is None:
+                logger.warning("[TaskQueue] 忽略迟到任务失败: %s (%s)", task_id, stock_code)
+                return None
+
+            self._broadcast_event("task_failed", task_snapshot.to_dict())
             
             # 清理过期任务
             self._cleanup_old_tasks()
@@ -832,16 +931,18 @@ class AnalysisTaskQueue:
             if result is None:
                 raise RuntimeError("任务返回空结果，未生成可持久化内容")
 
+            task_snapshot = self._mark_task_completed_if_active(task_id, result)
+            if task_snapshot is None:
+                logger.warning("[TaskQueue] 忽略迟到自定义任务完成: %s", task_id)
+                return result
+            task_snapshot.message = "任务执行完成"
             with self._data_lock:
-                task = self._tasks.get(task_id)
-                if task:
-                    task.status = TaskStatus.COMPLETED
-                    task.progress = 100
-                    task.completed_at = datetime.now()
-                    task.result = result
-                    task.message = "任务执行完成"
+                current_task = self._tasks.get(task_id)
+                if current_task and current_task.status == TaskStatus.COMPLETED:
+                    current_task.message = "任务执行完成"
+                    task_snapshot = current_task.copy()
 
-            self._broadcast_event("task_completed", task.to_dict())
+            self._broadcast_event("task_completed", task_snapshot.to_dict())
             logger.info(f"[TaskQueue] 自定义任务完成: {task_id}")
 
             self._cleanup_old_tasks()
@@ -853,16 +954,16 @@ class AnalysisTaskQueue:
                 f"[TaskQueue] 自定义任务失败: {task_id}, 错误: {error_msg}"
             )
 
-            with self._data_lock:
-                task = self._tasks.get(task_id)
-                if task:
-                    task.status = TaskStatus.FAILED
-                    task.completed_at = datetime.now()
-                    task.error = error_msg[:200]
-                    task.message = f"任务失败: {error_msg[:80]}"
-
-            if task:
-                self._broadcast_event("task_failed", task.to_dict())
+            task_snapshot = self._mark_task_failed_if_active(
+                task_id,
+                error_msg,
+                message_prefix="任务失败",
+                message_limit=80,
+            )
+            if task_snapshot:
+                self._broadcast_event("task_failed", task_snapshot.to_dict())
+            else:
+                logger.warning("[TaskQueue] 忽略迟到自定义任务失败: %s", task_id)
 
             self._cleanup_old_tasks()
             return None
@@ -995,6 +1096,9 @@ def get_task_queue() -> AnalysisTaskQueue:
         config = get_config()
         target_workers = max(1, int(getattr(config, "max_workers", queue.max_workers)))
         queue.sync_max_workers(target_workers, log=False)
+        queue.sync_task_timeout_seconds(
+            getattr(config, "analysis_task_timeout_seconds", queue.analysis_task_timeout_seconds)
+        )
     except Exception as exc:
         logger.debug("[TaskQueue] 读取 MAX_WORKERS 失败，使用当前并发设置: %s", exc)
 
