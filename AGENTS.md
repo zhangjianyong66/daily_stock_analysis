@@ -105,6 +105,8 @@ python -m pytest -m "not network"
 python -m py_compile <changed_python_files>
 ```
 
+- Trellis 升级产生的 `.trellis/.backup-*` 是 Git 忽略的本地恢复备份，Flake8 配置会排除该目录，避免历史模板代码阻断当前工作树的 `./scripts/ci_gate.sh`。
+
 ### Web / Desktop
 
 ```bash
@@ -122,6 +124,13 @@ npm run build
 
 - `scripts/generate_index_from_csv.py --source tushare` 依赖 `data/stock_list_a.csv`、`data/stock_list_hk.csv`、`data/stock_list_us.csv` 等完整股票列表；本地缺少这些 CSV 时直接写入会只生成种子市场 / ETF 子集，可能覆盖 `apps/dsa-web/public/stocks.index.json` 的完整索引。
 - 刷新完整索引前应先确认基础 CSV 可用，或使用 `scripts/refresh_stock_index.py` 先拉取 / 准备数据；只补少量离线 seed 时，应以现有完整 `stocks.index.json` 为基线合入，避免丢失 A 股、港股、美股条目。
+
+### 持仓与成交截图导入
+
+- Web 持仓图片导入只支持活跃 `cn/CNY` 账户；持仓初始化要求账户没有任何交易流水，成交增量只接受实际成交记录。
+- 图片能力必须显式配置 `VISION_MODEL`，不会使用 `LITELLM_MODEL` 文本主模型兜底；`OPENAI_VISION_MODEL` 仅为废弃兼容别名，Hermes Vision 尚未验证。
+- 每批支持 1-5 张 JPEG、PNG、WebP 或 GIF，单文件最大 5MB。原图、base64 和模型原始响应不得持久化或写入普通日志。
+- 前端目标回归：`cd apps/dsa-web && npm run test -- src/api/__tests__/portfolio.test.ts src/components/portfolio/__tests__/PortfolioImageImportDialog.test.tsx src/pages/__tests__/PortfolioPage.test.tsx src/utils/__tests__/portfolioFormat.test.ts`。
 
 ### Docker 构建代理
 

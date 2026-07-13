@@ -1149,7 +1149,7 @@ LITELLM_FALLBACK_MODELS=anthropic/claude-sonnet-4-6,openai/gpt-5.4-mini
 
 > ⚠️ `LITELLM_MODEL` must include provider prefix (e.g. `gemini/`, `anthropic/`, `openai/`). Legacy `GEMINI_MODEL` (no prefix) is only used when `LITELLM_MODEL` is not set.
 
-**Vision model (image stock code extraction)**: See [LLM Config Guide - Vision](LLM_CONFIG_GUIDE_EN.md#41-vision-model-image-stock-code-extraction).
+**Vision model (watchlist and Portfolio image extraction)**: See [LLM Config Guide - Vision](LLM_CONFIG_GUIDE_EN.md#advanced-feature-vision-model-config). Vision calls require an explicit `VISION_MODEL`; they do not substitute the text-only `LITELLM_MODEL` or silently switch to another model.
 
 ### Debug Mode
 
@@ -1377,6 +1377,10 @@ For this feature, the product behavior is:
 | `/api/v1/backtest/results` | GET | Query backtest results (paginated) |
 | `/api/v1/backtest/performance` | GET | Get overall backtest performance |
 | `/api/v1/backtest/performance/{code}` | GET | Get per-stock backtest performance |
+| `/api/v1/portfolio/imports/images/positions/parse` | POST | Parse 1-5 position screenshots into per-file status and editable rows |
+| `/api/v1/portfolio/imports/images/positions/commit` | POST | Atomically initialize an empty `cn/CNY` account from reviewed rows |
+| `/api/v1/portfolio/imports/images/trades/parse` | POST | Parse 1-5 executed-trade screenshots into deduplication and conflict review rows |
+| `/api/v1/portfolio/imports/images/trades/commit` | POST | Atomically append reviewed executed trades to a `cn/CNY` account |
 | `/api/health` | GET | Health check |
 | `/docs` | GET | API Swagger documentation |
 
@@ -1506,6 +1510,14 @@ A: Check if Actions is enabled, and if cron expression is correct (note it's UTC
 ---
 
 ## Portfolio Web Notes
+
+### Position and executed-trade screenshot import on `/portfolio`
+
+- The Image Import command is available after selecting one active `cn/CNY` account. Position initialization requires an account with no existing trade rows; executed-trade import supports an existing account.
+- Snapshot date and batch date default to today and cannot be in the future. Executed-trade time is optional; when present, the trade list displays date and time to the second. Missing fees and taxes default to zero and remain editable. Cash, total assets, available funds, and other summary figures are never imported.
+- Each batch accepts 1-5 JPEG, PNG, WebP, or GIF files up to 5 MB each. Failed files must be retried or removed. Invalid rows and cross-image conflicts block submission until the user edits, deletes, merges, or explicitly keeps the rows.
+- Trade IDs are preferred for deduplication. Without one, the service uses a visible-field fingerprint as best-effort deduplication. Original images, base64 payloads, and raw model responses are not persisted or written to normal logs.
+- Parse and commit are separate operations. Commit revalidates the account, normalized fields, duplicates, chronological ledger replay, and oversell constraints, then writes the accepted batch atomically.
 
 ### Portfolio account archive on `/portfolio`
 

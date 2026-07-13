@@ -433,7 +433,7 @@ model_list:
 
 ## 扩展功能：看图模型 (Vision) 配置
 
-系统中有些特定功能（比如上传股票软件截图，让 AI 提取出截图里的股票代码并放入自选股池）必须用到具备“视觉能力”的模型。你需在 `.env` 单独给它指派一个懂图片的模型。
+系统中的图片能力必须使用具备视觉能力的模型，包括从截图提取自选股代码，以及在持仓页校对后导入持仓快照或实际成交。你需在 `.env` 或 Web 设置页单独指定 `VISION_MODEL`。
 
 ```env
 # 指定你看图专用的模型名
@@ -442,11 +442,9 @@ VISION_MODEL=openai/gpt-5.5
 # OPENAI_API_KEY=xxx
 ```
 
-**备用看图机制：** 为了防止偶尔罢工，系统内置了切换策略。如果主视觉模型调用失败，它会按照下方的顺位尝试寻找是否有其他看图模型的 Key：
-```env
-# 默认的备用顺序：
-VISION_PROVIDER_PRIORITY=gemini,anthropic,openai
-```
+Vision 调用只使用显式配置的 `VISION_MODEL`，兼容读取已废弃的 `OPENAI_VISION_MODEL`，不会拿 `LITELLM_MODEL` 文本主模型顶替。调用失败时会对同一模型有限重试，不会静默切换到另一个模型；未配置或缺少对应 provider API Key 时，图片导入会提示前往设置页配置。Hermes Vision 尚未验证，不可作为该配置的 route。
+
+持仓图片导入支持每批 1-5 张 JPEG、PNG、WebP 或 GIF，单文件最大 5MB。原图、base64 和模型原始响应只在请求期间使用，不写入数据库或普通日志；用户必须在 Web 校对页确认字段后才会写入持仓账本。
 
 ---
 

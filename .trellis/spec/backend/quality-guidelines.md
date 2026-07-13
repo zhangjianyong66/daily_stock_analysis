@@ -10,6 +10,7 @@ Python：
 - `pyproject.toml` 配置 Black 和 isort，行宽为 120。
 - isort 使用 `profile = "black"`。
 - Flake8 在 CI 中只阻断严重错误：`E9,F63,F7,F82`。
+- `.trellis/.backup-*` 是 Trellis 升级生成且被 Git 忽略的恢复备份，不属于当前代码基线，Flake8 必须排除该目录。
 - 文件语境中大量中文注释和日志是可接受的；新增注释要解释非显然约束，不写空泛描述。
 
 TypeScript / Web：

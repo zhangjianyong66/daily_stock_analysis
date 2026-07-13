@@ -1307,7 +1307,7 @@ LITELLM_FALLBACK_MODELS=anthropic/claude-sonnet-4-6,openai/gpt-5.4-mini
 
 **依赖说明**：`requirements.txt` 中保留 `openai>=1.0.0`，因 LiteLLM 内部依赖 OpenAI SDK 作为统一接口；显式保留可确保版本兼容性，用户无需单独配置。
 
-**视觉模型（图片提取股票代码）**：详见 [LLM 配置指南 - Vision](LLM_CONFIG_GUIDE.md#41-vision-模型图片识别股票代码)。
+**视觉模型（自选股与持仓图片识别）**：详见 [LLM 配置指南 - Vision](LLM_CONFIG_GUIDE.md#扩展功能看图模型-vision-配置)。
 
 从图片提取股票代码（如 `/api/v1/stocks/extract-from-image`）使用统一视觉模型接入，底层采用 LiteLLM Vision 与 OpenAI `image_url` 格式，支持 Gemini、Claude、OpenAI、DeepSeek 等 Vision-capable 模型。返回 `items`（code、name、confidence）及兼容的 `codes` 数组。
 
@@ -1319,10 +1319,26 @@ LITELLM_FALLBACK_MODELS=anthropic/claude-sonnet-4-6,openai/gpt-5.4-mini
 - **CSV/Excel 列名**：支持 `code`、`股票代码`、`代码`、`name`、`股票名称`、`名称` 等（不区分大小写）；无表头时默认第 1 列为代码、第 2 列为名称。
 - **常见解析失败**：文件过大（>2MB）、编码非 UTF-8/GBK、Excel 工作表为空或损坏、CSV 分隔符/列数不一致时，API 会返回具体错误提示。
 
-- **模型优先级**：`VISION_MODEL` > `LITELLM_MODEL` > 根据已有 API Key 推断（`OPENAI_VISION_MODEL` 已废弃，请改用 `VISION_MODEL`）
-- **Provider 回退**：主模型失败时，按 `VISION_PROVIDER_PRIORITY`（默认 `gemini,anthropic,openai`）自动切换到下一个可用 provider
-- **主模型不支持 Vision 时**：若主模型为 DeepSeek 等非 Vision 模型，可显式配置 `VISION_MODEL=openai/gpt-5.5` 或 `gemini/gemini-3.1-pro-preview` 供图片提取使用
+- **模型选择**：只使用显式 `VISION_MODEL`；`OPENAI_VISION_MODEL` 仅作为废弃兼容别名，不会使用 `LITELLM_MODEL` 文本主模型或根据 API Key 猜测模型
+- **失败语义**：同一 Vision 模型最多有限重试，不会静默切换其他模型；Hermes Vision 尚未验证
+- **主模型不支持 Vision 时**：仍需单独配置 `VISION_MODEL=openai/gpt-5.5` 或 `gemini/gemini-3.1-pro-preview`
 - **配置校验**：若配置了 `VISION_MODEL` 但未配置对应 provider 的 API Key，启动时会输出 warning，图片提取功能将不可用
+
+#### 持仓与成交截图导入
+
+Web 持仓页在选中具体的活跃 `cn/CNY` 账户后提供“图片导入”，包含两种需要人工校对的模式：
+
+- **持仓初始化**：仅用于没有任何交易流水的账户。快照日期默认当天、禁止未来日期；逐行导入 6 位证券代码、名称、持仓数量和平均成本，并生成费用、税费均为 0 的期初买入。页面顶部总资产、可用资金、可取资金、总市值、仓位和盈亏仅作校对参考，不导入资金账本。
+- **成交增量**：向已有账户导入“当日成交”“历史成交”或交割单中的实际成交，不接受委托、撤单或未成交记录。行内日期优先，否则使用批次日期；成交时间可空，有值时精确到秒展示。截图未提供手续费或税费时默认 0，允许校对时修改，系统不会按费率猜测。
+
+每批支持 1-5 张 JPEG、PNG、WebP 或 GIF，单文件最大 5MB。失败图片必须重试或移除；字段错误和跨图重复冲突必须解决后才能提交。存在成交编号时优先按编号去重；缺少编号时按可见字段做 best-effort 指纹去重，同一图片内的合法同秒分笔可保留，跨图片相同记录需明确选择合并一笔或保留多笔。
+
+解析与提交分离，提交端会重新校验账户、字段、重复、交易顺序和超卖约束，并在单个事务中原子写入。原图、base64、模型原始响应和完整资产明细不会写入数据库或普通日志。相关接口为：
+
+- `POST /api/v1/portfolio/imports/images/positions/parse`
+- `POST /api/v1/portfolio/imports/images/positions/commit`
+- `POST /api/v1/portfolio/imports/images/trades/parse`
+- `POST /api/v1/portfolio/imports/images/trades/commit`
 
 ### 调试模式
 
@@ -1545,6 +1561,10 @@ FastAPI 提供 RESTful API 服务，支持配置管理和触发分析。
 | `/api/v1/backtest/results` | GET | 查询回测结果（分页） |
 | `/api/v1/backtest/performance` | GET | 获取整体回测表现 |
 | `/api/v1/backtest/performance/{code}` | GET | 获取单股回测表现 |
+| `/api/v1/portfolio/imports/images/positions/parse` | POST | 解析 1-5 张持仓截图并返回逐图状态与可编辑预览 |
+| `/api/v1/portfolio/imports/images/positions/commit` | POST | 向空 `cn/CNY` 账户原子提交校对后的期初持仓 |
+| `/api/v1/portfolio/imports/images/trades/parse` | POST | 解析 1-5 张实际成交截图并返回去重与冲突预览 |
+| `/api/v1/portfolio/imports/images/trades/commit` | POST | 向 `cn/CNY` 账户原子提交校对后的成交增量 |
 | `/api/v1/stocks/extract-from-image` | POST | 从图片提取股票代码（multipart，超时 60s） |
 | `/api/v1/stocks/parse-import` | POST | 解析 CSV/Excel/剪贴板（multipart file 或 JSON `{"text":"..."}`，文件≤2MB，文本≤100KB） |
 | `/api/health` | GET | 健康检查 |

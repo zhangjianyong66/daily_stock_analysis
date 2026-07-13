@@ -28,6 +28,7 @@
 | SQLite / SQLAlchemy / 仓储层改动 | [Database Guidelines](./database-guidelines.md) |
 | API 错误、异常传播、fallback 语义 | [Error Handling](./error-handling.md) |
 | 日志初始化、级别、敏感信息 | [Logging Guidelines](./logging-guidelines.md) |
+| 持仓/成交截图、Vision、`trade_time` 跨层改动 | [Portfolio Image Import](./portfolio-image-import.md) |
 
 ## 开发前检查
 

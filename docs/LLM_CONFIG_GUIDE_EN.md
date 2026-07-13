@@ -384,7 +384,7 @@ For example, if you set `LLM_CHANNELS=primary,deepseek` in GitHub Actions, also 
 
 ## Advanced Feature: Vision Model Config
 
-Certain specific features in our system (like uploading a stock chart screenshot to extract the stock code) require models capable of computer vision. You need to assign a dedicated vision model in your `.env`.
+Image features require a vision-capable model, including watchlist code extraction and reviewed position or executed-trade screenshot imports on the Portfolio page. Configure a dedicated `VISION_MODEL` in `.env` or the Web settings page.
 
 ```env
 # Specify your dedicated vision model name
@@ -393,11 +393,9 @@ VISION_MODEL=openai/gpt-5.5
 # OPENAI_API_KEY=xxx
 ```
 
-**Vision Fallback Mechanism:** To prevent unexpected failures, the system has a built-in fallback strategy. If the primary vision model fails, it will attempt to use alternative vision-capable provider keys in the following order:
-```env
-# Default fallback sequence:
-VISION_PROVIDER_PRIORITY=gemini,anthropic,openai
-```
+Vision calls use only the explicitly configured `VISION_MODEL`, with the deprecated `OPENAI_VISION_MODEL` accepted as a compatibility alias. The text-only `LITELLM_MODEL` is never substituted. A failed call is retried a limited number of times against the same model and is not silently routed to another model. Missing configuration or provider credentials produce an actionable setup error. Hermes Vision is not verified and cannot be used as this route.
+
+Portfolio screenshot import accepts 1-5 JPEG, PNG, WebP, or GIF files per batch, with a 5 MB limit per file. Original images, base64 payloads, and raw model responses exist only during the request and are not written to the database or normal logs. No ledger data is written until the user reviews and confirms the normalized fields in the Web UI.
 
 ---
 
