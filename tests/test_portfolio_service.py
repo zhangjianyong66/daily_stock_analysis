@@ -8,7 +8,7 @@ import sqlite3
 import tempfile
 import threading
 import unittest
-from datetime import date, timedelta
+from datetime import date, time as dt_time, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
@@ -109,6 +109,68 @@ class PortfolioServiceTestCase(unittest.TestCase):
         if close is not None:
             self._save_close(self.service._normalize_symbol(symbol), close_date or date(2026, 1, 3), close)
         return aid
+
+    def test_record_trade_persists_and_serializes_trade_time(self) -> None:
+        account = self.service.create_account(name="Main", broker="Demo", market="cn", base_currency="CNY")
+        aid = account["id"]
+
+        self.service.record_trade(
+            account_id=aid,
+            symbol="600519",
+            trade_date=date(2026, 1, 2),
+            trade_time=dt_time(9, 30, 5),
+            side="buy",
+            quantity=10,
+            price=100,
+        )
+        self.service.record_trade(
+            account_id=aid,
+            symbol="000001",
+            trade_date=date(2026, 1, 2),
+            trade_time="14:05:06",
+            side="buy",
+            quantity=20,
+            price=10,
+        )
+
+        items = self.service.list_trade_events(account_id=aid, page=1, page_size=20)["items"]
+        self.assertEqual({item["trade_time"] for item in items}, {"09:30:05", "14:05:06"})
+
+        with self.db.get_session() as session:
+            stored = session.execute(
+                select(PortfolioTrade).where(PortfolioTrade.account_id == aid)
+            ).scalars().all()
+        self.assertEqual({row.trade_time for row in stored}, {dt_time(9, 30, 5), dt_time(14, 5, 6)})
+
+    def test_record_trade_without_trade_time_preserves_none(self) -> None:
+        account = self.service.create_account(name="Main", broker="Demo", market="cn", base_currency="CNY")
+        aid = account["id"]
+
+        self.service.record_trade(
+            account_id=aid,
+            symbol="600519",
+            trade_date=date(2026, 1, 2),
+            side="buy",
+            quantity=10,
+            price=100,
+        )
+
+        item = self.service.list_trade_events(account_id=aid, page=1, page_size=20)["items"][0]
+        self.assertIsNone(item["trade_time"])
+
+    def test_record_trade_rejects_invalid_trade_time(self) -> None:
+        account = self.service.create_account(name="Main", broker="Demo", market="cn", base_currency="CNY")
+
+        with self.assertRaisesRegex(ValueError, "trade_time must use HH:MM:SS"):
+            self.service.record_trade(
+                account_id=account["id"],
+                symbol="600519",
+                trade_date=date(2026, 1, 2),
+                trade_time="25:00:00",
+                side="buy",
+                quantity=10,
+                price=100,
+            )
 
     def test_current_snapshot_uses_realtime_price_when_close_missing(self) -> None:
         today = date.today()
@@ -980,6 +1042,80 @@ class PortfolioServiceTestCase(unittest.TestCase):
         trades = self.service.list_trade_events(account_id=aid, page=1, page_size=20)
         self.assertEqual(len(trades["items"]), 1)
         self.assertEqual(trades["items"][0]["side"], "buy")
+
+    def test_snapshot_and_trade_list_order_same_day_trades_by_trade_time(self) -> None:
+        account = self.service.create_account(name="Timed", broker="Demo", market="cn", base_currency="CNY")
+        aid = account["id"]
+        self.service.repo.add_trade(
+            account_id=aid,
+            trade_uid=None,
+            symbol="600519",
+            market="cn",
+            currency="CNY",
+            trade_date=date(2026, 1, 2),
+            trade_time=dt_time(10, 2),
+            side="sell",
+            quantity=10,
+            price=10,
+            fee=0,
+            tax=0,
+        )
+        self.service.repo.add_trade(
+            account_id=aid,
+            trade_uid=None,
+            symbol="600519",
+            market="cn",
+            currency="CNY",
+            trade_date=date(2026, 1, 2),
+            trade_time=dt_time(10, 1),
+            side="buy",
+            quantity=10,
+            price=10,
+            fee=0,
+            tax=0,
+        )
+
+        snapshot = self.service.get_portfolio_snapshot(
+            account_id=aid,
+            as_of=date(2026, 1, 2),
+            cost_method="fifo",
+            include_realtime=False,
+        )
+        trades = self.service.list_trade_events(account_id=aid, page=1, page_size=20)
+
+        self.assertEqual(snapshot["accounts"][0]["positions"], [])
+        self.assertEqual([item["trade_time"] for item in trades["items"]], ["10:02:00", "10:01:00"])
+
+    def test_record_trade_rejects_sell_before_later_same_day_buy(self) -> None:
+        account = self.service.create_account(name="Timed validation", broker="Demo", market="cn", base_currency="CNY")
+        aid = account["id"]
+        self.service.record_trade(
+            account_id=aid,
+            symbol="600519",
+            trade_date=date(2026, 1, 2),
+            trade_time=dt_time(10, 2),
+            side="buy",
+            quantity=10,
+            price=10,
+            market="cn",
+            currency="CNY",
+        )
+
+        with self.assertRaises(PortfolioOversellError):
+            self.service.record_trade(
+                account_id=aid,
+                symbol="600519",
+                trade_date=date(2026, 1, 2),
+                trade_time=dt_time(10, 1),
+                side="sell",
+                quantity=10,
+                price=10,
+                market="cn",
+                currency="CNY",
+            )
+
+        trades = self.service.list_trade_events(account_id=aid, page=1, page_size=20)
+        self.assertEqual([(item["side"], item["trade_time"]) for item in trades["items"]], [("buy", "10:02:00")])
 
     def test_duplicate_full_close_sell_keeps_conflict_semantics(self) -> None:
         account = self.service.create_account(name="Main", broker="Demo", market="cn", base_currency="CNY")

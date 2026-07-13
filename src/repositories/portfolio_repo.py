@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from sqlalchemy import and_, delete, desc, func, select
@@ -167,6 +167,7 @@ class PortfolioRepository:
         market: str,
         currency: str,
         trade_date: date,
+        trade_time: Optional[time] = None,
         side: str,
         quantity: float,
         price: float,
@@ -184,6 +185,7 @@ class PortfolioRepository:
                 market=market,
                 currency=currency,
                 trade_date=trade_date,
+                trade_time=trade_time,
                 side=side,
                 quantity=quantity,
                 price=price,
@@ -311,6 +313,7 @@ class PortfolioRepository:
         market: str,
         currency: str,
         trade_date: date,
+        trade_time: Optional[time] = None,
         side: str,
         quantity: float,
         price: float,
@@ -326,6 +329,7 @@ class PortfolioRepository:
             market=market,
             currency=currency,
             trade_date=trade_date,
+            trade_time=trade_time,
             side=side,
             quantity=quantity,
             price=price,
@@ -483,7 +487,11 @@ class PortfolioRepository:
                     PortfolioTrade.trade_date <= as_of,
                 )
             )
-            .order_by(PortfolioTrade.trade_date.asc(), PortfolioTrade.id.asc())
+            .order_by(
+                PortfolioTrade.trade_date.asc(),
+                PortfolioTrade.trade_time.asc().nullslast(),
+                PortfolioTrade.id.asc(),
+            )
         ).scalars().all()
         return list(rows)
 
@@ -607,7 +615,11 @@ class PortfolioRepository:
             total = int(session.execute(count_query).scalar_one() or 0)
             rows = session.execute(
                 data_query
-                .order_by(PortfolioTrade.trade_date.desc(), PortfolioTrade.id.desc())
+                .order_by(
+                    PortfolioTrade.trade_date.desc(),
+                    PortfolioTrade.trade_time.desc().nullslast(),
+                    PortfolioTrade.id.desc(),
+                )
                 .offset((page - 1) * page_size)
                 .limit(page_size)
             ).scalars().all()

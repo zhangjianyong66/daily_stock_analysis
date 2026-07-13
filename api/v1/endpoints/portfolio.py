@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse
@@ -29,6 +29,11 @@ from api.v1.schemas.portfolio import (
     PortfolioImportCommitResponse,
     PortfolioImportParseResponse,
     PortfolioImportTradeItem,
+    PortfolioImageImportCommitResponse,
+    PortfolioPositionImageCommitRequest,
+    PortfolioPositionImageParseResponse,
+    PortfolioTradeImageCommitRequest,
+    PortfolioTradeImageParseResponse,
     PortfolioPositionAnalysisRequest,
     PortfolioRiskResponse,
     PortfolioSnapshotResponse,
@@ -38,6 +43,12 @@ from api.v1.schemas.portfolio import (
 from src.services.task_queue import get_task_queue
 from src.services.portfolio_import_service import PortfolioImportService
 from src.services.portfolio_risk_service import PortfolioRiskService
+from src.services.portfolio_screenshot_import_service import (
+    AccountNotEmptyError,
+    AmbiguousTradeOrderError,
+    ImageInput,
+    PortfolioScreenshotImportService,
+)
 from src.services.portfolio_service import (
     PortfolioBusyError,
     PortfolioConflictError,
@@ -61,6 +72,28 @@ def _internal_error(message: str, exc: Exception) -> HTTPException:
 
 def _conflict_error(*, error: str, message: str) -> HTTPException:
     return api_error(409, error, message)
+
+
+def _screenshot_internal_error(message: str, exc: Exception) -> HTTPException:
+    logger.error("%s (%s)", message, type(exc).__name__, exc_info=True)
+    return api_error(500, "internal_error", message)
+
+
+async def _read_image_inputs(files: List[UploadFile]) -> List[ImageInput]:
+    if len(files) > 5:
+        raise api_error(400, "too_many_files", "A screenshot batch supports at most 5 files")
+    if not files:
+        raise api_error(400, "validation_error", "At least one screenshot is required")
+    images: List[ImageInput] = []
+    for file in files:
+        images.append(
+            ImageInput(
+                content=await file.read(5 * 1024 * 1024 + 1),
+                mime_type=file.content_type or "application/octet-stream",
+                filename=file.filename,
+            )
+        )
+    return images
 
 
 def _serialize_import_record(item: dict) -> PortfolioImportTradeItem:
@@ -173,6 +206,7 @@ def create_trade(request: PortfolioTradeCreateRequest) -> PortfolioEventCreatedR
             account_id=request.account_id,
             symbol=request.symbol,
             trade_date=request.trade_date,
+            trade_time=request.trade_time,
             side=request.side,
             quantity=request.quantity,
             price=request.price,
@@ -553,6 +587,119 @@ def _resolve_position_analysis_context(
         "price_available": bool(position.get("price_available", True)),
         "cost_method": snapshot.get("cost_method") or "fifo",
     }
+
+
+@router.post(
+    "/imports/images/positions/parse",
+    response_model=PortfolioPositionImageParseResponse,
+    responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    summary="Parse position screenshots for user review",
+)
+async def parse_position_images(
+    account_id: int = Form(...),
+    snapshot_date: date = Form(...),
+    files: List[UploadFile] = File(...),
+) -> PortfolioPositionImageParseResponse:
+    service = PortfolioScreenshotImportService()
+    try:
+        images = await _read_image_inputs(files)
+        result = service.parse_position_images(
+            account_id=account_id,
+            snapshot_date=snapshot_date,
+            images=images,
+        )
+        return PortfolioPositionImageParseResponse(**result)
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise _bad_request(exc)
+    except Exception as exc:
+        raise _screenshot_internal_error("Parse position screenshots failed", exc)
+
+
+@router.post(
+    "/imports/images/trades/parse",
+    response_model=PortfolioTradeImageParseResponse,
+    responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    summary="Parse executed-trade screenshots for user review",
+)
+async def parse_trade_images(
+    account_id: int = Form(...),
+    default_trade_date: date = Form(...),
+    files: List[UploadFile] = File(...),
+) -> PortfolioTradeImageParseResponse:
+    service = PortfolioScreenshotImportService()
+    try:
+        images = await _read_image_inputs(files)
+        result = service.parse_trade_images(
+            account_id=account_id,
+            default_trade_date=default_trade_date,
+            images=images,
+        )
+        return PortfolioTradeImageParseResponse(**result)
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise _bad_request(exc)
+    except Exception as exc:
+        raise _screenshot_internal_error("Parse trade screenshots failed", exc)
+
+
+@router.post(
+    "/imports/images/positions/commit",
+    response_model=PortfolioImageImportCommitResponse,
+    responses={400: {"model": ErrorResponse}, 409: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    summary="Atomically initialize positions from reviewed screenshots",
+)
+def commit_position_images(
+    request: PortfolioPositionImageCommitRequest,
+) -> PortfolioImageImportCommitResponse:
+    service = PortfolioScreenshotImportService()
+    try:
+        result = service.commit_initial_positions(
+            account_id=request.account_id,
+            batch_id=request.batch_id,
+            snapshot_date=request.snapshot_date,
+            positions=[item.model_dump() for item in request.positions],
+        )
+        return PortfolioImageImportCommitResponse(**result)
+    except AccountNotEmptyError as exc:
+        raise _conflict_error(error="account_not_empty", message=str(exc))
+    except PortfolioBusyError as exc:
+        raise _conflict_error(error="portfolio_busy", message=str(exc))
+    except ValueError as exc:
+        raise _bad_request(exc)
+    except Exception as exc:
+        raise _screenshot_internal_error("Commit position screenshots failed", exc)
+
+
+@router.post(
+    "/imports/images/trades/commit",
+    response_model=PortfolioImageImportCommitResponse,
+    responses={400: {"model": ErrorResponse}, 409: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    summary="Atomically import reviewed executed trades",
+)
+def commit_trade_images(
+    request: PortfolioTradeImageCommitRequest,
+) -> PortfolioImageImportCommitResponse:
+    service = PortfolioScreenshotImportService()
+    try:
+        result = service.commit_trade_batch(
+            account_id=request.account_id,
+            batch_id=request.batch_id,
+            trades=[item.model_dump() for item in request.trades],
+        )
+        return PortfolioImageImportCommitResponse(**result)
+    except AmbiguousTradeOrderError as exc:
+        raise _conflict_error(error="ambiguous_trade_order", message=str(exc))
+    except PortfolioOversellError as exc:
+        raise _conflict_error(error="portfolio_oversell", message=str(exc))
+    except PortfolioBusyError as exc:
+        raise _conflict_error(error="portfolio_busy", message=str(exc))
+    except ValueError as exc:
+        raise _bad_request(exc)
+    except Exception as exc:
+        raise _screenshot_internal_error("Commit trade screenshots failed", exc)
 
 
 @router.post(

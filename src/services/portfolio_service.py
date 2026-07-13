@@ -8,8 +8,8 @@ import logging
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import date, timedelta
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from datetime import date, time as dt_time, timedelta
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 from data_provider.base import canonical_stock_code, normalize_stock_code
 from src.config import get_config
@@ -38,6 +38,19 @@ VALID_CASH_DIRECTIONS = {"in", "out"}
 VALID_CORPORATE_ACTIONS = {"cash_dividend", "split_adjustment"}
 PORTFOLIO_FX_REFRESH_DISABLED_REASON = "portfolio_fx_update_disabled"
 PORTFOLIO_REALTIME_QUOTE_MAX_WORKERS = 4
+
+
+def _portfolio_event_sort_key(item: Tuple[str, date, int, Any]) -> Tuple[Any, ...]:
+    event_type, event_date, event_id, event = item
+    event_priority = {"cash": 0, "corp": 1, "trade": 2}
+    trade_time = getattr(event, "trade_time", None) if event_type == "trade" else None
+    return (
+        event_date,
+        event_priority[event_type],
+        trade_time is None,
+        trade_time or dt_time.min,
+        event_id,
+    )
 
 
 def _portfolio_limitations_for_market(market: str) -> List[str]:
@@ -197,9 +210,56 @@ class PortfolioService:
         market: Optional[str] = None,
         currency: Optional[str] = None,
         trade_uid: Optional[str] = None,
+        trade_time: dt_time | str | None = None,
         dedup_hash: Optional[str] = None,
         note: Optional[str] = None,
     ) -> Dict[str, Any]:
+        normalized = self.normalize_trade_fields(
+            symbol=symbol,
+            trade_date=trade_date,
+            trade_time=trade_time,
+            side=side,
+            quantity=quantity,
+            price=price,
+            fee=fee,
+            tax=tax,
+            market=market,
+            currency=currency,
+            trade_uid=trade_uid,
+            dedup_hash=dedup_hash,
+            note=note,
+        )
+        try:
+            with self.repo.portfolio_write_session() as session:
+                account = self._require_active_account_in_session(session=session, account_id=account_id)
+                row = self.add_normalized_trade_in_session(
+                    session=session,
+                    account=account,
+                    account_id=account_id,
+                    trade=normalized,
+                )
+                return {"id": int(row.id)}
+        except (DuplicateTradeUidError, DuplicateTradeDedupHashError) as exc:
+            raise PortfolioConflictError(str(exc)) from exc
+
+    def normalize_trade_fields(
+        self,
+        *,
+        symbol: str,
+        trade_date: date,
+        side: str,
+        quantity: float,
+        price: float,
+        fee: float = 0.0,
+        tax: float = 0.0,
+        market: Optional[str] = None,
+        currency: Optional[str] = None,
+        trade_uid: Optional[str] = None,
+        trade_time: dt_time | str | None = None,
+        dedup_hash: Optional[str] = None,
+        note: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Normalize one trade without opening a transaction."""
         side_norm = (side or "").strip().lower()
         if side_norm not in VALID_SIDES:
             raise ValueError("side must be buy or sell")
@@ -210,48 +270,72 @@ class PortfolioService:
         symbol_norm = self._normalize_symbol_for_storage(symbol)
         if not symbol_norm:
             raise ValueError("symbol is required")
-        trade_uid_norm = (trade_uid or "").strip() or None
-        dedup_hash_norm = (dedup_hash or "").strip() or None
-        try:
-            with self.repo.portfolio_write_session() as session:
-                account = self._require_active_account_in_session(session=session, account_id=account_id)
-                market_norm = self._normalize_market(market or account.market)
-                currency_norm = self._normalize_currency(currency or self._default_currency_for_market(market_norm))
-                self._validate_trade_identity(
-                    account_id=account_id,
-                    trade_uid=trade_uid_norm,
-                    dedup_hash=dedup_hash_norm,
-                    session=session,
-                    )
-                if side_norm == "sell":
-                    self._validate_sell_quantity(
-                        account_id=account_id,
-                        symbol=symbol,
-                        market=market_norm,
-                        currency=currency_norm,
-                        trade_date=trade_date,
-                        quantity=float(quantity),
-                        session=session,
-                    )
-                row = self.repo.add_trade_in_session(
-                    session=session,
-                    account_id=account_id,
-                    trade_uid=trade_uid_norm,
-                    symbol=symbol_norm,
-                    market=market_norm,
-                    currency=currency_norm,
-                    trade_date=trade_date,
-                    side=side_norm,
-                    quantity=float(quantity),
-                    price=float(price),
-                    fee=float(fee),
-                    tax=float(tax),
-                    note=(note or "").strip() or None,
-                    dedup_hash=dedup_hash_norm,
-                )
-                return {"id": int(row.id)}
-        except (DuplicateTradeUidError, DuplicateTradeDedupHashError) as exc:
-            raise PortfolioConflictError(str(exc)) from exc
+        return {
+            "symbol": symbol_norm,
+            "trade_date": trade_date,
+            "trade_time": self._normalize_trade_time(trade_time),
+            "side": side_norm,
+            "quantity": float(quantity),
+            "price": float(price),
+            "fee": float(fee),
+            "tax": float(tax),
+            "market": market,
+            "currency": currency,
+            "trade_uid": (trade_uid or "").strip() or None,
+            "dedup_hash": (dedup_hash or "").strip() or None,
+            "note": (note or "").strip() or None,
+        }
+
+    def add_normalized_trade_in_session(
+        self,
+        *,
+        session: Any,
+        account: Any,
+        account_id: int,
+        trade: Mapping[str, Any],
+        validate_sell: bool = True,
+        validate_identity: bool = True,
+    ) -> Any:
+        """Insert a normalized trade into the caller-owned transaction."""
+        market_norm = self._normalize_market(trade.get("market") or account.market)
+        currency_norm = self._normalize_currency(
+            trade.get("currency") or self._default_currency_for_market(market_norm)
+        )
+        if validate_identity:
+            self._validate_trade_identity(
+                account_id=account_id,
+                trade_uid=trade.get("trade_uid"),
+                dedup_hash=trade.get("dedup_hash"),
+                session=session,
+            )
+        if validate_sell and trade["side"] == "sell":
+            self._validate_sell_quantity(
+                account_id=account_id,
+                symbol=str(trade["symbol"]),
+                market=market_norm,
+                currency=currency_norm,
+                trade_date=trade["trade_date"],
+                trade_time=trade.get("trade_time"),
+                quantity=float(trade["quantity"]),
+                session=session,
+            )
+        return self.repo.add_trade_in_session(
+            session=session,
+            account_id=account_id,
+            trade_uid=trade.get("trade_uid"),
+            symbol=str(trade["symbol"]),
+            market=market_norm,
+            currency=currency_norm,
+            trade_date=trade["trade_date"],
+            trade_time=trade.get("trade_time"),
+            side=str(trade["side"]),
+            quantity=float(trade["quantity"]),
+            price=float(trade["price"]),
+            fee=float(trade["fee"]),
+            tax=float(trade["tax"]),
+            note=trade.get("note"),
+            dedup_hash=trade.get("dedup_hash"),
+        )
 
     def record_cash_ledger(
         self,
@@ -673,6 +757,7 @@ class PortfolioService:
         market: str,
         currency: str,
         trade_date: date,
+        trade_time: Optional[dt_time],
         quantity: float,
         session: Optional[Any] = None,
     ) -> None:
@@ -685,6 +770,7 @@ class PortfolioService:
             account_id=account_id,
             key=key,
             as_of_date=trade_date,
+            as_of_time=trade_time,
             session=session,
         )
         if available_quantity + EPS < quantity:
@@ -701,6 +787,7 @@ class PortfolioService:
         account_id: int,
         key: Tuple[str, str, str],
         as_of_date: date,
+        as_of_time: Optional[dt_time],
         session: Optional[Any] = None,
     ) -> float:
         if session is None:
@@ -730,13 +817,25 @@ class PortfolioService:
                 self._normalize_currency(row.currency),
             )
             if event_key == key:
+                if row.trade_date == as_of_date:
+                    existing_order = (
+                        row.trade_time is None,
+                        row.trade_time or dt_time.min,
+                        int(row.id),
+                    )
+                    candidate_order = (
+                        as_of_time is None,
+                        as_of_time or dt_time.min,
+                        float("inf"),
+                    )
+                    if existing_order >= candidate_order:
+                        continue
                 events.append(("trade", row.trade_date, row.id, row))
 
         # Quantity validation only depends on position-changing events for one symbol.
         # Cash ledger entries do not affect shares held, so we keep the same corp->trade
         # ordering as full replay without pulling unrelated cash events into this path.
-        event_priority = {"corp": 1, "trade": 2}
-        events.sort(key=lambda item: (item[1], event_priority[item[0]], item[2]))
+        events.sort(key=_portfolio_event_sort_key)
 
         quantity_held = 0.0
         for event_type, event_date, _, event in events:
@@ -795,8 +894,7 @@ class PortfolioService:
             events.append(("corp", row.effective_date, row.id, row))
 
         # Same-day deterministic ordering: cash -> corporate action -> trade.
-        event_priority = {"cash": 0, "corp": 1, "trade": 2}
-        events.sort(key=lambda item: (item[1], event_priority[item[0]], item[2]))
+        events.sort(key=_portfolio_event_sort_key)
 
         cash_balances: Dict[str, float] = defaultdict(float)
         fees_total_base = 0.0
@@ -1648,6 +1746,25 @@ class PortfolioService:
         )
 
     @staticmethod
+    def _normalize_trade_time(value: dt_time | str | None) -> Optional[dt_time]:
+        if value is None:
+            return None
+        if isinstance(value, dt_time):
+            if value.tzinfo is not None:
+                raise ValueError("trade_time must use HH:MM:SS without timezone")
+            return value.replace(microsecond=0)
+        if isinstance(value, str):
+            normalized = value.strip()
+            try:
+                parsed = dt_time.fromisoformat(normalized)
+            except ValueError as exc:
+                raise ValueError("trade_time must use HH:MM:SS") from exc
+            if parsed.tzinfo is not None or parsed.isoformat(timespec="seconds") != normalized:
+                raise ValueError("trade_time must use HH:MM:SS")
+            return parsed
+        raise ValueError("trade_time must use HH:MM:SS")
+
+    @staticmethod
     def _account_to_dict(row: Any) -> Dict[str, Any]:
         return {
             "id": row.id,
@@ -1671,6 +1788,7 @@ class PortfolioService:
             "market": row.market,
             "currency": row.currency,
             "trade_date": row.trade_date.isoformat() if row.trade_date else "",
+            "trade_time": row.trade_time.isoformat(timespec="seconds") if row.trade_time else None,
             "side": row.side,
             "quantity": float(row.quantity),
             "price": float(row.price),

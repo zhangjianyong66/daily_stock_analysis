@@ -9,7 +9,7 @@ from datetime import date
 from unittest.mock import patch
 
 import pandas as pd
-from sqlalchemy import and_, create_engine as sqlalchemy_create_engine, select
+from sqlalchemy import and_, create_engine as sqlalchemy_create_engine, inspect, select
 from sqlalchemy.sql import func
 
 # Ensure src module can be imported
@@ -36,6 +36,52 @@ class TestStorage(unittest.TestCase):
                         index_columns.append(column_name)
                 unique_indexes[index_name] = index_columns
             return unique_indexes
+
+    def test_new_portfolio_trade_table_has_nullable_trade_time(self) -> None:
+        DatabaseManager.reset_instance()
+        db = DatabaseManager(db_url="sqlite:///:memory:")
+
+        columns = {
+            column["name"]: column
+            for column in inspect(db._engine).get_columns("portfolio_trades")
+        }
+
+        self.assertIn("trade_time", columns)
+        self.assertEqual(str(columns["trade_time"]["type"]).upper(), "TIME")
+        self.assertTrue(columns["trade_time"]["nullable"])
+        DatabaseManager.reset_instance()
+
+    def test_legacy_portfolio_trade_table_adds_trade_time_idempotently(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        db_path = os.path.join(temp_dir.name, "legacy_portfolio.sqlite")
+
+        try:
+            with sqlite3.connect(db_path) as conn:
+                conn.execute(
+                    """CREATE TABLE portfolio_trades (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_id INTEGER NOT NULL,
+                    trade_date DATE NOT NULL
+                )"""
+                )
+
+            DatabaseManager.reset_instance()
+            Config.reset_instance()
+            db = DatabaseManager(db_url=f"sqlite:///{db_path}")
+            db._ensure_portfolio_trade_time_column()
+            db._ensure_portfolio_trade_time_column()
+
+            with sqlite3.connect(db_path) as conn:
+                columns = conn.execute("PRAGMA table_info(portfolio_trades)").fetchall()
+
+            trade_time_columns = [row for row in columns if row[1] == "trade_time"]
+            self.assertEqual(len(trade_time_columns), 1)
+            self.assertEqual(trade_time_columns[0][2].upper(), "TIME")
+            self.assertEqual(trade_time_columns[0][3], 0)
+        finally:
+            DatabaseManager.reset_instance()
+            Config.reset_instance()
+            temp_dir.cleanup()
 
     def test_legacy_intelligence_items_url_unique_index_rebuilds_without_collision(self) -> None:
         temp_dir = tempfile.TemporaryDirectory()

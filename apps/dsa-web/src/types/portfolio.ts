@@ -182,6 +182,7 @@ export interface PortfolioTradeCreateRequest {
   accountId: number;
   symbol: string;
   tradeDate: string;
+  tradeTime?: string;
   side: PortfolioSide;
   quantity: number;
   price: number;
@@ -230,6 +231,7 @@ export interface PortfolioTradeListItem {
   market: string;
   currency: string;
   tradeDate: string;
+  tradeTime?: string | null;
   side: PortfolioSide;
   quantity: number;
   price: number;
@@ -325,6 +327,117 @@ export interface PortfolioImportBrokerItem {
 
 export interface PortfolioImportBrokerListResponse {
   brokers: PortfolioImportBrokerItem[];
+}
+
+export type PortfolioImageConfidence = 'high' | 'medium' | 'low';
+export type PortfolioImageItemStatus = 'ready' | 'conflict' | 'error';
+
+export interface PortfolioImageFileResult {
+  index: number;
+  filename?: string | null;
+  status: 'success' | 'failed';
+  recordCount: number;
+  error?: string | null;
+}
+
+export interface PortfolioImageSourceRef {
+  fileIndex: number;
+  rowIndex: number;
+}
+
+export interface PositionImageItem {
+  sourceRefs: PortfolioImageSourceRef[];
+  symbol: string;
+  name: string;
+  quantity?: number | null;
+  avgCost?: number | null;
+  currentPrice?: number | null;
+  marketValue?: number | null;
+  availableQuantity?: number | null;
+  weightPct?: number | null;
+  profitLoss?: number | null;
+  confidence: PortfolioImageConfidence;
+  status: PortfolioImageItemStatus;
+  issues: string[];
+}
+
+export interface PositionImageParseResponse {
+  batchId: string;
+  accountId: number;
+  snapshotDate: string;
+  files: PortfolioImageFileResult[];
+  summary: Record<string, number | null>;
+  positions: PositionImageItem[];
+}
+
+export interface PositionImageCommitItem {
+  symbol: string;
+  name: string;
+  quantity: number;
+  avgCost: number;
+}
+
+export interface PositionImageCommitRequest {
+  batchId: string;
+  accountId: number;
+  snapshotDate: string;
+  positions: PositionImageCommitItem[];
+}
+
+export interface TradeImageItem {
+  sourceRefs: PortfolioImageSourceRef[];
+  tradeDate: string;
+  tradeTime?: string | null;
+  symbol: string;
+  name: string;
+  side: PortfolioSide | string;
+  quantity?: number | null;
+  price?: number | null;
+  fee: number;
+  tax: number;
+  tradeUid?: string | null;
+  confidence: PortfolioImageConfidence;
+  occurrenceIndex: number;
+  fingerprint: string;
+  dedupHash?: string | null;
+  status: PortfolioImageItemStatus;
+  issues: string[];
+}
+
+export interface TradeImageParseResponse {
+  batchId: string;
+  accountId: number;
+  defaultTradeDate: string;
+  files: PortfolioImageFileResult[];
+  trades: TradeImageItem[];
+}
+
+export interface TradeImageCommitItem {
+  tradeDate: string;
+  tradeTime?: string | null;
+  symbol: string;
+  name?: string | null;
+  side: PortfolioSide;
+  quantity: number;
+  price: number;
+  fee: number;
+  tax: number;
+  tradeUid?: string | null;
+  occurrenceIndex: number;
+}
+
+export interface TradeImageCommitRequest {
+  batchId: string;
+  accountId: number;
+  trades: TradeImageCommitItem[];
+}
+
+export interface ImageImportCommitResponse {
+  recordCount: number;
+  insertedCount: number;
+  duplicateCount: number;
+  failedCount: number;
+  errors: string[];
 }
 
 export interface PortfolioFxRefreshResponse {

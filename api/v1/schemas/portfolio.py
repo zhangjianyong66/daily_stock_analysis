@@ -3,10 +3,10 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, time
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PortfolioAccountCreateRequest(BaseModel):
@@ -46,6 +46,7 @@ class PortfolioTradeCreateRequest(BaseModel):
     account_id: int
     symbol: str = Field(..., min_length=1, max_length=16)
     trade_date: date
+    trade_time: Optional[time] = None
     side: Literal["buy", "sell"]
     quantity: float = Field(..., gt=0)
     price: float = Field(..., gt=0)
@@ -94,6 +95,7 @@ class PortfolioTradeListItem(BaseModel):
     market: str
     currency: str
     trade_date: str
+    trade_time: Optional[str] = None
     side: str
     quantity: float
     price: float
@@ -256,6 +258,122 @@ class PortfolioImportBrokerItem(BaseModel):
 
 class PortfolioImportBrokerListResponse(BaseModel):
     brokers: List[PortfolioImportBrokerItem] = Field(default_factory=list)
+
+
+class PortfolioImageFileResult(BaseModel):
+    index: int
+    filename: Optional[str] = None
+    status: Literal["success", "failed"]
+    record_count: int = 0
+    error: Optional[str] = None
+
+
+class PortfolioImageSourceRef(BaseModel):
+    file_index: int
+    row_index: int
+
+
+class PortfolioPositionImageItem(BaseModel):
+    source_refs: List[PortfolioImageSourceRef] = Field(default_factory=list)
+    symbol: str
+    name: str
+    quantity: Optional[float] = None
+    avg_cost: Optional[float] = None
+    current_price: Optional[float] = None
+    market_value: Optional[float] = None
+    available_quantity: Optional[float] = None
+    weight_pct: Optional[float] = None
+    profit_loss: Optional[float] = None
+    confidence: Literal["high", "medium", "low"] = "low"
+    status: Literal["ready", "conflict", "error"]
+    issues: List[str] = Field(default_factory=list)
+
+
+class PortfolioPositionImageParseResponse(BaseModel):
+    batch_id: str
+    account_id: int
+    snapshot_date: str
+    files: List[PortfolioImageFileResult] = Field(default_factory=list)
+    summary: Dict[str, Optional[float]] = Field(default_factory=dict)
+    positions: List[PortfolioPositionImageItem] = Field(default_factory=list)
+
+
+class PortfolioTradeImageItem(BaseModel):
+    source_refs: List[PortfolioImageSourceRef] = Field(default_factory=list)
+    trade_date: str
+    trade_time: Optional[str] = None
+    symbol: str
+    name: str
+    side: str
+    quantity: Optional[float] = None
+    price: Optional[float] = None
+    fee: float = 0
+    tax: float = 0
+    trade_uid: Optional[str] = None
+    confidence: Literal["high", "medium", "low"] = "low"
+    occurrence_index: int = 1
+    fingerprint: str = ""
+    dedup_hash: Optional[str] = None
+    status: Literal["ready", "conflict", "error"]
+    issues: List[str] = Field(default_factory=list)
+
+
+class PortfolioTradeImageParseResponse(BaseModel):
+    batch_id: str
+    account_id: int
+    default_trade_date: str
+    files: List[PortfolioImageFileResult] = Field(default_factory=list)
+    trades: List[PortfolioTradeImageItem] = Field(default_factory=list)
+
+
+class PortfolioPositionImageCommitItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str = Field(..., pattern=r"^\d{6}$")
+    name: str = Field(..., min_length=1, max_length=64)
+    quantity: float = Field(..., gt=0)
+    avg_cost: float = Field(..., gt=0)
+
+
+class PortfolioPositionImageCommitRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    batch_id: str = Field(..., min_length=1, max_length=64)
+    account_id: int
+    snapshot_date: date
+    positions: List[PortfolioPositionImageCommitItem] = Field(..., min_length=1)
+
+
+class PortfolioTradeImageCommitItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    trade_date: date
+    trade_time: Optional[time] = None
+    symbol: str = Field(..., pattern=r"^\d{6}$")
+    name: Optional[str] = Field(None, max_length=64)
+    side: Literal["buy", "sell"]
+    quantity: float = Field(..., gt=0)
+    price: float = Field(..., gt=0)
+    fee: float = Field(0, ge=0)
+    tax: float = Field(0, ge=0)
+    trade_uid: Optional[str] = Field(None, max_length=128)
+    occurrence_index: int = Field(1, ge=1)
+
+
+class PortfolioTradeImageCommitRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    batch_id: str = Field(..., min_length=1, max_length=64)
+    account_id: int
+    trades: List[PortfolioTradeImageCommitItem] = Field(..., min_length=1)
+
+
+class PortfolioImageImportCommitResponse(BaseModel):
+    record_count: int
+    inserted_count: int
+    duplicate_count: int
+    failed_count: int
+    errors: List[str] = Field(default_factory=list)
 
 
 class PortfolioFxRefreshResponse(BaseModel):

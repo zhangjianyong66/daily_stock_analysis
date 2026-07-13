@@ -68,6 +68,10 @@ export function formatSideLabel(value: PortfolioSide): string {
   return value === 'buy' ? '买入' : '卖出';
 }
 
+export function formatTradeDateTime(tradeDate: string, tradeTime?: string | null): string {
+  return tradeTime ? `${tradeDate} ${tradeTime}` : tradeDate;
+}
+
 export function formatCashDirectionLabel(value: PortfolioCashDirection): string {
   return value === 'in' ? '流入' : '流出';
 }

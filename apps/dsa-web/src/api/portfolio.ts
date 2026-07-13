@@ -2,6 +2,9 @@ import apiClient from './index';
 import { toCamelCase } from './utils';
 import type { TaskAccepted } from '../types/analysis';
 import type {
+  ImageImportCommitResponse,
+  PositionImageCommitRequest,
+  PositionImageParseResponse,
   PortfolioAccountItem,
   PortfolioAccountCreateRequest,
   PortfolioAccountListResponse,
@@ -21,6 +24,8 @@ import type {
   PortfolioSnapshotResponse,
   PortfolioTradeCreateRequest,
   PortfolioTradeListResponse,
+  TradeImageCommitRequest,
+  TradeImageParseResponse,
 } from '../types/portfolio';
 
 type SnapshotQuery = {
@@ -105,6 +110,19 @@ function buildEventParams(query: EventQuery): Record<string, string | number> {
   return params;
 }
 
+function buildImageImportFormData(
+  accountId: number,
+  dateField: 'snapshot_date' | 'default_trade_date',
+  dateValue: string,
+  files: File[],
+): FormData {
+  const formData = new FormData();
+  formData.append('account_id', String(accountId));
+  formData.append(dateField, dateValue);
+  files.forEach((file) => formData.append('files', file));
+  return formData;
+}
+
 export const portfolioApi = {
   async getAccounts(includeInactive = false): Promise<PortfolioAccountListResponse> {
     const response = await apiClient.get<Record<string, unknown>>('/api/v1/portfolio/accounts', {
@@ -167,6 +185,7 @@ export const portfolioApi = {
       account_id: payload.accountId,
       symbol: payload.symbol,
       trade_date: payload.tradeDate,
+      trade_time: payload.tradeTime,
       side: payload.side,
       quantity: payload.quantity,
       price: payload.price,
@@ -285,5 +304,75 @@ export const portfolioApi = {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
     return toCamelCase<PortfolioImportCommitResponse>(response.data);
+  },
+
+  async parsePositionImages(
+    accountId: number,
+    snapshotDate: string,
+    files: File[],
+  ): Promise<PositionImageParseResponse> {
+    const formData = buildImageImportFormData(accountId, 'snapshot_date', snapshotDate, files);
+    const response = await apiClient.post<Record<string, unknown>>(
+      '/api/v1/portfolio/imports/images/positions/parse',
+      formData,
+      { headers: { 'Content-Type': 'multipart/form-data' } },
+    );
+    return toCamelCase<PositionImageParseResponse>(response.data);
+  },
+
+  async commitPositionImages(request: PositionImageCommitRequest): Promise<ImageImportCommitResponse> {
+    const response = await apiClient.post<Record<string, unknown>>(
+      '/api/v1/portfolio/imports/images/positions/commit',
+      {
+        batch_id: request.batchId,
+        account_id: request.accountId,
+        snapshot_date: request.snapshotDate,
+        positions: request.positions.map((position) => ({
+          symbol: position.symbol,
+          name: position.name,
+          quantity: position.quantity,
+          avg_cost: position.avgCost,
+        })),
+      },
+    );
+    return toCamelCase<ImageImportCommitResponse>(response.data);
+  },
+
+  async parseTradeImages(
+    accountId: number,
+    defaultTradeDate: string,
+    files: File[],
+  ): Promise<TradeImageParseResponse> {
+    const formData = buildImageImportFormData(accountId, 'default_trade_date', defaultTradeDate, files);
+    const response = await apiClient.post<Record<string, unknown>>(
+      '/api/v1/portfolio/imports/images/trades/parse',
+      formData,
+      { headers: { 'Content-Type': 'multipart/form-data' } },
+    );
+    return toCamelCase<TradeImageParseResponse>(response.data);
+  },
+
+  async commitTradeImages(request: TradeImageCommitRequest): Promise<ImageImportCommitResponse> {
+    const response = await apiClient.post<Record<string, unknown>>(
+      '/api/v1/portfolio/imports/images/trades/commit',
+      {
+        batch_id: request.batchId,
+        account_id: request.accountId,
+        trades: request.trades.map((trade) => ({
+          trade_date: trade.tradeDate,
+          trade_time: trade.tradeTime,
+          symbol: trade.symbol,
+          name: trade.name,
+          side: trade.side,
+          quantity: trade.quantity,
+          price: trade.price,
+          fee: trade.fee,
+          tax: trade.tax,
+          trade_uid: trade.tradeUid,
+          occurrence_index: trade.occurrenceIndex,
+        })),
+      },
+    );
+    return toCamelCase<ImageImportCommitResponse>(response.data);
   },
 };

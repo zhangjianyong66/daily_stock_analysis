@@ -30,6 +30,7 @@ from sqlalchemy import (
     Boolean,
     Date,
     DateTime,
+    Time,
     Integer,
     ForeignKey,
     Index,
@@ -517,6 +518,7 @@ class PortfolioTrade(Base):
     market = Column(String(8), nullable=False, default='cn')
     currency = Column(String(8), nullable=False, default='CNY')
     trade_date = Column(Date, nullable=False, index=True)
+    trade_time = Column(Time, nullable=True)
     side = Column(String(8), nullable=False)  # buy/sell
     quantity = Column(Float, nullable=False)
     price = Column(Float, nullable=False)
@@ -1180,6 +1182,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
 
             # 创建所有表
             Base.metadata.create_all(self._engine)
+            self._ensure_portfolio_trade_time_column()
             self._ensure_llm_usage_telemetry_columns()
             self._ensure_intelligence_item_scope_values()
             self._ensure_schema_migration_record()
@@ -1381,6 +1384,43 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                             time.sleep(delay)
                         continue
                     raise
+
+    def _ensure_portfolio_trade_time_column(self) -> None:
+        """Idempotently add nullable trade_time to legacy SQLite databases."""
+        if not self._is_sqlite_engine:
+            return
+
+        existing = {
+            column["name"]
+            for column in inspect(self._engine).get_columns(PortfolioTrade.__tablename__)
+        }
+        if "trade_time" in existing:
+            return
+
+        max_retries = self._sqlite_write_retry_max
+        for attempt in range(max_retries + 1):
+            try:
+                with self._engine.begin() as connection:
+                    connection.exec_driver_sql(
+                        f"ALTER TABLE {PortfolioTrade.__tablename__} ADD COLUMN trade_time TIME"
+                    )
+                return
+            except OperationalError as exc:
+                if self._is_sqlite_duplicate_column_error(exc, "trade_time"):
+                    return
+                if self._is_sqlite_locked_error(exc) and attempt < max_retries:
+                    delay = self._sqlite_write_retry_base_delay * (2**attempt)
+                    logger.warning(
+                        "[Portfolio] SQLite trade_time column migration locked, "
+                        "retrying (%s/%s, %.2fs)",
+                        attempt + 1,
+                        max_retries,
+                        delay,
+                    )
+                    if delay > 0:
+                        time.sleep(delay)
+                    continue
+                raise
 
     def _ensure_intelligence_item_scope_values(self) -> None:
         """Backfill nullable intelligence item scopes so SQLite unique keys work."""

@@ -3231,7 +3231,7 @@ class BatchTaskQueueContractTestCase(unittest.TestCase):
 class ImageStockExtractorContractTestCase(unittest.TestCase):
     def test_litellm_completion_patch_target_remains_available(self) -> None:
         cfg = SimpleNamespace(
-            vision_model="",
+            vision_model="gemini/gemini-2.0-flash",
             openai_vision_model=None,
             litellm_model="",
             gemini_api_keys=["sk-gemini-testkey-1234"],

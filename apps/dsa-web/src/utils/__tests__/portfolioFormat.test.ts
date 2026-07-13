@@ -6,6 +6,7 @@ import {
   formatPositionMoney,
   formatPositionPrice,
   formatSignedPct,
+  formatTradeDateTime,
   getCsvCommitVariant,
   getCsvParseVariant,
   getPositionPriceLabel,
@@ -53,6 +54,12 @@ describe('portfolioFormat', () => {
     expect(formatBrokerLabel('custom', ' 自定义 ')).toBe('custom（自定义）');
     expect(getCsvParseVariant({ broker: 'huatai', recordCount: 1, skippedCount: 1, errorCount: 0, records: [], errors: [] })).toBe('warning');
     expect(getCsvCommitVariant({ accountId: 1, recordCount: 1, insertedCount: 1, duplicateCount: 0, failedCount: 0, dryRun: false, errors: [] }, false)).toBe('success');
+  });
+
+  it('formats trade date with optional execution time', () => {
+    expect(formatTradeDateTime('2026-07-13', '09:30:05')).toBe('2026-07-13 09:30:05');
+    expect(formatTradeDateTime('2026-07-13', null)).toBe('2026-07-13');
+    expect(formatTradeDateTime('2026-07-13', undefined)).toBe('2026-07-13');
   });
 
   it('builds FX refresh feedback from refresh outcomes', () => {

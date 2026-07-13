@@ -85,6 +85,40 @@ vi.mock('../../api/portfolio', () => ({
   },
 }));
 
+vi.mock('../../components/portfolio/PortfolioImageImportDialog', () => ({
+  PortfolioImageImportDialog: ({
+    isOpen,
+    selectedAccountId,
+    onCompleted,
+  }: {
+    isOpen: boolean;
+    selectedAccountId?: number;
+    onCompleted: (result: {
+      recordCount: number;
+      insertedCount: number;
+      duplicateCount: number;
+      failedCount: number;
+      errors: string[];
+    }) => void | Promise<void>;
+  }) => isOpen ? (
+    <div role="dialog" aria-label="图片导入测试弹窗">
+      <span>图片导入账户 {selectedAccountId}</span>
+      <button
+        type="button"
+        onClick={() => void onCompleted({
+          recordCount: 1,
+          insertedCount: 1,
+          duplicateCount: 0,
+          failedCount: 0,
+          errors: [],
+        })}
+      >
+        模拟完成图片导入
+      </button>
+    </div>
+  ) : null,
+}));
+
 vi.mock('recharts', () => ({
   ResponsiveContainer: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   PieChart: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
@@ -1108,5 +1142,76 @@ describe('PortfolioPage FX refresh', () => {
     await waitFor(() => expect(getAccounts).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.queryByText('Main (#1)')).not.toBeInTheDocument());
     expect(screen.getByRole('option', { name: 'Alt (#2)' })).toBeInTheDocument();
+  });
+
+  it('shows image import only for a writable cn/CNY account and refreshes portfolio data after completion', async () => {
+    getAccounts.mockResolvedValueOnce(makeAccounts([{ id: 1, name: '中国账户', market: 'cn', baseCurrency: 'CNY' }]));
+    render(<PortfolioPage />);
+
+    await waitForInitialLoad();
+    expect(screen.queryByRole('button', { name: '图片导入' })).not.toBeInTheDocument();
+    expect(screen.getByText('券商 CSV 导入')).toBeInTheDocument();
+
+    fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: '1' } });
+    const importButton = await screen.findByRole('button', { name: '图片导入' });
+    fireEvent.click(importButton);
+
+    expect(screen.getByRole('dialog', { name: '图片导入测试弹窗' })).toHaveTextContent('图片导入账户 1');
+    const snapshotCallsBeforeImport = getSnapshot.mock.calls.length;
+    const riskCallsBeforeImport = getRisk.mock.calls.length;
+    const tradeCallsBeforeImport = listTrades.mock.calls.length;
+
+    fireEvent.click(screen.getByRole('button', { name: '模拟完成图片导入' }));
+
+    await waitFor(() => expect(getSnapshot).toHaveBeenCalledTimes(snapshotCallsBeforeImport + 1));
+    await waitFor(() => expect(getRisk).toHaveBeenCalledTimes(riskCallsBeforeImport + 1));
+    await waitFor(() => expect(listTrades).toHaveBeenCalledTimes(tradeCallsBeforeImport + 1));
+  });
+
+  it('shows execution time in trade history while keeping date-only legacy rows compact', async () => {
+    listTrades.mockResolvedValueOnce({
+      items: [
+        {
+          id: 1,
+          accountId: 1,
+          tradeUid: null,
+          symbol: '600519',
+          market: 'cn',
+          currency: 'CNY',
+          tradeDate: '2026-07-13',
+          tradeTime: '09:30:05',
+          side: 'buy',
+          quantity: 10,
+          price: 1500,
+          fee: 0,
+          tax: 0,
+        },
+        {
+          id: 2,
+          accountId: 1,
+          tradeUid: null,
+          symbol: '000001',
+          market: 'cn',
+          currency: 'CNY',
+          tradeDate: '2026-07-12',
+          tradeTime: null,
+          side: 'sell',
+          quantity: 20,
+          price: 12,
+          fee: 0,
+          tax: 0,
+        },
+      ],
+      total: 2,
+      page: 1,
+      pageSize: 20,
+    });
+    render(<PortfolioPage />);
+
+    await waitForInitialLoad();
+
+    expect(screen.getByText(/2026-07-13 09:30:05 买入 600519/)).toBeInTheDocument();
+    expect(screen.getByText(/2026-07-12 卖出 000001/)).toBeInTheDocument();
+    expect(screen.queryByText(/2026-07-12\s+null/)).not.toBeInTheDocument();
   });
 });

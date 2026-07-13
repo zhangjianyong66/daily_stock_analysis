@@ -1,11 +1,13 @@
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Images } from 'lucide-react';
 import { Pie, PieChart, ResponsiveContainer, Tooltip, Legend, Cell } from 'recharts';
 import { decisionSignalsApi } from '../api/decisionSignals';
 import { portfolioApi } from '../api/portfolio';
 import type { ParsedApiError } from '../api/error';
 import { getParsedApiError } from '../api/error';
 import { ApiErrorAlert, Card, Badge, ConfirmDialog, EmptyState, InlineAlert } from '../components/common';
+import { PortfolioImageImportDialog } from '../components/portfolio/PortfolioImageImportDialog';
 import { PortfolioSignalSummary } from '../components/decision-signals/DecisionSignalDisplay';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
 import { formatUiText } from '../i18n/uiText';
@@ -22,6 +24,7 @@ import {
   formatPositionPrice,
   formatSideLabel,
   formatSignedPct,
+  formatTradeDateTime,
   getCsvCommitVariant,
   getCsvParseVariant,
   getFxRefreshFeedbackVariant,
@@ -227,6 +230,7 @@ const PortfolioPage: React.FC = () => {
   const [csvParseResult, setCsvParseResult] = useState<PortfolioImportParseResponse | null>(null);
   const [csvCommitResult, setCsvCommitResult] = useState<PortfolioImportCommitResponse | null>(null);
   const [brokerLoadWarning, setBrokerLoadWarning] = useState<string | null>(null);
+  const [showImageImport, setShowImageImport] = useState(false);
 
   const [eventType, setEventType] = useState<EventType>('trade');
   const [eventDateFrom, setEventDateFrom] = useState('');
@@ -280,6 +284,12 @@ const PortfolioPage: React.FC = () => {
   const writableAccount = selectedAccount === 'all' ? undefined : accounts.find((item) => item.id === selectedAccount);
   const writableAccountId = writableAccount?.id;
   const writeBlocked = !writableAccountId;
+  const canImportImages = Boolean(
+    writableAccount
+    && writableAccount.isActive
+    && writableAccount.market === 'cn'
+    && writableAccount.baseCurrency.toUpperCase() === 'CNY',
+  );
   const canDeleteSelectedAccount = Boolean(writableAccountId) && !isLoading && !fxRefreshing && !accountDeleteLoading;
   const totalEventPages = Math.max(1, Math.ceil(eventTotal / DEFAULT_PAGE_SIZE));
   const currentEventCount = eventType === 'trade'
@@ -725,6 +735,11 @@ const PortfolioPage: React.FC = () => {
     } finally {
       setCsvCommitting(false);
     }
+  };
+
+  const handleImageImportCompleted = async () => {
+    await refreshPortfolioData();
+    setPortfolioSignalsRefreshKey((current) => current + 1);
   };
 
   const openDeleteDialog = (item: PendingDelete) => {
@@ -1452,7 +1467,19 @@ const PortfolioPage: React.FC = () => {
 
       <section className="grid grid-cols-1 xl:grid-cols-2 gap-3">
         <Card padding="md">
-          <h3 className="text-sm font-semibold text-foreground mb-3">券商 CSV 导入</h3>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold text-foreground">券商 CSV 导入</h3>
+            {canImportImages ? (
+              <button
+                type="button"
+                className="btn-secondary inline-flex items-center gap-2 text-sm"
+                onClick={() => setShowImageImport(true)}
+              >
+                <Images className="h-4 w-4" />
+                图片导入
+              </button>
+            ) : null}
+          </div>
           <div className="space-y-2">
             {brokerLoadWarning ? (
               <InlineAlert
@@ -1557,8 +1584,8 @@ const PortfolioPage: React.FC = () => {
             <div className="max-h-64 overflow-auto rounded-lg border border-white/10 p-2">
               {eventType === 'trade' && tradeEvents.map((item) => (
                 <div key={`t-${item.id}`} className="flex items-start justify-between gap-3 border-b border-white/5 py-2 text-xs text-secondary">
-                  <div className="min-w-0">
-                    {item.tradeDate} {formatSideLabel(item.side)} {item.symbol} 数量={item.quantity} 价格={item.price}
+                  <div className="min-w-0 break-words [overflow-wrap:anywhere]">
+                    {formatTradeDateTime(item.tradeDate, item.tradeTime)} {formatSideLabel(item.side)} {item.symbol} 数量={item.quantity} 价格={item.price}
                   </div>
                   {!writeBlocked ? (
                     <button
@@ -1567,7 +1594,7 @@ const PortfolioPage: React.FC = () => {
                       onClick={() => openDeleteDialog({
                         eventType: 'trade',
                         id: item.id,
-                        message: `确认删除 ${item.tradeDate} 的${formatSideLabel(item.side)}流水 ${item.symbol}（数量 ${item.quantity}，价格 ${item.price}）吗？`,
+                        message: `确认删除 ${formatTradeDateTime(item.tradeDate, item.tradeTime)} 的${formatSideLabel(item.side)}流水 ${item.symbol}（数量 ${item.quantity}，价格 ${item.price}）吗？`,
                       })}
                     >
                       删除
@@ -1642,6 +1669,13 @@ const PortfolioPage: React.FC = () => {
           </div>
         </Card>
       </section>
+      <PortfolioImageImportDialog
+        isOpen={showImageImport}
+        accounts={accounts}
+        selectedAccountId={writableAccountId}
+        onClose={() => setShowImageImport(false)}
+        onCompleted={handleImageImportCompleted}
+      />
       <ConfirmDialog
         isOpen={Boolean(pendingDelete)}
         title="删除错误流水"

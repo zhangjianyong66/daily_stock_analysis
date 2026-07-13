@@ -28,6 +28,9 @@ from src.services.portfolio_service import PortfolioBusyError
 from src.storage import DatabaseManager
 
 
+PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 12
+
+
 def _reset_auth_globals() -> None:
     auth._auth_enabled = None
     auth._session_secret = None
@@ -90,6 +93,20 @@ class PortfolioApiTestCase(unittest.TestCase):
         )
         self.db.save_daily_data(df, code=symbol, data_source="portfolio-api-test")
 
+    def _create_account(
+        self,
+        *,
+        name: str = "Main",
+        market: str = "cn",
+        currency: str = "CNY",
+    ) -> int:
+        response = self.client.post(
+            "/api/v1/portfolio/accounts",
+            json={"name": name, "broker": "Demo", "market": market, "base_currency": currency},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()["id"]
+
     def _create_position(
         self,
         *,
@@ -123,6 +140,60 @@ class PortfolioApiTestCase(unittest.TestCase):
         self.assertEqual(trade_resp.status_code, 200, trade_resp.text)
         self._save_close(symbol, date(2026, 1, 3), 110.0)
         return account_id
+
+    def test_trade_time_round_trip_and_nullable_compatibility(self) -> None:
+        create_resp = self.client.post(
+            "/api/v1/portfolio/accounts",
+            json={"name": "Main", "broker": "Demo", "market": "cn", "base_currency": "CNY"},
+        )
+        account_id = create_resp.json()["id"]
+        base_payload = {
+            "account_id": account_id,
+            "symbol": "600519",
+            "trade_date": "2026-01-02",
+            "side": "buy",
+            "quantity": 10,
+            "price": 100,
+        }
+
+        timed = self.client.post(
+            "/api/v1/portfolio/trades",
+            json={**base_payload, "trade_time": "09:30:05"},
+        )
+        untimed = self.client.post(
+            "/api/v1/portfolio/trades",
+            json={**base_payload, "symbol": "000001"},
+        )
+
+        self.assertEqual(timed.status_code, 200, timed.text)
+        self.assertEqual(untimed.status_code, 200, untimed.text)
+        list_resp = self.client.get("/api/v1/portfolio/trades", params={"account_id": account_id})
+        self.assertEqual(list_resp.status_code, 200, list_resp.text)
+        items = {item["symbol"]: item for item in list_resp.json()["items"]}
+        self.assertEqual(items["600519"]["trade_time"], "09:30:05")
+        self.assertIsNone(items["000001"]["trade_time"])
+
+    def test_trade_time_rejects_invalid_clock_value(self) -> None:
+        create_resp = self.client.post(
+            "/api/v1/portfolio/accounts",
+            json={"name": "Main", "broker": "Demo", "market": "cn", "base_currency": "CNY"},
+        )
+
+        response = self.client.post(
+            "/api/v1/portfolio/trades",
+            json={
+                "account_id": create_resp.json()["id"],
+                "symbol": "600519",
+                "trade_date": "2026-01-02",
+                "trade_time": "25:00:00",
+                "side": "buy",
+                "quantity": 10,
+                "price": 100,
+            },
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["error"], "validation_error")
 
     def test_account_event_snapshot_flow(self) -> None:
         create_resp = self.client.post(
@@ -957,6 +1028,208 @@ class PortfolioApiTestCase(unittest.TestCase):
     def test_event_list_invalid_page_size_returns_422(self) -> None:
         resp = self.client.get("/api/v1/portfolio/trades", params={"page_size": 101})
         self.assertEqual(resp.status_code, 422)
+
+    def test_position_image_parse_accepts_repeated_multipart_files(self) -> None:
+        parsed = {
+            "batch_id": "batch-position-api",
+            "account_id": 1,
+            "snapshot_date": "2026-07-13",
+            "files": [
+                {"index": 0, "filename": "a.png", "status": "success", "record_count": 1, "error": None},
+                {"index": 1, "filename": "b.png", "status": "success", "record_count": 1, "error": None},
+            ],
+            "summary": {"total_assets": 12000},
+            "positions": [
+                {
+                    "source_refs": [{"file_index": 0, "row_index": 0}],
+                    "symbol": "600000",
+                    "name": "浦发银行",
+                    "quantity": 1000,
+                    "avg_cost": 10,
+                    "current_price": 10.2,
+                    "market_value": 10200,
+                    "available_quantity": 0,
+                    "weight_pct": 85,
+                    "profit_loss": None,
+                    "confidence": "high",
+                    "status": "ready",
+                    "issues": [],
+                }
+            ],
+        }
+        with patch(
+            "api.v1.endpoints.portfolio.PortfolioScreenshotImportService.parse_position_images",
+            return_value=parsed,
+        ) as mock_parse:
+            response = self.client.post(
+                "/api/v1/portfolio/imports/images/positions/parse",
+                data={"account_id": "1", "snapshot_date": "2026-07-13"},
+                files=[
+                    ("files", ("a.png", PNG_BYTES, "image/png")),
+                    ("files", ("b.png", PNG_BYTES, "image/png")),
+                ],
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(len(response.json()["files"]), 2)
+        images = mock_parse.call_args.kwargs["images"]
+        self.assertEqual([image.filename for image in images], ["a.png", "b.png"])
+
+    def test_position_image_parse_rejects_more_than_five_files(self) -> None:
+        response = self.client.post(
+            "/api/v1/portfolio/imports/images/positions/parse",
+            data={"account_id": "1", "snapshot_date": "2026-07-13"},
+            files=[("files", (f"{index}.png", PNG_BYTES, "image/png")) for index in range(6)],
+        )
+
+        self.assertEqual(response.status_code, 400, response.text)
+        self.assertEqual(response.json()["error"], "too_many_files")
+
+    def test_position_image_parse_marks_oversized_file_without_calling_model(self) -> None:
+        account_id = self._create_account()
+        oversized = PNG_BYTES + b"\x00" * (5 * 1024 * 1024)
+
+        with patch("src.services.vision_extraction_service.litellm.completion") as mock_completion:
+            response = self.client.post(
+                "/api/v1/portfolio/imports/images/positions/parse",
+                data={"account_id": str(account_id), "snapshot_date": "2026-07-13"},
+                files=[("files", ("large.png", oversized, "image/png"))],
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["files"][0]["status"], "failed")
+        self.assertEqual(response.json()["files"][0]["error"], "file_too_large")
+        mock_completion.assert_not_called()
+
+    def test_trade_image_parse_returns_per_file_failure_without_raw_error(self) -> None:
+        parsed = {
+            "batch_id": "batch-trade-api",
+            "account_id": 1,
+            "default_trade_date": "2026-07-13",
+            "files": [
+                {"index": 0, "filename": "a.png", "status": "failed", "record_count": 0, "error": "vision_failed"}
+            ],
+            "trades": [],
+        }
+        with patch(
+            "api.v1.endpoints.portfolio.PortfolioScreenshotImportService.parse_trade_images",
+            return_value=parsed,
+        ):
+            response = self.client.post(
+                "/api/v1/portfolio/imports/images/trades/parse",
+                data={"account_id": "1", "default_trade_date": "2026-07-13"},
+                files=[("files", ("a.png", PNG_BYTES, "image/png"))],
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["files"][0]["error"], "vision_failed")
+        self.assertNotIn("raw", response.text.lower())
+
+    def test_position_image_commit_initializes_empty_account(self) -> None:
+        account_id = self._create_account()
+        response = self.client.post(
+            "/api/v1/portfolio/imports/images/positions/commit",
+            json={
+                "batch_id": "batch-position-commit",
+                "account_id": account_id,
+                "snapshot_date": "2026-07-13",
+                "positions": [
+                    {"symbol": "600000", "name": "浦发银行", "quantity": 1000, "avg_cost": 10}
+                ],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["inserted_count"], 1)
+        trades = self.client.get("/api/v1/portfolio/trades", params={"account_id": account_id}).json()
+        self.assertEqual(trades["total"], 1)
+
+    def test_position_image_commit_rejects_nonempty_account_atomically(self) -> None:
+        account_id = self._create_position()
+        response = self.client.post(
+            "/api/v1/portfolio/imports/images/positions/commit",
+            json={
+                "batch_id": "batch-position-nonempty",
+                "account_id": account_id,
+                "snapshot_date": "2026-07-13",
+                "positions": [
+                    {"symbol": "600000", "name": "浦发银行", "quantity": 1000, "avg_cost": 10}
+                ],
+            },
+        )
+
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()["error"], "account_not_empty")
+        trades = self.client.get("/api/v1/portfolio/trades", params={"account_id": account_id}).json()
+        self.assertEqual(trades["total"], 1)
+
+    def test_trade_image_commit_rejects_oversell_atomically(self) -> None:
+        account_id = self._create_account()
+        response = self.client.post(
+            "/api/v1/portfolio/imports/images/trades/commit",
+            json={
+                "batch_id": "batch-trade-oversell-api",
+                "account_id": account_id,
+                "trades": [
+                    {
+                        "trade_date": "2026-07-13",
+                        "trade_time": "10:01:00",
+                        "symbol": "600000",
+                        "name": "浦发银行",
+                        "side": "buy",
+                        "quantity": 10,
+                        "price": 10,
+                        "fee": 0,
+                        "tax": 0,
+                        "occurrence_index": 1,
+                    },
+                    {
+                        "trade_date": "2026-07-13",
+                        "trade_time": "10:02:00",
+                        "symbol": "600000",
+                        "name": "浦发银行",
+                        "side": "sell",
+                        "quantity": 11,
+                        "price": 10,
+                        "fee": 0,
+                        "tax": 0,
+                        "occurrence_index": 1,
+                    },
+                ],
+            },
+        )
+
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()["error"], "portfolio_oversell")
+        trades = self.client.get("/api/v1/portfolio/trades", params={"account_id": account_id}).json()
+        self.assertEqual(trades["total"], 0)
+
+    def test_trade_image_commit_forbids_client_dedup_hash(self) -> None:
+        account_id = self._create_account()
+        response = self.client.post(
+            "/api/v1/portfolio/imports/images/trades/commit",
+            json={
+                "batch_id": "batch-trade-hash-api",
+                "account_id": account_id,
+                "trades": [
+                    {
+                        "trade_date": "2026-07-13",
+                        "symbol": "600000",
+                        "name": "浦发银行",
+                        "side": "buy",
+                        "quantity": 10,
+                        "price": 10,
+                        "fee": 0,
+                        "tax": 0,
+                        "occurrence_index": 1,
+                        "dedup_hash": "client-controlled",
+                    }
+                ],
+            },
+        )
+
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertEqual(response.json()["error"], "validation_error")
 
 
 if __name__ == "__main__":

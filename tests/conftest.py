@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import os
 import time
 import threading
 from collections.abc import Awaitable, Callable
@@ -18,8 +19,24 @@ import fastapi.testclient
 import httpx
 import starlette.testclient
 from anyio._backends import _asyncio
+import pytest
 
 T = TypeVar("T")
+
+
+@pytest.fixture(autouse=True)
+def _restore_process_state_between_tests():
+    """Keep dotenv-backed runtime state from leaking across test modules."""
+    original_environ = os.environ.copy()
+    try:
+        yield
+    finally:
+        os.environ.clear()
+        os.environ.update(original_environ)
+        import src.auth as auth
+
+        auth._auth_enabled = None
+        auth._session_secret = None
 
 _original_call_soon_threadsafe = asyncio.BaseEventLoop.call_soon_threadsafe
 
