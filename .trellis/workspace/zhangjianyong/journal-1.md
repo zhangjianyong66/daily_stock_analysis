@@ -168,3 +168,39 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 6: 完成持仓与成交截图识别导入
+
+**Date**: 2026-07-14
+**Task**: 完成持仓与成交截图识别导入
+**Branch**: `main`
+
+### Summary
+
+完成共享 Vision、持仓初始化、成交增量导入、trade_time 全链路、Web 校对流程、文档和完整质量门禁。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `fd19d6e` | (see git log) |
+| `3859ba7` | (see git log) |
+| `db70fc5` | (see git log) |
+| `60f801a` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
