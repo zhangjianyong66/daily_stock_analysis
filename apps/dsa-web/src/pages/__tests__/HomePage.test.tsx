@@ -1085,7 +1085,9 @@ describe('HomePage', () => {
     fireEvent.click(trigger);
 
     expect(container.querySelector('.page-drawer-overlay')).toBeTruthy();
-    expect(container.querySelector('.dashboard-card')).toBeTruthy();
+    const drawer = container.querySelector('.dashboard-card');
+    expect(drawer).toBeTruthy();
+    expect(drawer).toHaveClass('!absolute');
 
     fireEvent.click(container.querySelector('.fixed.inset-0.z-40') as HTMLElement);
 
