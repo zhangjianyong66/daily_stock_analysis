@@ -118,6 +118,11 @@ npm install
 npm run build
 ```
 
+### 股票自动补全索引
+
+- `scripts/generate_index_from_csv.py --source tushare` 依赖 `data/stock_list_a.csv`、`data/stock_list_hk.csv`、`data/stock_list_us.csv` 等完整股票列表；本地缺少这些 CSV 时直接写入会只生成种子市场 / ETF 子集，可能覆盖 `apps/dsa-web/public/stocks.index.json` 的完整索引。
+- 刷新完整索引前应先确认基础 CSV 可用，或使用 `scripts/refresh_stock_index.py` 先拉取 / 准备数据；只补少量离线 seed 时，应以现有完整 `stocks.index.json` 为基线合入，避免丢失 A 股、港股、美股条目。
+
 ### Docker 构建代理
 
 - Docker Compose 的 `server` 端口优先使用 `.env` 中的 `WEBUI_PORT`；旧部署仍可通过 `API_PORT` 兼容覆盖。排查 8000 端口冲突时，先确认 `WEBUI_PORT`、`API_PORT` 与 `docker-compose config` 渲染结果是否一致。

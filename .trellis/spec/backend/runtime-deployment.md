@@ -98,6 +98,16 @@ npm run test
 
 CI 的 `web-gate` 只在 `apps/dsa-web/**` 变更时触发，并执行 `npm ci`、`npm run lint`、`npm run build`。
 
+## 股票自动补全索引
+
+`apps/dsa-web/public/stocks.index.json` 和后端静态入口共用同一份压缩索引契约，生成时必须保护已有市场覆盖面。
+
+- `scripts/generate_index_from_csv.py --source tushare` 依赖 `data/stock_list_a.csv`、`data/stock_list_hk.csv`、`data/stock_list_us.csv` 等完整股票列表。
+- 本地缺少完整 CSV 时直接写入，会只生成种子市场 / ETF 子集，可能覆盖掉 A 股、港股、美股条目。
+- 刷新完整索引前先确认基础 CSV 可用，或先运行 `scripts/refresh_stock_index.py` 准备数据。
+- 只补少量 seed 时，以现有完整 `stocks.index.json` 为基线合入，再校验总条目数和新增条目数。
+- 新增 `market` 或 `assetType` 时，同步更新前端 `apps/dsa-web/src/types/stockIndex.ts`、后端 `src/services/stock_index_remote_service.py` 校验和相关测试。
+
 ## Desktop 验证
 
 Desktop 工作目录是 `apps/dsa-desktop/`。

@@ -92,6 +92,18 @@ const mockIndex: StockIndexItem[] = [
     popularity: 97,
   },
   {
+    canonicalCode: "510300.SH",
+    displayCode: "510300",
+    nameZh: "沪深300ETF",
+    pinyinFull: "hushen300ETF",
+    pinyinAbbr: "hs300ETF",
+    aliases: ["300ETF", "沪深300"],
+    market: "ETF",
+    assetType: "etf",
+    active: true,
+    popularity: 96,
+  },
+  {
     canonicalCode: "035720.KQ",
     displayCode: "035720.KQ",
     nameZh: "Kakao",
@@ -146,6 +158,12 @@ describe('searchStocks', () => {
     expect(results).toHaveLength(1);
     expect(results[0].canonicalCode).toBe('600519.SH');
     expect(results[0].matchType).toBe('exact');
+  });
+
+  test('ETF 条目支持代码、名称和别名匹配', () => {
+    expect(searchStocks('510300', mockIndex)[0].canonicalCode).toBe('510300.SH');
+    expect(searchStocks('沪深300ETF', mockIndex)[0].canonicalCode).toBe('510300.SH');
+    expect(searchStocks('300ETF', mockIndex)[0].canonicalCode).toBe('510300.SH');
   });
 
   test('前缀匹配代码', () => {

@@ -365,6 +365,153 @@ def parse_aliases(row: Dict[str, str]) -> List[str]:
     return aliases
 
 
+ETF_SH_PREFIXES = ('51', '52', '56', '58')
+ETF_SZ_PREFIXES = ('15', '16', '18')
+
+
+def is_etf_code(code: str) -> bool:
+    """Return whether a 6-digit code is an A-share ETF code supported by the analyzer."""
+    normalized = str(code or '').strip().upper()
+    if '.' in normalized:
+        normalized = normalized.split('.', 1)[0]
+    return (
+        normalized.isdigit()
+        and len(normalized) == 6
+        and normalized.startswith(ETF_SH_PREFIXES + ETF_SZ_PREFIXES)
+    )
+
+
+def build_etf_ts_code(code: str) -> Optional[str]:
+    """Build exchange-qualified ETF code from a bare or qualified A-share ETF code."""
+    normalized = str(code or '').strip().upper()
+    if not normalized:
+        return None
+
+    if '.' in normalized:
+        base, suffix = normalized.split('.', 1)
+        if suffix in {'SH', 'SZ'} and is_etf_code(base):
+            return f"{base}.{suffix}"
+        return None
+
+    if not is_etf_code(normalized):
+        return None
+    if normalized.startswith(ETF_SH_PREFIXES):
+        return f"{normalized}.SH"
+    if normalized.startswith(ETF_SZ_PREFIXES):
+        return f"{normalized}.SZ"
+    return None
+
+
+def _etf_record(ts_code: str, name: str, aliases: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:
+    canonical = build_etf_ts_code(ts_code)
+    normalized_name = normalize_stock_name_for_index(name, 'ETF')
+    if not canonical or not normalized_name:
+        return None
+    symbol = canonical.split('.', 1)[0]
+    return {
+        'ts_code': canonical,
+        'symbol': symbol,
+        'name': normalized_name,
+        'market': 'ETF',
+        'asset_type': 'etf',
+        'aliases': aliases or [],
+    }
+
+
+def load_seed_etf_data(seed_path: Path) -> List[Dict[str, Any]]:
+    """Load ETF seed rows used as an offline autocomplete fallback."""
+    if not seed_path.exists():
+        print(f"[Warning] 未找到 ETF 种子文件：{seed_path}")
+        return []
+
+    etfs: List[Dict[str, Any]] = []
+    with open(seed_path, 'r', encoding='utf-8-sig') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            record = _etf_record(
+                row.get('ts_code') or row.get('symbol') or row.get('code') or '',
+                row.get('name') or '',
+                parse_aliases(row),
+            )
+            if record:
+                etfs.append(record)
+    return etfs
+
+
+def _fetch_akshare_etf_spot():
+    import akshare as ak
+
+    return ak.fund_etf_spot_em()
+
+
+def _pick_first_text(row: Dict[str, Any], fields: List[str]) -> str:
+    for field in fields:
+        value = row.get(field)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text and text.lower() != 'nan':
+            return text
+    return ''
+
+
+def load_akshare_etf_data() -> List[Dict[str, Any]]:
+    """Best-effort load of the full ETF list from AkShare/EastMoney."""
+    df = _fetch_akshare_etf_spot()
+    if df is None or getattr(df, 'empty', False):
+        return []
+
+    etfs: List[Dict[str, Any]] = []
+    for row in df.to_dict(orient='records'):
+        code = _pick_first_text(row, ['代码', '基金代码', 'symbol', 'code'])
+        name = _pick_first_text(row, ['名称', '基金简称', '基金名称', 'name'])
+        record = _etf_record(code, name, [])
+        if record:
+            etfs.append(record)
+    return etfs
+
+
+def merge_etf_rows(seed_rows: List[Dict[str, Any]], remote_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Merge seed and remote ETF rows, preferring remote names while preserving aliases."""
+    merged: Dict[str, Dict[str, Any]] = {}
+
+    for row in seed_rows:
+        canonical = row.get('ts_code')
+        if canonical:
+            merged[canonical] = {**row, 'aliases': list(row.get('aliases') or [])}
+
+    for row in remote_rows:
+        canonical = row.get('ts_code')
+        if not canonical:
+            continue
+        seed_aliases = list(merged.get(canonical, {}).get('aliases') or [])
+        remote_aliases = list(row.get('aliases') or [])
+        aliases: List[str] = []
+        for alias in remote_aliases + seed_aliases:
+            if alias and alias not in aliases:
+                aliases.append(alias)
+        merged[canonical] = {**row, 'aliases': aliases}
+
+    return list(merged.values())
+
+
+def load_etf_data(seed_path: Optional[Path] = None) -> List[Dict[str, Any]]:
+    """Load ETF rows from seed data plus best-effort AkShare full list."""
+    if seed_path is None:
+        seed_path = Path(__file__).parent / 'stock_index_seeds' / 'stock_list_etf.csv'
+
+    seed_rows = load_seed_etf_data(seed_path)
+    remote_rows: List[Dict[str, Any]] = []
+    try:
+        remote_rows = load_akshare_etf_data()
+        if remote_rows:
+            print(f"    ✓ AkShare ETF 全量读取完成：{len(remote_rows)} 只 ETF")
+    except Exception as exc:
+        print(f"    [Warning] AkShare ETF 全量读取失败，使用种子 ETF 兜底：{exc}")
+
+    return merge_etf_rows(seed_rows, remote_rows)
+
+
 def parse_stock_row(row: Dict[str, str], preferred_market: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
     解析单行股票数据
@@ -581,7 +728,7 @@ def build_stock_index(stocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "pinyinAbbr": pinyin_abbr,
             "aliases": aliases,
             "market": market,
-            "assetType": "stock",
+            "assetType": stock.get("asset_type", "stock"),
             "active": True,
             "popularity": 100,
         })
@@ -657,6 +804,12 @@ def main():
         return 1
 
     print(f"      共读取 {len(stocks)} 只股票")
+
+    print("  正在读取 ETF 数据：stock_list_etf.csv + AkShare 全量")
+    etfs = load_etf_data()
+    if etfs:
+        stocks.extend(etfs)
+    print(f"      共读取 {len(etfs)} 只 ETF")
 
     print("\n[2/5] 生成索引数据...")
     index = build_stock_index(stocks)

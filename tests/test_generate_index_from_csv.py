@@ -13,6 +13,7 @@ from typing import Dict, List
 # Add scripts directory to path
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / 'scripts'))
+import generate_index_from_csv as generate_index
 
 from generate_index_from_csv import (
     extract_symbol_from_ts_code,
@@ -118,6 +119,131 @@ class TestDetermineMarket:
         """测试美股 A 类股（GOOG.A）"""
         result = determine_market("GOOG.A")
         assert result == "US"
+
+
+class TestEtfIndexGeneration:
+    """测试 ETF 自动补全索引生成"""
+
+    def test_build_etf_ts_code_uses_exchange_suffix_by_prefix(self):
+        """ETF 代码应按交易所前缀生成 canonical code"""
+        assert generate_index.build_etf_ts_code("510300") == "510300.SH"
+        assert generate_index.build_etf_ts_code("563230") == "563230.SH"
+        assert generate_index.build_etf_ts_code("159915") == "159915.SZ"
+
+    def test_seed_etf_rows_are_loaded_as_etf_records(self, tmp_path):
+        """种子 ETF CSV 应转换为 ETF 内部记录"""
+        seed_file = tmp_path / "stock_list_etf.csv"
+        with open(seed_file, "w", encoding="utf-8-sig", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=["ts_code", "name", "aliases"])
+            writer.writeheader()
+            writer.writerow({
+                "ts_code": "510300.SH",
+                "name": "沪深300ETF",
+                "aliases": "300ETF|沪深300",
+            })
+
+        rows = generate_index.load_seed_etf_data(seed_file)
+
+        assert rows == [{
+            "ts_code": "510300.SH",
+            "symbol": "510300",
+            "name": "沪深300ETF",
+            "market": "ETF",
+            "asset_type": "etf",
+            "aliases": ["300ETF", "沪深300"],
+        }]
+
+    def test_akshare_etf_rows_are_loaded_as_etf_records(self, monkeypatch):
+        """AkShare 全量 ETF 返回的新 ETF 应转换为 ETF 内部记录"""
+        pd = pytest.importorskip("pandas")
+
+        def fake_fetch():
+            return pd.DataFrame([
+                {"代码": "159999", "名称": "测试ETF"},
+            ])
+
+        monkeypatch.setattr(generate_index, "_fetch_akshare_etf_spot", fake_fetch, raising=False)
+
+        rows = generate_index.load_akshare_etf_data()
+
+        assert rows == [{
+            "ts_code": "159999.SZ",
+            "symbol": "159999",
+            "name": "测试ETF",
+            "market": "ETF",
+            "asset_type": "etf",
+            "aliases": [],
+        }]
+
+    def test_merge_etf_rows_prefers_remote_name_and_merges_aliases(self):
+        """全量 ETF 与种子重复时应保留全量名称并合并别名"""
+        seed_rows = [{
+            "ts_code": "510300.SH",
+            "symbol": "510300",
+            "name": "沪深300ETF",
+            "market": "ETF",
+            "asset_type": "etf",
+            "aliases": ["300ETF"],
+        }]
+        remote_rows = [{
+            "ts_code": "510300.SH",
+            "symbol": "510300",
+            "name": "300ETF沪深",
+            "market": "ETF",
+            "asset_type": "etf",
+            "aliases": ["沪深300"],
+        }]
+
+        merged = generate_index.merge_etf_rows(seed_rows, remote_rows)
+
+        assert merged == [{
+            "ts_code": "510300.SH",
+            "symbol": "510300",
+            "name": "300ETF沪深",
+            "market": "ETF",
+            "asset_type": "etf",
+            "aliases": ["沪深300", "300ETF"],
+        }]
+
+    def test_build_stock_index_preserves_etf_asset_type(self):
+        """ETF 记录写入索引时必须保留 market 和 assetType"""
+        index = build_stock_index([{
+            "ts_code": "510300.SH",
+            "symbol": "510300",
+            "name": "沪深300ETF",
+            "market": "ETF",
+            "asset_type": "etf",
+            "aliases": ["300ETF"],
+        }])
+
+        assert index[0]["canonicalCode"] == "510300.SH"
+        assert index[0]["displayCode"] == "510300"
+        assert index[0]["market"] == "ETF"
+        assert index[0]["assetType"] == "etf"
+
+    def test_load_etf_data_keeps_seed_rows_when_remote_fetch_fails(self, tmp_path, monkeypatch):
+        """全量 ETF 拉取失败时仍应保留种子 ETF"""
+        seed_file = tmp_path / "stock_list_etf.csv"
+        with open(seed_file, "w", encoding="utf-8-sig", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=["ts_code", "name"])
+            writer.writeheader()
+            writer.writerow({"ts_code": "512880.SH", "name": "证券ETF"})
+
+        def raise_remote_failure():
+            raise RuntimeError("remote unavailable")
+
+        monkeypatch.setattr(generate_index, "load_akshare_etf_data", raise_remote_failure, raising=False)
+
+        rows = generate_index.load_etf_data(seed_file)
+
+        assert rows == [{
+            "ts_code": "512880.SH",
+            "symbol": "512880",
+            "name": "证券ETF",
+            "market": "ETF",
+            "asset_type": "etf",
+            "aliases": [],
+        }]
 
     def test_us_stock_units(self):
         """测试美股 Unit（AAPL.U）"""

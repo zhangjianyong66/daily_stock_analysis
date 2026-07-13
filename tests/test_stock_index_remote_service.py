@@ -172,6 +172,17 @@ def test_validate_stock_index_payload_accepts_bse_market() -> None:
     assert service.validate_stock_index_payload(payload) is payload
 
 
+def test_validate_stock_index_payload_accepts_etf_market() -> None:
+    payload = _stock_index_payload()
+    payload[0][0] = "510300.SH"
+    payload[0][1] = "510300"
+    payload[0][2] = "沪深300ETF"
+    payload[0][6] = "ETF"
+    payload[0][7] = "etf"
+
+    assert service.validate_stock_index_payload(payload) is payload
+
+
 def test_validate_stock_index_payload_accepts_jp_and_kr_markets() -> None:
     payload = _stock_index_payload()
     payload[0][0] = "7203.T"
