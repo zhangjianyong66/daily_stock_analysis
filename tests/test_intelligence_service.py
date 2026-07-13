@@ -230,6 +230,27 @@ class IntelligenceServiceTestCase(unittest.TestCase):
         self.assertNotIn("token=secret", failures[0]["error"])
         self.assertNotIn("secret", failures[0]["error"])
 
+    def test_proxy_disable_mapping_is_isolated_per_request(self) -> None:
+        observed_proxies = []
+        observed_initial_values = []
+
+        def fake_get(_url, **kwargs):
+            proxies = kwargs["proxies"]
+            observed_proxies.append(proxies)
+            observed_initial_values.append(dict(proxies))
+            proxies["all"] = "socks5h://127.0.0.1:10808"
+            return self._mock_response()
+
+        with patch("src.services.intelligence_service.requests.get", side_effect=fake_get):
+            self.service._get_with_validated_dns("https://feeds.example.com/first.xml")
+            self.service._get_with_validated_dns("https://feeds.example.com/second.xml")
+
+        self.assertIsNot(observed_proxies[0], observed_proxies[1])
+        self.assertEqual(observed_initial_values, [
+            {"http": None, "https": None},
+            {"http": None, "https": None},
+        ])
+
     def test_fetch_enabled_sources_paginates_all_enabled_sources(self) -> None:
         for index in range(150):
             self.service.create_source({
