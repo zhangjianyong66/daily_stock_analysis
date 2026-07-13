@@ -12,9 +12,9 @@
 
 ## Milestones
 
-- [ ] [Milestone 1: 共享 Vision 与成交时间基础](./milestone-1-vision-trade-time.md)
-- [ ] [Milestone 2: 截图解析与原子导入后端](./milestone-2-screenshot-import-backend.md)
-- [ ] [Milestone 3: Web 工作流、文档与集成验收](./milestone-3-web-docs-integration.md)
+- [x] [Milestone 1: 共享 Vision 与成交时间基础](./milestone-1-vision-trade-time.md)
+- [x] [Milestone 2: 截图解析与原子导入后端](./milestone-2-screenshot-import-backend.md)
+- [x] [Milestone 3: Web 工作流、文档与集成验收](./milestone-3-web-docs-integration.md)
 
 ## Execution Order
 
@@ -26,15 +26,23 @@
 
 ## Global Quality Gates
 
-- [ ] 所有代码步骤遵循 TDD：先写失败测试、确认失败、最小实现、确认通过。
-- [ ] 不提交真实资产截图、模型 raw response、base64 或 API Key。
-- [ ] API 使用统一错误 envelope；新增字段同步 Python schema、TypeScript 类型和文档。
-- [ ] `python -m pytest -m "not network"` 通过。
-- [ ] `./scripts/ci_gate.sh` 通过。
-- [ ] `cd apps/dsa-web && npm run test -- src/pages/__tests__/PortfolioPage.test.tsx src/components/portfolio/__tests__/PortfolioImageImportDialog.test.tsx` 通过。
-- [ ] `cd apps/dsa-web && npm run lint && npm run build` 通过。
-- [ ] 使用 Playwright 或浏览器截图验证桌面/移动端弹窗；证据放 PR/外部附件，不写入仓库。
-- [ ] 未经用户明确确认不执行 `git commit`、`git push` 或在线 Vision 调用。
+- [x] 所有代码步骤遵循 TDD：先写失败测试、确认失败、最小实现、确认通过。
+- [x] 不提交真实资产截图、模型 raw response、base64 或 API Key。
+- [x] API 使用统一错误 envelope；新增字段同步 Python schema、TypeScript 类型和文档。
+- [x] `python -m pytest -m "not network"` 通过。
+- [x] `./scripts/ci_gate.sh` 通过。
+- [x] `cd apps/dsa-web && npm run test -- src/pages/__tests__/PortfolioPage.test.tsx src/components/portfolio/__tests__/PortfolioImageImportDialog.test.tsx` 通过。
+- [x] `cd apps/dsa-web && npm run lint && npm run build` 通过。
+- [x] 使用 Playwright 或浏览器截图验证桌面/移动端弹窗；证据放 PR/外部附件，不写入仓库。
+- [x] 未经用户明确确认不执行 `git commit`、`git push` 或在线 Vision 调用。
+
+## Final Verification Results
+
+- 后端目标回归：168 passed。
+- 后端完整门禁：4383 passed、4 deselected、45 warnings、413 subtests passed；`backend-gate: all checks passed`。
+- Web 目标回归：49 passed；`npm run lint` 与 `npm run build` 均通过。
+- Playwright 合成数据桌面/移动端验收通过，截图保存在 `/tmp`，未写入仓库。
+- 未执行真实 Vision 在线调用或真实券商截图识别，避免产生费用和上传真实资产图片。
 
 ## Rollback Points
 
