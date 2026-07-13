@@ -102,3 +102,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 4: 支持 ETF 自动补全
+
+**Date**: 2026-07-13
+**Task**: 支持 ETF 自动补全
+**Branch**: `main`
+
+### Summary
+
+完成首页股票自动补全 ETF 支持：生成脚本支持 ETF seed 与 AkShare 全量 best-effort 拉取，补充 44 条 ETF seed 并更新索引、校验、测试和文档。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c21fc9c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
