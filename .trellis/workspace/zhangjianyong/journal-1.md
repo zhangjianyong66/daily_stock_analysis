@@ -37,3 +37,34 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 2: 归档已完成 Trellis 任务
+
+**Date**: 2026-07-13
+**Task**: 归档已完成 Trellis 任务
+**Branch**: `main`
+
+### Summary
+
+按用户要求归档 07-10-expose-dsa-via-ecs2-frp-nginx 与 00-join-zhangjianyong；保留 07-08-batch-analyze-configured-etfs 继续 in_progress。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
