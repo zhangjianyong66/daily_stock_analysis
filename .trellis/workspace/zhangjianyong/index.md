@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 4
+- **Total Sessions**: 5
 - **Last Active**: 2026-07-13
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~137 | Active |
+| `journal-1.md` | ~170 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 5 | 2026-07-13 | 升级 Trellis 模板至 0.6.6 | `65ad64f` | `main` |
 | 4 | 2026-07-13 | 支持 ETF 自动补全 | `c21fc9c` | `main` |
 | 3 | 2026-07-13 | 完成前端批量分析配置标的 | `64f2849`, `85c1404` | `main` |
 | 2 | 2026-07-13 | 归档已完成 Trellis 任务 | - | `main` |

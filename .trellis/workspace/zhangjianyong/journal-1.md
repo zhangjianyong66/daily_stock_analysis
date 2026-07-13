@@ -135,3 +135,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 5: 升级 Trellis 模板至 0.6.6
+
+**Date**: 2026-07-13
+**Task**: 升级 Trellis 模板至 0.6.6
+**Branch**: `main`
+
+### Summary
+
+完整更新 Trellis 0.6.6 受管模板，新增 Claude skills，并验证用户数据与项目治理未受影响。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `65ad64f` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
