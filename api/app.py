@@ -292,6 +292,9 @@ async def app_lifespan(app: FastAPI):
         if runtime_scheduler is not None:
             runtime_scheduler.stop()
             delattr(app.state, "runtime_scheduler_service")
+        from src.services.portfolio_image_task_manager import PortfolioImageTaskManager
+
+        PortfolioImageTaskManager.reset_instance()
 
 
 def create_app(static_dir: Optional[Path] = None) -> FastAPI:

@@ -28,6 +28,10 @@ const {
   createAccount,
   deleteAccount,
   analyzePosition,
+  getCurrentImageTask,
+  getImageTask,
+  cancelImageTask,
+  discardImageTask,
   listDecisionSignals,
   getLatestDecisionSignals,
 } = vi.hoisted(() => ({
@@ -50,6 +54,10 @@ const {
   createAccount: vi.fn(),
   deleteAccount: vi.fn(),
   analyzePosition: vi.fn(),
+  getCurrentImageTask: vi.fn(),
+  getImageTask: vi.fn(),
+  cancelImageTask: vi.fn(),
+  discardImageTask: vi.fn(),
   listDecisionSignals: vi.fn(),
   getLatestDecisionSignals: vi.fn(),
 }));
@@ -82,6 +90,10 @@ vi.mock('../../api/portfolio', () => ({
     createAccount,
     deleteAccount,
     analyzePosition,
+    getCurrentImageTask,
+    getImageTask,
+    cancelImageTask,
+    discardImageTask,
   },
 }));
 
@@ -368,6 +380,10 @@ describe('PortfolioPage FX refresh', () => {
       analysisPhase: 'auto',
     });
     getLatestDecisionSignals.mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 1 });
+    getCurrentImageTask.mockResolvedValue({ task: null });
+    getImageTask.mockRejectedValue({ response: { status: 404 }, message: 'not found' });
+    cancelImageTask.mockResolvedValue(null);
+    discardImageTask.mockResolvedValue(undefined);
   });
 
   function renderEnglishPage() {
@@ -1166,6 +1182,42 @@ describe('PortfolioPage FX refresh', () => {
     await waitFor(() => expect(getSnapshot).toHaveBeenCalledTimes(snapshotCallsBeforeImport + 1));
     await waitFor(() => expect(getRisk).toHaveBeenCalledTimes(riskCallsBeforeImport + 1));
     await waitFor(() => expect(listTrades).toHaveBeenCalledTimes(tradeCallsBeforeImport + 1));
+  });
+
+  it('启动时恢复当前图片任务并展示常驻任务横幅', async () => {
+    getCurrentImageTask.mockResolvedValueOnce({
+      task: {
+        taskId: 'image-task-1',
+        traceId: 'image-task-1',
+        mode: 'positions',
+        accountId: 1,
+        accountName: '中国账户',
+        status: 'review_required',
+        message: '识别完成，请校对后确认导入',
+        errorCode: null,
+        snapshotDate: '2026-07-13',
+        defaultTradeDate: null,
+        createdAt: '2026-07-14T10:00:00',
+        startedAt: '2026-07-14T10:00:01',
+        finishedAt: '2026-07-14T10:00:03',
+        files: [{ index: 0, filename: 'positions.png', status: 'success', recordCount: 1, error: null, removed: false }],
+        currentFileIndex: 1,
+        totalFiles: 1,
+        currentAttempt: 1,
+        maxAttempts: 2,
+        successCount: 1,
+        failureCount: 0,
+        batchId: 'batch-1',
+        draftRevision: 1,
+        draft: null,
+      },
+    });
+    render(<PortfolioPage />);
+
+    await waitForInitialLoad();
+    expect(await screen.findByText(/持仓截图识别 · 中国账户/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '继续校对' })).toBeInTheDocument();
+    expect(window.localStorage.getItem('dsa.portfolioImageTaskId')).toBe('image-task-1');
   });
 
   it('shows execution time in trade history while keeping date-only legacy rows compact', async () => {

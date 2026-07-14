@@ -1,5 +1,5 @@
 import type React from 'react';
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -10,12 +10,12 @@ import {
   X,
 } from 'lucide-react';
 import { getParsedApiError, type ParsedApiError } from '../../api/error';
-import { portfolioApi } from '../../api/portfolio';
+import { getExistingPortfolioImageTaskId, portfolioApi } from '../../api/portfolio';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
 import type {
   ImageImportCommitResponse,
   PortfolioAccountItem,
-  PortfolioImageFileResult,
+  PortfolioImageTaskSnapshot,
   PositionImageItem,
   TradeImageItem,
 } from '../../types/portfolio';
@@ -23,14 +23,17 @@ import { getTodayIso } from '../../utils/portfolioFormat';
 import { ApiErrorAlert, Button, Drawer, InlineAlert, Tooltip } from '../common';
 
 type ImportMode = 'positions' | 'trades';
-type ImportPhase = 'select' | 'parsing' | 'review' | 'committing' | 'completed';
+type ImportPhase = 'select' | 'parsing' | 'review' | 'committing' | 'failed' | 'completed';
 
 type SelectedImage = {
   id: string;
-  file: File;
-  status: 'selected' | 'success' | 'failed';
+  index: number;
+  file?: File;
+  filename: string;
+  status: 'selected' | 'pending' | 'processing' | 'success' | 'failed' | 'cancelled';
   recordCount: number;
   error: string | null;
+  removed: boolean;
 };
 
 type PositionReviewRow = PositionImageItem & { clientId: string };
@@ -40,7 +43,9 @@ interface PortfolioImageImportDialogProps {
   isOpen: boolean;
   accounts: PortfolioAccountItem[];
   selectedAccountId?: number;
+  task?: PortfolioImageTaskSnapshot | null;
   onClose: () => void;
+  onTaskChange?: (task: PortfolioImageTaskSnapshot | null) => void;
   onCompleted: (result: ImageImportCommitResponse) => void | Promise<void>;
 }
 
@@ -87,7 +92,7 @@ const TEXT = {
     privacy: '原图仅用于本次识别，不保存到持仓账本或普通日志。',
     positionNotice: '只导入持仓数量与平均成本；总资产、可用资金等资金数据不会导入。',
     tradeNotice: '截图未提供费用时手续费和税费默认为 0；缺少成交编号时只能尽力去重。',
-    failedNotice: '识别失败的图片必须重试或移除后才能提交。',
+    failedNotice: '识别失败的图片必须移除后才能提交；如需重试，请放弃整批后重新选择图片。',
     inserted: (count: number) => `已写入 ${count} 条记录`,
   },
   en: {
@@ -115,7 +120,7 @@ const TEXT = {
     privacy: 'Images are used only for this request and are not stored in the ledger or normal logs.',
     positionNotice: 'Only position quantity and average cost are imported. Cash and total asset figures are ignored.',
     tradeNotice: 'Missing fees and taxes default to zero. Deduplication is best-effort without a trade id.',
-    failedNotice: 'Failed images must be retried or removed before importing.',
+    failedNotice: 'Remove failed images before importing, or discard the batch and resubmit all images.',
     inserted: (count: number) => `${count} record(s) inserted`,
   },
 } as const;
@@ -127,24 +132,14 @@ function isSupportedAccount(account: PortfolioAccountItem): boolean {
 function toSelectedImages(files: File[]): SelectedImage[] {
   return files.map((file, index) => ({
     id: `${file.name}-${file.size}-${file.lastModified}-${index}`,
+    index,
     file,
     status: 'selected',
+    filename: file.name,
     recordCount: 0,
     error: null,
+    removed: false,
   }));
-}
-
-function applyFileResults(images: SelectedImage[], results: PortfolioImageFileResult[]): SelectedImage[] {
-  return images.map((image, index) => {
-    const result = results.find((item) => item.index === index);
-    if (!result) return image;
-    return {
-      ...image,
-      status: result.status,
-      recordCount: result.recordCount,
-      error: result.error ?? null,
-    };
-  });
 }
 
 function isPositive(value: number | null | undefined): value is number {
@@ -238,7 +233,9 @@ export const PortfolioImageImportDialog: React.FC<PortfolioImageImportDialogProp
   isOpen,
   accounts,
   selectedAccountId,
+  task,
   onClose,
+  onTaskChange = () => undefined,
   onCompleted,
 }) => {
   const { language } = useUiLanguage();
@@ -260,9 +257,105 @@ export const PortfolioImageImportDialog: React.FC<PortfolioImageImportDialogProp
   const [positionRows, setPositionRows] = useState<PositionReviewRow[]>([]);
   const [tradeRows, setTradeRows] = useState<TradeReviewRow[]>([]);
   const [commitResult, setCommitResult] = useState<ImageImportCommitResponse | null>(null);
+  const [draftRevision, setDraftRevision] = useState<number | null>(null);
+  const [draftDirty, setDraftDirty] = useState(false);
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error' | 'conflict'>('idle');
+  const draftEditVersionRef = useRef(0);
   const resolvedAccountId = eligibleAccounts.some((account) => String(account.id) === accountId)
     ? accountId
     : defaultAccountId ? String(defaultAccountId) : '';
+
+  useEffect(() => {
+    if (!task) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setMode(task.mode);
+      setAccountId(String(task.accountId));
+      setDateValue(task.mode === 'positions' ? task.snapshotDate ?? getTodayIso() : task.defaultTradeDate ?? getTodayIso());
+      const preserveLocalDraft = task.status === 'review_required' && (draftDirty || saveState === 'saving');
+      if (!preserveLocalDraft) {
+        setImages(task.files.map((file) => ({
+          id: `${task.taskId}-${file.index}`,
+          index: file.index,
+          filename: file.filename ?? `${file.index + 1}`,
+          status: file.status,
+          recordCount: file.recordCount,
+          error: file.error ?? null,
+          removed: file.removed,
+        })));
+      }
+      setBatchId(task.batchId ?? '');
+      setRequestError(null);
+      setFileError(null);
+
+      if (task.status === 'pending' || task.status === 'processing' || task.status === 'cancel_requested') {
+        setPhase('parsing');
+        return;
+      }
+      if (task.status === 'committing') {
+        setPhase('committing');
+        return;
+      }
+      if (task.status === 'failed' || task.status === 'cancelled') {
+        setPhase('failed');
+        return;
+      }
+      if (task.status !== 'review_required' || !task.draft) return;
+
+      setPhase('review');
+      if (draftDirty || saveState === 'saving' || task.draftRevision === draftRevision) return;
+      setDraftRevision(task.draftRevision ?? null);
+      draftEditVersionRef.current = 0;
+      if ('positions' in task.draft) {
+        setPositionRows(task.draft.positions.map((row, index) => ({ ...row, clientId: `position-${index}` })));
+        setTradeRows([]);
+      } else {
+        setTradeRows(task.draft.trades.map((row, index) => ({ ...row, clientId: `trade-${index}` })));
+        setPositionRows([]);
+      }
+      setSaveState('saved');
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [draftDirty, draftRevision, saveState, task]);
+
+  useEffect(() => {
+    if (!task || task.status !== 'review_required' || !draftDirty || draftRevision == null) return;
+    if (saveState === 'saving' || saveState === 'conflict') return;
+    const editVersion = draftEditVersionRef.current;
+    const timer = window.setTimeout(() => {
+      setSaveState('saving');
+      void portfolioApi.updateImageTaskDraft(task.taskId, {
+        expectedRevision: draftRevision,
+        files: images.map((image) => ({ index: image.index, removed: image.removed })),
+        positions: task.mode === 'positions' ? positionRows.map(({ clientId, ...row }) => {
+          void clientId;
+          return row;
+        }) : undefined,
+        trades: task.mode === 'trades' ? tradeRows.map(({ clientId, ...row }) => {
+          void clientId;
+          return row;
+        }) : undefined,
+      }).then((updated) => {
+        setDraftRevision(updated.draftRevision ?? null);
+        if (draftEditVersionRef.current === editVersion) {
+          setDraftDirty(false);
+          setSaveState('saved');
+        } else {
+          setDraftDirty(true);
+          setSaveState('idle');
+        }
+        onTaskChange(updated);
+      }).catch((error) => {
+        const status = (error as { response?: { status?: number } } | null)?.response?.status;
+        setSaveState(status === 409 ? 'conflict' : 'error');
+        setRequestError(getParsedApiError(error));
+      });
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [draftDirty, draftRevision, images, onTaskChange, positionRows, saveState, task, tradeRows]);
 
   const resetReview = () => {
     setPhase('select');
@@ -273,11 +366,15 @@ export const PortfolioImageImportDialog: React.FC<PortfolioImageImportDialogProp
     setPositionRows([]);
     setTradeRows([]);
     setCommitResult(null);
+    setDraftRevision(null);
+    setDraftDirty(false);
+    setSaveState('idle');
+    draftEditVersionRef.current = 0;
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const changeMode = (nextMode: ImportMode) => {
-    if (phase === 'parsing' || phase === 'committing') return;
+    if (task || phase === 'parsing' || phase === 'committing') return;
     setMode(nextMode);
     setDateValue(getTodayIso());
     resetReview();
@@ -319,49 +416,60 @@ export const PortfolioImageImportDialog: React.FC<PortfolioImageImportDialogProp
     setFileError(null);
     setRequestError(null);
     try {
-      if (mode === 'positions') {
-        const result = await portfolioApi.parsePositionImages(parsedAccountId, dateValue, images.map((item) => item.file));
-        setBatchId(result.batchId);
-        setDateValue(result.snapshotDate);
-        setImages((current) => applyFileResults(current, result.files));
-        setPositionRows(result.positions.map((row, index) => ({ ...row, clientId: `position-${index}` })));
-        setTradeRows([]);
-      } else {
-        const result = await portfolioApi.parseTradeImages(parsedAccountId, dateValue, images.map((item) => item.file));
-        setBatchId(result.batchId);
-        setDateValue(result.defaultTradeDate);
-        setImages((current) => applyFileResults(current, result.files));
-        setTradeRows(result.trades.map((row, index) => ({ ...row, clientId: `trade-${index}` })));
-        setPositionRows([]);
-      }
-      setPhase('review');
+      const files = images.map((item) => item.file).filter((file): file is File => Boolean(file));
+      const accepted = mode === 'positions'
+        ? await portfolioApi.submitPositionImageTask(parsedAccountId, dateValue, files)
+        : await portfolioApi.submitTradeImageTask(parsedAccountId, dateValue, files);
+      const snapshot = await portfolioApi.getImageTask(accepted.taskId);
+      onTaskChange(snapshot);
+      setPhase('parsing');
     } catch (error) {
-      setRequestError(getParsedApiError(error));
+      const existingTaskId = getExistingPortfolioImageTaskId(error);
+      if (existingTaskId) {
+        try {
+          const existing = await portfolioApi.getImageTask(existingTaskId);
+          onTaskChange(existing);
+          setPhase(existing.status === 'review_required' ? 'review' : 'parsing');
+          return;
+        } catch (loadError) {
+          setRequestError(getParsedApiError(loadError));
+        }
+      } else {
+        setRequestError(getParsedApiError(error));
+      }
       setPhase('select');
     }
   };
 
   const removeImage = (id: string) => {
-    setImages((current) => current.filter((image) => image.id !== id));
+    if (!task) {
+      setImages((current) => current.filter((image) => image.id !== id));
+      return;
+    }
+    setImages((current) => current.map((image) => (
+      image.id === id ? { ...image, removed: true } : image
+    )));
+    markDraftDirty();
   };
 
-  const retryImage = (id: string) => {
-    setImages((current) => current.map((image) => (
-      image.id === id ? { ...image, status: 'selected', error: null, recordCount: 0 } : image
-    )));
-    void handleParse();
+  const markDraftDirty = () => {
+    draftEditVersionRef.current += 1;
+    setDraftDirty(true);
+    setSaveState((current) => current === 'saving' ? current : 'idle');
   };
 
   const updatePosition = <K extends keyof PositionReviewRow>(clientId: string, field: K, value: PositionReviewRow[K]) => {
     setPositionRows((current) => current.map((row) => (
       row.clientId === clientId ? revalidatePosition({ ...row, [field]: value }) : row
     )));
+    markDraftDirty();
   };
 
   const updateTrade = <K extends keyof TradeReviewRow>(clientId: string, field: K, value: TradeReviewRow[K]) => {
     setTradeRows((current) => current.map((row) => (
       row.clientId === clientId ? revalidateTrade({ ...row, [field]: value }) : row
     )));
+    markDraftDirty();
   };
 
   const adoptPosition = (clientId: string) => {
@@ -373,6 +481,7 @@ export const PortfolioImageImportDialog: React.FC<PortfolioImageImportDialogProp
         issues: row.issues.filter((issue) => !issue.includes('conflict')),
       });
     }));
+    markDraftDirty();
   };
 
   const adoptTrade = (clientId: string) => {
@@ -384,6 +493,7 @@ export const PortfolioImageImportDialog: React.FC<PortfolioImageImportDialogProp
         issues: row.issues.filter((issue) => !issue.includes('conflict') && issue !== 'ambiguous_overlap'),
       });
     }));
+    markDraftDirty();
   };
 
   const keepTradeGroup = (fingerprint: string) => {
@@ -398,6 +508,7 @@ export const PortfolioImageImportDialog: React.FC<PortfolioImageImportDialogProp
         occurrenceIndex,
       };
     }));
+    markDraftDirty();
   };
 
   const mergeTradeGroup = (fingerprint: string, keepClientId: string) => {
@@ -413,23 +524,35 @@ export const PortfolioImageImportDialog: React.FC<PortfolioImageImportDialogProp
           }
           : row
       )));
+    markDraftDirty();
   };
 
-  const hasFailedImages = images.some((image) => image.status === 'failed' || image.status === 'selected');
+  const hasFailedImages = images.some((image) => !image.removed && (image.status === 'failed' || image.status === 'selected'));
   const reviewRows = mode === 'positions' ? positionRows : tradeRows;
   const hasValidRows = reviewRows.length > 0;
   const rowsAreValid = mode === 'positions'
     ? positionRows.every(isValidPosition)
     : tradeRows.every(isValidTrade);
   const commitDateIsValid = mode === 'trades' || isValidImportDate(dateValue);
-  const canCommit = phase === 'review' && !hasFailedImages && hasValidRows && rowsAreValid && commitDateIsValid;
+  const canCommit = phase === 'review'
+    && Boolean(task)
+    && draftRevision != null
+    && !draftDirty
+    && saveState !== 'saving'
+    && saveState !== 'error'
+    && saveState !== 'conflict'
+    && !hasFailedImages
+    && hasValidRows
+    && rowsAreValid
+    && commitDateIsValid;
 
   const handleCommit = async () => {
     if (!canCommit) {
       setFileError(hasValidRows ? text.reviewRequired : text.noRows);
       return;
     }
-    const parsedAccountId = Number(resolvedAccountId);
+    if (!task || draftRevision == null) return;
+    const parsedAccountId = task.accountId;
     setPhase('committing');
     setRequestError(null);
     try {
@@ -438,6 +561,8 @@ export const PortfolioImageImportDialog: React.FC<PortfolioImageImportDialogProp
           batchId,
           accountId: parsedAccountId,
           snapshotDate: dateValue,
+          taskId: task.taskId,
+          expectedRevision: draftRevision,
           positions: positionRows.map((row) => ({
             symbol: row.symbol,
             name: row.name,
@@ -448,6 +573,8 @@ export const PortfolioImageImportDialog: React.FC<PortfolioImageImportDialogProp
         : await portfolioApi.commitTradeImages({
           batchId,
           accountId: parsedAccountId,
+          taskId: task.taskId,
+          expectedRevision: draftRevision,
           trades: tradeRows.map((row) => ({
             tradeDate: row.tradeDate,
             tradeTime: row.tradeTime ?? null,
@@ -464,6 +591,7 @@ export const PortfolioImageImportDialog: React.FC<PortfolioImageImportDialogProp
         });
       setCommitResult(result);
       setPhase('completed');
+      onTaskChange(null);
       await onCompleted(result);
     } catch (error) {
       setRequestError(getParsedApiError(error));
@@ -471,7 +599,52 @@ export const PortfolioImageImportDialog: React.FC<PortfolioImageImportDialogProp
     }
   };
 
-  const isBusy = phase === 'parsing' || phase === 'committing';
+  const handleCancel = async () => {
+    if (!task) return;
+    try {
+      onTaskChange(await portfolioApi.cancelImageTask(task.taskId));
+    } catch (error) {
+      setRequestError(getParsedApiError(error));
+    }
+  };
+
+  const handleDiscard = async () => {
+    if (!task) return;
+    try {
+      await portfolioApi.discardImageTask(task.taskId);
+      onTaskChange(null);
+      resetReview();
+    } catch (error) {
+      setRequestError(getParsedApiError(error));
+    }
+  };
+
+  const reloadDraft = async () => {
+    if (!task) return;
+    try {
+      const latestTask = await portfolioApi.getImageTask(task.taskId);
+      setDraftDirty(false);
+      setSaveState('idle');
+      setDraftRevision(null);
+      draftEditVersionRef.current = 0;
+      onTaskChange(latestTask);
+    } catch (error) {
+      setRequestError(getParsedApiError(error));
+    }
+  };
+
+  const deletePositionRow = (clientId: string) => {
+    setPositionRows((current) => current.filter((row) => row.clientId !== clientId));
+    markDraftDirty();
+  };
+
+  const deleteTradeRow = (clientId: string) => {
+    setTradeRows((current) => current.filter((row) => row.clientId !== clientId));
+    markDraftDirty();
+  };
+
+  const isBusy = phase === 'committing';
+  const taskLocked = Boolean(task);
 
   return (
     <Drawer
@@ -487,7 +660,7 @@ export const PortfolioImageImportDialog: React.FC<PortfolioImageImportDialogProp
             aria-pressed={mode === 'positions'}
             className={`h-10 rounded-md px-3 text-sm font-medium transition ${mode === 'positions' ? 'bg-card text-foreground shadow-sm' : 'text-secondary-text hover:text-foreground'}`}
             onClick={() => changeMode('positions')}
-            disabled={isBusy}
+            disabled={isBusy || taskLocked}
           >
             {text.positions}
           </button>
@@ -496,7 +669,7 @@ export const PortfolioImageImportDialog: React.FC<PortfolioImageImportDialogProp
             aria-pressed={mode === 'trades'}
             className={`h-10 rounded-md px-3 text-sm font-medium transition ${mode === 'trades' ? 'bg-card text-foreground shadow-sm' : 'text-secondary-text hover:text-foreground'}`}
             onClick={() => changeMode('trades')}
-            disabled={isBusy}
+            disabled={isBusy || taskLocked}
           >
             {text.trades}
           </button>
@@ -510,7 +683,7 @@ export const PortfolioImageImportDialog: React.FC<PortfolioImageImportDialogProp
               aria-label={text.account}
               value={resolvedAccountId}
               onChange={(event) => setAccountId(event.target.value)}
-              disabled={isBusy || phase === 'completed'}
+              disabled={isBusy || taskLocked || phase === 'completed'}
             >
               {eligibleAccounts.length === 0 ? <option value="">{text.accountRequired}</option> : null}
               {eligibleAccounts.map((account) => (
@@ -526,7 +699,7 @@ export const PortfolioImageImportDialog: React.FC<PortfolioImageImportDialogProp
               max={getTodayIso()}
               value={dateValue}
               onChange={(event) => setDateValue(event.target.value)}
-              disabled={isBusy || phase === 'completed'}
+              disabled={isBusy || taskLocked || phase === 'completed'}
               className={INPUT_CLASS}
             />
           </label>
@@ -540,7 +713,7 @@ export const PortfolioImageImportDialog: React.FC<PortfolioImageImportDialogProp
 
         {phase !== 'completed' ? (
           <section className="border-y border-border/60 py-4" aria-label="图片文件">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            {!task ? <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-lg border border-cyan/30 px-4 text-sm font-medium text-cyan transition hover:bg-cyan/10">
                 <Images className="h-4 w-4" />
                 {text.selectImages}
@@ -552,48 +725,36 @@ export const PortfolioImageImportDialog: React.FC<PortfolioImageImportDialogProp
                   className="sr-only"
                   aria-label={text.selectImages}
                   onChange={handleFiles}
-                  disabled={isBusy}
+                  disabled={isBusy || taskLocked}
                 />
               </label>
               <span className="text-xs text-secondary-text">{images.length}/{MAX_FILES}</span>
-            </div>
+            </div> : null}
 
             {images.length > 0 ? (
               <div className="mt-4 divide-y divide-border/50 border-y border-border/50">
                 {images.map((image) => (
-                  <div key={image.id} className="flex min-w-0 items-center gap-3 py-3">
+                  <div key={image.id} className={`flex min-w-0 items-center gap-3 py-3 ${image.removed ? 'opacity-50' : ''}`}>
                     {image.status === 'success' ? <CheckCircle2 className="h-4 w-4 shrink-0 text-success" /> : null}
                     {image.status === 'failed' ? <AlertTriangle className="h-4 w-4 shrink-0 text-danger" /> : null}
-                    {image.status === 'selected' ? <Upload className="h-4 w-4 shrink-0 text-secondary-text" /> : null}
+                    {image.status === 'selected' || image.status === 'pending' || image.status === 'processing' ? <Upload className="h-4 w-4 shrink-0 text-secondary-text" /> : null}
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-foreground">{image.file.name}</p>
+                      <p className="truncate text-sm font-medium text-foreground">{image.filename}</p>
                       <p className="mt-0.5 break-words text-xs text-secondary-text">
-                        {image.error ?? (image.status === 'success' ? `${image.recordCount} 条记录` : '等待识别')}
+                        {image.removed ? '已从本次草稿移除' : image.error ?? (image.status === 'success' ? `${image.recordCount} 条记录` : task?.message ?? '等待识别')}
                       </p>
                     </div>
-                    {image.status === 'failed' ? (
-                      <Tooltip content="重试识别">
-                        <button
-                          type="button"
-                          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border/70 text-secondary-text hover:text-foreground"
-                          aria-label={`重试 ${image.file.name}`}
-                          onClick={() => retryImage(image.id)}
-                        >
-                          <RefreshCw className="h-4 w-4" />
-                        </button>
-                      </Tooltip>
-                    ) : null}
-                    <Tooltip content="移除图片">
+                    {(!task || (task.status === 'review_required' && image.status === 'failed' && !image.removed)) ? <Tooltip content="移除图片">
                       <button
                         type="button"
                         className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border/70 text-secondary-text hover:border-danger/50 hover:text-danger"
-                        aria-label={image.status === 'failed' ? `移除失败图片 ${image.file.name}` : `移除图片 ${image.file.name}`}
+                        aria-label={image.status === 'failed' ? `移除失败图片 ${image.filename}` : `移除图片 ${image.filename}`}
                         onClick={() => removeImage(image.id)}
                         disabled={isBusy}
                       >
                         <X className="h-4 w-4" />
                       </button>
-                    </Tooltip>
+                    </Tooltip> : null}
                   </div>
                 ))}
               </div>
@@ -603,19 +764,33 @@ export const PortfolioImageImportDialog: React.FC<PortfolioImageImportDialogProp
 
         {fileError ? <InlineAlert variant="danger" message={fileError} className="!rounded-lg" /> : null}
         {requestError ? <ApiErrorAlert error={requestError} /> : null}
-        {images.some((image) => image.status === 'failed') ? (
+        {phase === 'parsing' && task ? (
+          <InlineAlert variant="info" message={task.message} className="!rounded-lg" />
+        ) : null}
+        {phase === 'failed' && task ? (
+          <InlineAlert variant="danger" message={task.message} className="!rounded-lg" />
+        ) : null}
+        {images.some((image) => image.status === 'failed' && !image.removed) ? (
           <InlineAlert variant="warning" message={text.failedNotice} className="!rounded-lg" />
         ) : null}
 
         {phase === 'review' || phase === 'committing' ? (
           <section aria-labelledby="portfolio-image-review-title">
             <h3 id="portfolio-image-review-title" className="text-base font-semibold text-foreground">{text.review}</h3>
+            <p className="mt-1 text-xs text-secondary-text">
+              {saveState === 'saving' ? '正在保存草稿…' : saveState === 'saved' ? `草稿已保存（版本 ${draftRevision ?? '-'}）` : saveState === 'conflict' ? '草稿版本冲突，请重新加载。' : saveState === 'error' ? '草稿保存失败，请重试。' : '编辑后将自动保存草稿。'}
+            </p>
+            {saveState === 'conflict' || saveState === 'error' ? (
+              <Button size="sm" variant="outline" className="mt-2" onClick={() => void reloadDraft()}>
+                <RefreshCw className="h-4 w-4" />重新加载草稿
+              </Button>
+            ) : null}
             {mode === 'positions' ? (
               <PositionReview
                 rows={positionRows}
                 disabled={isBusy}
                 onUpdate={updatePosition}
-                onDelete={(clientId) => setPositionRows((current) => current.filter((row) => row.clientId !== clientId))}
+                onDelete={deletePositionRow}
                 onAdopt={adoptPosition}
               />
             ) : (
@@ -623,7 +798,7 @@ export const PortfolioImageImportDialog: React.FC<PortfolioImageImportDialogProp
                 rows={tradeRows}
                 disabled={isBusy}
                 onUpdate={updateTrade}
-                onDelete={(clientId) => setTradeRows((current) => current.filter((row) => row.clientId !== clientId))}
+                onDelete={deleteTradeRow}
                 onKeepGroup={keepTradeGroup}
                 onMergeGroup={mergeTradeGroup}
                 onAdopt={adoptTrade}
@@ -649,27 +824,40 @@ export const PortfolioImageImportDialog: React.FC<PortfolioImageImportDialogProp
               <Button variant="secondary" onClick={onClose}>{text.close}</Button>
               <Button onClick={resetReview}><RefreshCw className="h-4 w-4" />{text.restart}</Button>
             </>
+          ) : phase === 'parsing' && task ? (
+            <>
+              <Button variant="secondary" onClick={onClose}>{text.close}</Button>
+              <Button variant="outline" onClick={() => void handleCancel()} disabled={task.status === 'cancel_requested'}>
+                {task.status === 'cancel_requested' ? '等待取消' : '取消任务'}
+              </Button>
+            </>
+          ) : phase === 'failed' && task ? (
+            <>
+              <Button variant="secondary" onClick={onClose}>{text.close}</Button>
+              <Button onClick={() => void handleDiscard()}><RefreshCw className="h-4 w-4" />清除并重新选择</Button>
+            </>
           ) : (
             <>
               <Button variant="secondary" onClick={onClose} disabled={isBusy}>{text.close}</Button>
-              {phase === 'select' || phase === 'parsing' ? (
+              {phase === 'select' ? (
                 <Button
                   onClick={() => void handleParse()}
-                  isLoading={phase === 'parsing'}
-                  loadingText={text.parsing}
                   disabled={images.length === 0 || Boolean(fileError) || !resolvedAccountId || !isValidImportDate(dateValue)}
                 >
                   <Upload className="h-4 w-4" />{text.parse}
                 </Button>
               ) : (
-                <Button
-                  onClick={() => void handleCommit()}
-                  isLoading={phase === 'committing'}
-                  loadingText={text.committing}
-                  disabled={!canCommit}
-                >
-                  <CheckCircle2 className="h-4 w-4" />{text.commit}
-                </Button>
+                <>
+                  {phase === 'review' && task ? <Button variant="outline" onClick={() => void handleDiscard()}>放弃本次识别</Button> : null}
+                  <Button
+                    onClick={() => void handleCommit()}
+                    isLoading={phase === 'committing'}
+                    loadingText={text.committing}
+                    disabled={!canCommit}
+                  >
+                    <CheckCircle2 className="h-4 w-4" />{text.commit}
+                  </Button>
+                </>
               )}
             </>
           )}

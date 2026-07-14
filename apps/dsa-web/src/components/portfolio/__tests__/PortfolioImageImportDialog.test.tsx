@@ -1,59 +1,106 @@
+import type React from 'react';
+import { useState } from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { portfolioApi } from '../../../api/portfolio';
-import type { PortfolioAccountItem } from '../../../types/portfolio';
+import type { PortfolioAccountItem, PortfolioImageTaskSnapshot } from '../../../types/portfolio';
 import { PortfolioImageImportDialog } from '../PortfolioImageImportDialog';
 
-const {
-  parsePositionImages,
-  commitPositionImages,
-  parseTradeImages,
-  commitTradeImages,
-} = vi.hoisted(() => ({
-  parsePositionImages: vi.fn(),
+const mocks = vi.hoisted(() => ({
+  submitPositionImageTask: vi.fn(),
+  submitTradeImageTask: vi.fn(),
+  getImageTask: vi.fn(),
+  updateImageTaskDraft: vi.fn(),
+  cancelImageTask: vi.fn(),
+  discardImageTask: vi.fn(),
   commitPositionImages: vi.fn(),
-  parseTradeImages: vi.fn(),
   commitTradeImages: vi.fn(),
 }));
 
 vi.mock('../../../api/portfolio', () => ({
-  portfolioApi: {
-    parsePositionImages,
-    commitPositionImages,
-    parseTradeImages,
-    commitTradeImages,
-  },
+  portfolioApi: mocks,
+  getExistingPortfolioImageTaskId: () => null,
 }));
 
 const accounts: PortfolioAccountItem[] = [
-  {
-    id: 1,
-    name: '中国账户',
-    broker: '华泰',
-    market: 'cn',
-    baseCurrency: 'CNY',
-    isActive: true,
-  },
-  {
-    id: 2,
-    name: '美股账户',
-    broker: 'Demo',
-    market: 'us',
-    baseCurrency: 'USD',
-    isActive: true,
-  },
+  { id: 1, name: '中国账户', broker: '华泰', market: 'cn', baseCurrency: 'CNY', isActive: true },
+  { id: 2, name: '美股账户', broker: 'Demo', market: 'us', baseCurrency: 'USD', isActive: true },
 ];
 
-function renderDialog(overrides: Partial<React.ComponentProps<typeof PortfolioImageImportDialog>> = {}) {
-  return render(
+const positionRow = {
+  sourceRefs: [{ fileIndex: 0, rowIndex: 0 }],
+  symbol: '600519',
+  name: '贵州茅台',
+  quantity: 100,
+  avgCost: 1500,
+  currentPrice: 1600,
+  marketValue: 160000,
+  availableQuantity: 80,
+  weightPct: 60,
+  profitLoss: 10000,
+  confidence: 'high' as const,
+  status: 'ready' as const,
+  issues: [],
+};
+
+function positionTask(overrides: Partial<PortfolioImageTaskSnapshot> = {}): PortfolioImageTaskSnapshot {
+  return {
+    taskId: 'task-position',
+    traceId: 'task-position',
+    mode: 'positions',
+    accountId: 1,
+    accountName: '中国账户',
+    status: 'review_required',
+    message: '识别完成，请校对后确认导入',
+    errorCode: null,
+    snapshotDate: '2026-07-13',
+    defaultTradeDate: null,
+    createdAt: '2026-07-14T10:00:00',
+    startedAt: '2026-07-14T10:00:01',
+    finishedAt: '2026-07-14T10:00:03',
+    files: [{ index: 0, filename: 'positions.png', status: 'success', recordCount: 1, error: null, removed: false }],
+    currentFileIndex: 1,
+    totalFiles: 1,
+    currentAttempt: 1,
+    maxAttempts: 2,
+    successCount: 1,
+    failureCount: 0,
+    batchId: 'position-batch',
+    draftRevision: 1,
+    draft: {
+      batchId: 'position-batch',
+      accountId: 1,
+      snapshotDate: '2026-07-13',
+      files: [{ index: 0, filename: 'positions.png', status: 'success', recordCount: 1, error: null }],
+      summary: {},
+      positions: [positionRow],
+    },
+    ...overrides,
+  };
+}
+
+function Harness({
+  initialTask = null,
+  onCompleted,
+  onTaskChange,
+}: {
+  initialTask?: PortfolioImageTaskSnapshot | null;
+  onCompleted?: React.ComponentProps<typeof PortfolioImageImportDialog>['onCompleted'];
+  onTaskChange?: (task: PortfolioImageTaskSnapshot | null) => void;
+}) {
+  const [task, setTask] = useState<PortfolioImageTaskSnapshot | null>(initialTask);
+  return (
     <PortfolioImageImportDialog
       isOpen
       accounts={accounts}
       selectedAccountId={1}
+      task={task}
       onClose={vi.fn()}
-      onCompleted={vi.fn()}
-      {...overrides}
-    />,
+      onTaskChange={(next) => {
+        setTask(next);
+        onTaskChange?.(next);
+      }}
+      onCompleted={onCompleted ?? (() => undefined)}
+    />
   );
 }
 
@@ -66,14 +113,14 @@ function selectFiles(names: string[]) {
 describe('PortfolioImageImportDialog', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    commitPositionImages.mockResolvedValue({
+    mocks.commitPositionImages.mockResolvedValue({
       recordCount: 1,
       insertedCount: 1,
       duplicateCount: 0,
       failedCount: 0,
       errors: [],
     });
-    commitTradeImages.mockResolvedValue({
+    mocks.commitTradeImages.mockResolvedValue({
       recordCount: 1,
       insertedCount: 1,
       duplicateCount: 0,
@@ -82,319 +129,205 @@ describe('PortfolioImageImportDialog', () => {
     });
   });
 
-  it('switches modes, limits accounts to cn/CNY, and rejects more than five images', () => {
-    renderDialog();
-
-    expect(screen.getByRole('button', { name: '持仓初始化' })).toHaveAttribute('aria-pressed', 'true');
+  it('限制账户和文件数量，并允许切换导入模式', () => {
+    render(<Harness />);
     fireEvent.click(screen.getByRole('button', { name: '成交增量' }));
     expect(screen.getByRole('button', { name: '成交增量' })).toHaveAttribute('aria-pressed', 'true');
-
     const accountSelect = screen.getByLabelText('导入账户');
     expect(within(accountSelect).getByRole('option', { name: '中国账户' })).toBeInTheDocument();
     expect(within(accountSelect).queryByRole('option', { name: '美股账户' })).not.toBeInTheDocument();
-    expect(screen.getByLabelText('批次日期')).toHaveAttribute('max');
 
     selectFiles(['1.png', '2.png', '3.png', '4.png', '5.png', '6.png']);
-
     expect(screen.getByText('最多选择 5 张图片')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '识别并校对' })).toBeDisabled();
   });
 
-  it('shows per-file failures and lets the user edit, resolve, and delete position rows', async () => {
-    parsePositionImages.mockResolvedValue({
-      batchId: 'position-batch',
-      accountId: 1,
-      snapshotDate: '2026-07-13',
-      files: [
-        { index: 0, filename: 'positions.png', status: 'success', recordCount: 2, error: null },
-        { index: 1, filename: 'broken.png', status: 'failed', recordCount: 0, error: 'invalid_image' },
-      ],
-      summary: { totalAssets: 100000, availableCash: 20000 },
-      positions: [
-        {
-          sourceRefs: [{ fileIndex: 0, rowIndex: 0 }],
-          symbol: '600519',
-          name: '贵州茅台',
-          quantity: 100,
-          avgCost: 1500,
-          currentPrice: 1600,
-          marketValue: 160000,
-          availableQuantity: 80,
-          weightPct: 60,
-          profitLoss: 10000,
-          confidence: 'high',
-          status: 'conflict',
-          issues: ['position_overlap_conflict'],
-        },
-        {
-          sourceRefs: [{ fileIndex: 0, rowIndex: 1 }],
-          symbol: '000001',
-          name: '平安银行',
-          quantity: 200,
-          avgCost: 12,
-          currentPrice: 13,
-          marketValue: 2600,
-          availableQuantity: 200,
-          weightPct: 1,
-          profitLoss: 200,
-          confidence: 'medium',
-          status: 'ready',
-          issues: [],
-        },
-      ],
+  it('提交后立即进入后台任务，并允许关闭抽屉', async () => {
+    const pending = positionTask({
+      status: 'processing',
+      message: '正在识别第 1/1 张图片',
+      batchId: null,
+      draftRevision: null,
+      draft: null,
+      files: [{ index: 0, filename: 'positions.png', status: 'processing', recordCount: 0, error: null, removed: false }],
     });
-    renderDialog();
-    selectFiles(['positions.png', 'broken.png']);
-
+    mocks.submitPositionImageTask.mockResolvedValue({
+      taskId: pending.taskId,
+      traceId: pending.traceId,
+      mode: pending.mode,
+      accountId: pending.accountId,
+      accountName: pending.accountName,
+      status: 'pending',
+      message: '图片识别任务已创建',
+    });
+    mocks.getImageTask.mockResolvedValue(pending);
+    render(<Harness />);
+    selectFiles(['positions.png']);
     fireEvent.click(screen.getByRole('button', { name: '识别并校对' }));
 
+    await waitFor(() => expect(screen.getAllByText('正在识别第 1/1 张图片').length).toBeGreaterThan(0));
+    expect(mocks.submitPositionImageTask).toHaveBeenCalledOnce();
+    expect(screen.getByRole('button', { name: '关闭' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '取消任务' })).toBeEnabled();
+  });
+
+  it('自动保存完整草稿，移除失败文件后携带 task/revision 提交', async () => {
+    const review = positionTask({
+      files: [
+        { index: 0, filename: 'positions.png', status: 'success', recordCount: 1, error: null, removed: false },
+        { index: 1, filename: 'broken.png', status: 'failed', recordCount: 0, error: 'invalid_image', removed: false },
+      ],
+      totalFiles: 2,
+      failureCount: 1,
+      draft: {
+        batchId: 'position-batch',
+        accountId: 1,
+        snapshotDate: '2026-07-13',
+        files: [
+          { index: 0, filename: 'positions.png', status: 'success', recordCount: 1, error: null },
+          { index: 1, filename: 'broken.png', status: 'failed', recordCount: 0, error: 'invalid_image' },
+        ],
+        summary: {},
+        positions: [{ ...positionRow, status: 'conflict', issues: ['position_conflict'] }],
+      },
+    });
+    mocks.updateImageTaskDraft.mockImplementation(async (_taskId, request) => positionTask({
+      ...review,
+      draftRevision: 2,
+      files: review.files.map((file) => ({
+        ...file,
+        removed: request.files.find((item: { index: number }) => item.index === file.index)?.removed ?? false,
+      })),
+      draft: {
+        ...(review.draft as NonNullable<typeof review.draft>),
+        positions: request.positions,
+      },
+    }));
+    render(<Harness initialTask={review} />);
     await screen.findByText('校对识别结果');
-    expect(screen.getByText('broken.png')).toBeInTheDocument();
-    expect(screen.getByText('invalid_image')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '确认导入' })).toBeDisabled();
 
     fireEvent.change(screen.getByLabelText('贵州茅台 持仓数量'), { target: { value: '120' } });
     fireEvent.click(screen.getByRole('button', { name: '采用 贵州茅台 编辑值' }));
     fireEvent.click(screen.getByRole('button', { name: '移除失败图片 broken.png' }));
-    expect(screen.getByRole('button', { name: '确认导入' })).toBeEnabled();
 
-    fireEvent.click(screen.getByRole('button', { name: '删除 平安银行' }));
-    expect(screen.queryByLabelText('平安银行 持仓数量')).not.toBeInTheDocument();
-  });
-
-  it('keeps overlapping trade rows as separate occurrences and commits edited fields', async () => {
-    parseTradeImages.mockResolvedValue({
-      batchId: 'trade-batch',
-      accountId: 1,
-      defaultTradeDate: '2026-07-13',
-      files: [{ index: 0, filename: 'trades.png', status: 'success', recordCount: 2, error: null }],
-      trades: [1, 2].map((rowIndex) => ({
-        sourceRefs: [{ fileIndex: 0, rowIndex: rowIndex - 1 }],
-        tradeDate: '2026-07-13',
-        tradeTime: rowIndex === 1 ? '09:30:05' : null,
-        symbol: '600519',
-        name: '贵州茅台',
-        side: 'buy',
-        quantity: 10,
-        price: 1500,
-        fee: 0,
-        tax: 0,
-        tradeUid: null,
-        confidence: 'high',
-        occurrenceIndex: 1,
-        fingerprint: 'same-fingerprint',
-        dedupHash: null,
-        status: 'conflict',
-        issues: ['ambiguous_overlap'],
-      })),
-    });
-    renderDialog();
-    fireEvent.click(screen.getByRole('button', { name: '成交增量' }));
-    selectFiles(['trades.png']);
-    fireEvent.click(screen.getByRole('button', { name: '识别并校对' }));
-
-    await screen.findByText('校对识别结果');
-    fireEvent.click(screen.getByRole('button', { name: '保留 600519 的全部分笔' }));
-    fireEvent.change(screen.getAllByLabelText('600519 手续费')[0], { target: { value: '5' } });
+    await waitFor(() => expect(mocks.updateImageTaskDraft).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByRole('button', { name: '确认导入' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: '确认导入' }));
 
-    await waitFor(() => expect(portfolioApi.commitTradeImages).toHaveBeenCalledOnce());
-    expect(commitTradeImages).toHaveBeenCalledWith(expect.objectContaining({
-      batchId: 'trade-batch',
-      accountId: 1,
-      trades: [
-        expect.objectContaining({ tradeTime: '09:30:05', fee: 5, occurrenceIndex: 1 }),
-        expect.objectContaining({ tradeTime: null, occurrenceIndex: 2 }),
-      ],
+    await waitFor(() => expect(mocks.commitPositionImages).toHaveBeenCalledOnce());
+    expect(mocks.commitPositionImages).toHaveBeenCalledWith(expect.objectContaining({
+      taskId: 'task-position',
+      expectedRevision: 2,
+      batchId: 'position-batch',
+      positions: [expect.objectContaining({ quantity: 120 })],
     }));
   });
 
-  it('merges overlapping trade rows into one reviewed record', async () => {
-    parseTradeImages.mockResolvedValue({
-      batchId: 'trade-batch',
-      accountId: 1,
-      defaultTradeDate: '2026-07-13',
-      files: [{ index: 0, filename: 'trades.png', status: 'success', recordCount: 2, error: null }],
-      trades: [0, 1].map((rowIndex) => ({
-        sourceRefs: [{ fileIndex: rowIndex, rowIndex: 0 }],
-        tradeDate: '2026-07-13',
-        tradeTime: '09:30:05',
-        symbol: '600519',
-        name: '贵州茅台',
-        side: 'buy',
-        quantity: 10,
-        price: 1500,
-        fee: 0,
-        tax: 0,
-        tradeUid: null,
-        confidence: 'high',
-        occurrenceIndex: 1,
-        fingerprint: 'same-fingerprint',
-        dedupHash: null,
-        status: 'conflict',
-        issues: ['ambiguous_overlap'],
-      })),
-    });
-    renderDialog();
-    fireEvent.click(screen.getByRole('button', { name: '成交增量' }));
-    selectFiles(['trades.png']);
-    fireEvent.click(screen.getByRole('button', { name: '识别并校对' }));
+  it('processing 取消后展示 cancel_requested 快照', async () => {
+    const processing = positionTask({ status: 'processing', draft: null, draftRevision: null, batchId: null });
+    const cancelling = { ...processing, status: 'cancel_requested' as const, message: '正在等待当前识别调用结束后取消' };
+    mocks.cancelImageTask.mockResolvedValue(cancelling);
+    render(<Harness initialTask={processing} />);
 
-    await screen.findByText('校对识别结果');
-    fireEvent.click(screen.getByRole('button', { name: '合并 600519 为一笔' }));
-    fireEvent.click(screen.getByRole('button', { name: '确认导入' }));
-
-    await waitFor(() => expect(commitTradeImages).toHaveBeenCalledOnce());
-    expect(commitTradeImages.mock.calls[0][0].trades).toHaveLength(1);
+    fireEvent.click(await screen.findByRole('button', { name: '取消任务' }));
+    await screen.findByRole('button', { name: '等待取消' });
+    expect(mocks.cancelImageTask).toHaveBeenCalledWith(processing.taskId);
   });
 
-  it('revalidates an error position row after editable fields are corrected', async () => {
-    parsePositionImages.mockResolvedValue({
-      batchId: 'position-error-batch',
-      accountId: 1,
-      snapshotDate: '2026-07-13',
-      files: [{ index: 0, filename: 'positions.png', status: 'success', recordCount: 1, error: null }],
-      summary: {},
-      positions: [{
-        sourceRefs: [{ fileIndex: 0, rowIndex: 0 }],
-        symbol: 'ABC',
-        name: '待修正',
-        quantity: null,
-        avgCost: null,
-        currentPrice: null,
-        marketValue: null,
-        availableQuantity: null,
-        weightPct: null,
-        profitLoss: null,
-        confidence: 'low',
-        status: 'error',
-        issues: ['invalid_symbol', 'invalid_quantity', 'invalid_avg_cost'],
-      }],
+  it('保存请求进行中继续编辑时会串行保存新版本而不丢失修改', async () => {
+    let resolveFirst!: (value: PortfolioImageTaskSnapshot) => void;
+    const firstSave = new Promise<PortfolioImageTaskSnapshot>((resolve) => {
+      resolveFirst = resolve;
     });
-    renderDialog();
-    selectFiles(['positions.png']);
-    fireEvent.click(screen.getByRole('button', { name: '识别并校对' }));
+    mocks.updateImageTaskDraft
+      .mockImplementationOnce(() => firstSave)
+      .mockImplementationOnce(async (_taskId, request) => positionTask({
+        draftRevision: 3,
+        draft: {
+          ...(positionTask().draft as NonNullable<ReturnType<typeof positionTask>['draft']>),
+          positions: request.positions,
+        },
+      }));
+    render(<Harness initialTask={positionTask()} />);
+    await screen.findByText('校对识别结果');
+
+    fireEvent.change(screen.getByLabelText('贵州茅台 持仓数量'), { target: { value: '110' } });
+    await waitFor(() => expect(mocks.updateImageTaskDraft).toHaveBeenCalledTimes(1));
+    fireEvent.change(screen.getByLabelText('贵州茅台 持仓数量'), { target: { value: '120' } });
+
+    const firstRequest = mocks.updateImageTaskDraft.mock.calls[0][1];
+    resolveFirst(positionTask({
+      draftRevision: 2,
+      draft: {
+        ...(positionTask().draft as NonNullable<ReturnType<typeof positionTask>['draft']>),
+        positions: firstRequest.positions,
+      },
+    }));
+
+    await waitFor(() => expect(mocks.updateImageTaskDraft).toHaveBeenCalledTimes(2));
+    expect(mocks.updateImageTaskDraft.mock.calls[1][1]).toEqual(expect.objectContaining({
+      expectedRevision: 2,
+      positions: [expect.objectContaining({ quantity: 120 })],
+    }));
+  });
+
+  it('草稿 revision 冲突后停止提交并可重新加载服务端版本', async () => {
+    const review = positionTask();
+    const latest = positionTask({ draftRevision: 2 });
+    mocks.updateImageTaskDraft.mockRejectedValue({
+      response: { status: 409, data: { error: 'portfolio_image_draft_conflict', message: '草稿冲突' } },
+      message: 'Request failed with status code 409',
+    });
+    mocks.getImageTask.mockResolvedValue(latest);
+    render(<Harness initialTask={review} />);
 
     await screen.findByText('校对识别结果');
+    fireEvent.change(screen.getByLabelText('贵州茅台 持仓数量'), { target: { value: '120' } });
+    await screen.findByText('草稿版本冲突，请重新加载。');
     expect(screen.getByRole('button', { name: '确认导入' })).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('待修正 证券代码'), { target: { value: '600519' } });
-    fireEvent.change(screen.getByLabelText('待修正 持仓数量'), { target: { value: '100' } });
-    fireEvent.change(screen.getByLabelText('待修正 平均成本'), { target: { value: '1500' } });
-
-    expect(screen.getByRole('button', { name: '确认导入' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: '重新加载草稿' }));
+    await waitFor(() => expect(mocks.getImageTask).toHaveBeenCalledWith(review.taskId));
   });
 
-  it('revalidates an error trade row and allows editing its name', async () => {
-    parseTradeImages.mockResolvedValue({
-      batchId: 'trade-error-batch',
-      accountId: 1,
-      defaultTradeDate: '2026-07-13',
-      files: [{ index: 0, filename: 'trades.png', status: 'success', recordCount: 1, error: null }],
-      trades: [{
-        sourceRefs: [{ fileIndex: 0, rowIndex: 0 }],
-        tradeDate: '2026-07-13',
-        tradeTime: '25:00:00',
-        symbol: 'ABC',
-        name: '待修正',
-        side: 'buy',
-        quantity: null,
-        price: null,
-        fee: 0,
-        tax: 0,
-        tradeUid: null,
-        confidence: 'low',
-        occurrenceIndex: 1,
-        fingerprint: '',
-        dedupHash: null,
-        status: 'error',
-        issues: ['invalid_trade_time', 'invalid_symbol', 'invalid_quantity', 'invalid_price'],
-      }],
+  it('草稿保存失败后即使 revision 未变化也会重新加载服务端内容', async () => {
+    const review = positionTask();
+    if (!review.draft || !('positions' in review.draft)) throw new Error('expected positions draft');
+    const serverDraft = positionTask({
+      draft: {
+        ...review.draft,
+        positions: [
+          {
+            ...review.draft.positions[0],
+            quantity: 80,
+          },
+        ],
+      },
     });
-    renderDialog();
-    fireEvent.click(screen.getByRole('button', { name: '成交增量' }));
-    selectFiles(['trades.png']);
-    fireEvent.click(screen.getByRole('button', { name: '识别并校对' }));
+    mocks.updateImageTaskDraft.mockRejectedValue({
+      response: { status: 503, data: { error: 'upstream_unavailable', message: '暂时不可用' } },
+      message: 'Request failed with status code 503',
+    });
+    mocks.getImageTask.mockResolvedValue(serverDraft);
+    render(<Harness initialTask={review} />);
 
     await screen.findByText('校对识别结果');
-    expect(screen.getByRole('button', { name: '确认导入' })).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('ABC 成交时间'), { target: { value: '10:01:02' } });
-    fireEvent.change(screen.getByLabelText('ABC 证券代码'), { target: { value: '600519' } });
-    fireEvent.change(screen.getByLabelText('600519 成交名称'), { target: { value: '贵州茅台' } });
-    fireEvent.change(screen.getByLabelText('600519 成交数量'), { target: { value: '10' } });
-    fireEvent.change(screen.getByLabelText('600519 成交价格'), { target: { value: '1500' } });
+    fireEvent.change(screen.getByLabelText('贵州茅台 持仓数量'), { target: { value: '120' } });
+    await screen.findByText('草稿保存失败，请重试。');
+    fireEvent.click(screen.getByRole('button', { name: '重新加载草稿' }));
 
-    expect(screen.getByRole('button', { name: '确认导入' })).toBeEnabled();
+    await waitFor(() => expect(screen.getByLabelText('贵州茅台 持仓数量')).toHaveValue(80));
   });
 
-  it('reports completion and refreshes the parent after a successful commit', async () => {
+  it('提交成功后显示结果并通知父页面刷新', async () => {
     const onCompleted = vi.fn();
-    parsePositionImages.mockResolvedValue({
-      batchId: 'position-batch',
-      accountId: 1,
-      snapshotDate: '2026-07-13',
-      files: [{ index: 0, filename: 'positions.png', status: 'success', recordCount: 1, error: null }],
-      summary: {},
-      positions: [{
-        sourceRefs: [{ fileIndex: 0, rowIndex: 0 }],
-        symbol: '600519',
-        name: '贵州茅台',
-        quantity: 100,
-        avgCost: 1500,
-        currentPrice: null,
-        marketValue: null,
-        availableQuantity: null,
-        weightPct: null,
-        profitLoss: null,
-        confidence: 'high',
-        status: 'ready',
-        issues: [],
-      }],
-    });
-    renderDialog({ onCompleted });
-    selectFiles(['positions.png']);
-    fireEvent.click(screen.getByRole('button', { name: '识别并校对' }));
+    render(<Harness initialTask={positionTask()} onCompleted={onCompleted} />);
     await screen.findByText('校对识别结果');
-
+    await waitFor(() => expect(screen.getByRole('button', { name: '确认导入' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: '确认导入' }));
 
     await screen.findByText('导入完成');
     expect(screen.getByText('已写入 1 条记录')).toBeInTheDocument();
     expect(onCompleted).toHaveBeenCalledOnce();
-  });
-
-  it('disables commit when the reviewed snapshot date is empty or in the future', async () => {
-    parsePositionImages.mockResolvedValue({
-      batchId: 'position-batch',
-      accountId: 1,
-      snapshotDate: '2026-07-13',
-      files: [{ index: 0, filename: 'positions.png', status: 'success', recordCount: 1, error: null }],
-      summary: {},
-      positions: [{
-        sourceRefs: [{ fileIndex: 0, rowIndex: 0 }],
-        symbol: '600519',
-        name: '贵州茅台',
-        quantity: 100,
-        avgCost: 1500,
-        currentPrice: null,
-        marketValue: null,
-        availableQuantity: null,
-        weightPct: null,
-        profitLoss: null,
-        confidence: 'high',
-        status: 'ready',
-        issues: [],
-      }],
-    });
-    renderDialog();
-    selectFiles(['positions.png']);
-    fireEvent.click(screen.getByRole('button', { name: '识别并校对' }));
-    await screen.findByText('校对识别结果');
-    expect(screen.getByRole('button', { name: '确认导入' })).toBeEnabled();
-
-    fireEvent.change(screen.getByLabelText('快照日期'), { target: { value: '2099-01-01' } });
-    expect(screen.getByRole('button', { name: '确认导入' })).toBeDisabled();
-
-    fireEvent.change(screen.getByLabelText('快照日期'), { target: { value: '' } });
-    expect(screen.getByRole('button', { name: '确认导入' })).toBeDisabled();
   });
 });

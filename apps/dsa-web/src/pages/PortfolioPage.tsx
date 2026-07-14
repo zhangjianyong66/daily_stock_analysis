@@ -8,6 +8,7 @@ import type { ParsedApiError } from '../api/error';
 import { getParsedApiError } from '../api/error';
 import { ApiErrorAlert, Card, Badge, ConfirmDialog, EmptyState, InlineAlert } from '../components/common';
 import { PortfolioImageImportDialog } from '../components/portfolio/PortfolioImageImportDialog';
+import { useTaskStream } from '../hooks/useTaskStream';
 import { PortfolioSignalSummary } from '../components/decision-signals/DecisionSignalDisplay';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
 import { formatUiText } from '../i18n/uiText';
@@ -46,6 +47,7 @@ import type {
   PortfolioImportBrokerItem,
   PortfolioImportCommitResponse,
   PortfolioImportParseResponse,
+  PortfolioImageTaskSnapshot,
   PortfolioPositionItem,
   PortfolioRiskResponse,
   PortfolioSide,
@@ -59,6 +61,7 @@ import { buildDecisionActionLabelMap, getDecisionActionLabel } from '../utils/de
 const PIE_COLORS = ['#00d4ff', '#00ff88', '#ffaa00', '#ff7a45', '#7f8cff', '#ff4466'];
 const DEFAULT_PAGE_SIZE = 20;
 const PORTFOLIO_SIGNAL_LOOKUP_CONCURRENCY = 6;
+const PORTFOLIO_IMAGE_TASK_STORAGE_KEY = 'dsa.portfolioImageTaskId';
 const FALLBACK_BROKERS: PortfolioImportBrokerItem[] = [
   { broker: 'huatai', aliases: [], displayName: '华泰' },
   { broker: 'citic', aliases: ['zhongxin'], displayName: '中信' },
@@ -231,6 +234,8 @@ const PortfolioPage: React.FC = () => {
   const [csvCommitResult, setCsvCommitResult] = useState<PortfolioImportCommitResponse | null>(null);
   const [brokerLoadWarning, setBrokerLoadWarning] = useState<string | null>(null);
   const [showImageImport, setShowImageImport] = useState(false);
+  const [currentImageTask, setCurrentImageTask] = useState<PortfolioImageTaskSnapshot | null>(null);
+  const [imageTaskWarning, setImageTaskWarning] = useState<string | null>(null);
 
   const [eventType, setEventType] = useState<EventType>('trade');
   const [eventDateFrom, setEventDateFrom] = useState('');
@@ -443,10 +448,73 @@ const PortfolioPage: React.FC = () => {
     await Promise.all([loadSnapshotAndRisk(), loadEventsPage(page)]);
   }, [eventPage, loadEventsPage, loadSnapshotAndRisk]);
 
+  const handleImageTaskChange = useCallback((nextTask: PortfolioImageTaskSnapshot | null) => {
+    setCurrentImageTask(nextTask);
+    if (nextTask) {
+      window.localStorage.setItem(PORTFOLIO_IMAGE_TASK_STORAGE_KEY, nextTask.taskId);
+      setImageTaskWarning(null);
+    } else {
+      window.localStorage.removeItem(PORTFOLIO_IMAGE_TASK_STORAGE_KEY);
+    }
+  }, []);
+
+  const loadCurrentImageTask = useCallback(async () => {
+    try {
+      const current = await portfolioApi.getCurrentImageTask();
+      if (current.task) {
+        handleImageTaskChange(current.task);
+        return;
+      }
+      const savedTaskId = window.localStorage.getItem(PORTFOLIO_IMAGE_TASK_STORAGE_KEY);
+      if (!savedTaskId) {
+        handleImageTaskChange(null);
+        return;
+      }
+      try {
+        handleImageTaskChange(await portfolioApi.getImageTask(savedTaskId));
+      } catch (error) {
+        const parsed = getParsedApiError(error);
+        handleImageTaskChange(null);
+        if (parsed.status === 404) {
+          setImageTaskWarning('图片识别任务因服务重启已中断，请重新选择图片提交。');
+        } else {
+          setImageTaskWarning(parsed.message);
+        }
+      }
+    } catch (error) {
+      setImageTaskWarning(getParsedApiError(error).message);
+    }
+  }, [handleImageTaskChange]);
+
+  useTaskStream({
+    onPortfolioImageTaskUpdated: (summary) => {
+      if (summary.status === 'committed' || summary.status === 'discarded') {
+        handleImageTaskChange(null);
+        return;
+      }
+      void portfolioApi.getImageTask(summary.taskId)
+        .then(handleImageTaskChange)
+        .catch(() => void loadCurrentImageTask());
+    },
+  });
+
   useEffect(() => {
     void loadAccounts();
     void loadBrokers();
-  }, [loadAccounts, loadBrokers]);
+    void loadCurrentImageTask();
+  }, [loadAccounts, loadBrokers, loadCurrentImageTask]);
+
+  useEffect(() => {
+    if (!currentImageTask || !['pending', 'processing', 'cancel_requested', 'committing'].includes(currentImageTask.status)) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void portfolioApi.getImageTask(currentImageTask.taskId)
+        .then(handleImageTaskChange)
+        .catch(() => void loadCurrentImageTask());
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [currentImageTask, handleImageTaskChange, loadCurrentImageTask]);
 
   useEffect(() => {
     void loadSnapshotAndRisk();
@@ -738,8 +806,31 @@ const PortfolioPage: React.FC = () => {
   };
 
   const handleImageImportCompleted = async () => {
+    const affectedAccountId = currentImageTask?.accountId;
+    if (affectedAccountId && accounts.some((account) => account.id === affectedAccountId)) {
+      setSelectedAccount(affectedAccountId);
+    }
     await refreshPortfolioData();
     setPortfolioSignalsRefreshKey((current) => current + 1);
+  };
+
+  const handleCancelImageTask = async () => {
+    if (!currentImageTask) return;
+    try {
+      handleImageTaskChange(await portfolioApi.cancelImageTask(currentImageTask.taskId));
+    } catch (err) {
+      setError(getParsedApiError(err));
+    }
+  };
+
+  const handleDiscardImageTask = async () => {
+    if (!currentImageTask) return;
+    try {
+      await portfolioApi.discardImageTask(currentImageTask.taskId);
+      handleImageTaskChange(null);
+    } catch (err) {
+      setError(getParsedApiError(err));
+    }
   };
 
   const openDeleteDialog = (item: PendingDelete) => {
@@ -1063,6 +1154,50 @@ const PortfolioPage: React.FC = () => {
           title={text.operationHint}
           message={writeWarning}
         />
+      ) : null}
+      {imageTaskWarning ? (
+        <InlineAlert
+          variant="warning"
+          title="图片识别任务"
+          message={imageTaskWarning}
+        />
+      ) : null}
+      {currentImageTask ? (
+        <section className="rounded-xl border border-cyan/25 bg-cyan/5 p-4" aria-label="当前图片识别任务">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-foreground">
+                {currentImageTask.mode === 'positions' ? '持仓截图识别' : '成交截图识别'} · {currentImageTask.accountName}
+              </p>
+              <p className="mt-1 text-xs text-secondary-text">
+                {currentImageTask.message}
+                {currentImageTask.currentFileIndex ? ` · 第 ${currentImageTask.currentFileIndex}/${currentImageTask.totalFiles} 张` : ''}
+                {currentImageTask.currentAttempt ? ` · 尝试 ${currentImageTask.currentAttempt}/${currentImageTask.maxAttempts}` : ''}
+                {` · 成功 ${currentImageTask.successCount} / 失败 ${currentImageTask.failureCount}`}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className="btn-secondary text-sm" onClick={() => setShowImageImport(true)}>
+                {currentImageTask.status === 'review_required' ? '继续校对' : '查看任务'}
+              </button>
+              {currentImageTask.status === 'pending' || currentImageTask.status === 'processing' || currentImageTask.status === 'cancel_requested' ? (
+                <button
+                  type="button"
+                  className="btn-secondary text-sm"
+                  disabled={currentImageTask.status === 'cancel_requested'}
+                  onClick={() => void handleCancelImageTask()}
+                >
+                  {currentImageTask.status === 'cancel_requested' ? '等待取消' : '取消任务'}
+                </button>
+              ) : null}
+              {currentImageTask.status === 'review_required' || currentImageTask.status === 'failed' || currentImageTask.status === 'cancelled' ? (
+                <button type="button" className="btn-secondary text-sm" onClick={() => void handleDiscardImageTask()}>
+                  {currentImageTask.status === 'review_required' ? '放弃本次识别' : '清除任务'}
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </section>
       ) : null}
       {positionAnalysisMessage ? (
         <InlineAlert
@@ -1469,7 +1604,7 @@ const PortfolioPage: React.FC = () => {
         <Card padding="md">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <h3 className="text-sm font-semibold text-foreground">券商 CSV 导入</h3>
-            {canImportImages ? (
+            {canImportImages || currentImageTask ? (
               <button
                 type="button"
                 className="btn-secondary inline-flex items-center gap-2 text-sm"
@@ -1673,7 +1808,9 @@ const PortfolioPage: React.FC = () => {
         isOpen={showImageImport}
         accounts={accounts}
         selectedAccountId={writableAccountId}
+        task={currentImageTask}
         onClose={() => setShowImageImport(false)}
+        onTaskChange={handleImageTaskChange}
         onCompleted={handleImageImportCompleted}
       />
       <ConfirmDialog

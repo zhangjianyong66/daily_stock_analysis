@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import time
 import unittest
 from datetime import date
 from pathlib import Path
@@ -24,6 +25,7 @@ except ModuleNotFoundError:
 import src.auth as auth
 from api.app import create_app
 from src.config import Config
+from src.services.portfolio_image_task_manager import PortfolioImageTaskManager
 from src.services.portfolio_service import PortfolioBusyError
 from src.storage import DatabaseManager
 
@@ -65,11 +67,13 @@ class PortfolioApiTestCase(unittest.TestCase):
         os.environ["DATABASE_PATH"] = str(self.db_path)
         Config.reset_instance()
         DatabaseManager.reset_instance()
+        PortfolioImageTaskManager.reset_instance()
         app = create_app(static_dir=self.data_dir / "empty-static")
         self.client = TestClient(app)
         self.db = DatabaseManager.get_instance()
 
     def tearDown(self) -> None:
+        PortfolioImageTaskManager.reset_instance()
         DatabaseManager.reset_instance()
         Config.reset_instance()
         os.environ.pop("ENV_FILE", None)
@@ -1075,6 +1079,107 @@ class PortfolioApiTestCase(unittest.TestCase):
         images = mock_parse.call_args.kwargs["images"]
         self.assertEqual([image.filename for image in images], ["a.png", "b.png"])
 
+    def test_async_position_image_task_recovers_deduplicates_saves_draft_and_commits(self) -> None:
+        account_id = self._create_account(name="Async Main")
+        parsed = {
+            "batch_id": "batch-async-position",
+            "account_id": account_id,
+            "snapshot_date": "2026-07-13",
+            "files": [
+                {"index": 0, "filename": "a.png", "status": "success", "record_count": 1, "error": None}
+            ],
+            "summary": {},
+            "positions": [
+                {
+                    "source_refs": [{"file_index": 0, "row_index": 0}],
+                    "symbol": "600000",
+                    "name": "浦发银行",
+                    "quantity": 100,
+                    "avg_cost": 10,
+                    "current_price": None,
+                    "market_value": None,
+                    "available_quantity": None,
+                    "weight_pct": None,
+                    "profit_loss": None,
+                    "confidence": "high",
+                    "status": "ready",
+                    "issues": [],
+                }
+            ],
+        }
+        with patch(
+            "api.v1.endpoints.portfolio.PortfolioScreenshotImportService.parse_position_images",
+            return_value=parsed,
+        ) as mock_parse:
+            accepted = self.client.post(
+                "/api/v1/portfolio/imports/images/positions/tasks",
+                data={"account_id": str(account_id), "snapshot_date": "2026-07-13"},
+                files=[("files", ("a.png", PNG_BYTES, "image/png"))],
+            )
+            self.assertEqual(accepted.status_code, 202, accepted.text)
+            task_id = accepted.json()["task_id"]
+
+            deadline = time.monotonic() + 2
+            current = None
+            while time.monotonic() < deadline:
+                current = self.client.get("/api/v1/portfolio/imports/images/tasks/current").json()["task"]
+                if current and current["status"] == "review_required":
+                    break
+                time.sleep(0.01)
+            self.assertIsNotNone(current)
+            self.assertEqual(current["status"], "review_required")
+            self.assertEqual(current["draft_revision"], 1)
+
+            duplicate = self.client.post(
+                "/api/v1/portfolio/imports/images/positions/tasks",
+                data={"account_id": str(account_id), "snapshot_date": "2026-07-13"},
+                files=[("files", ("b.png", PNG_BYTES, "image/png"))],
+            )
+            self.assertEqual(duplicate.status_code, 409, duplicate.text)
+            self.assertEqual(duplicate.json()["existing_task_id"], task_id)
+            self.assertEqual(mock_parse.call_count, 1)
+
+            saved = self.client.patch(
+                f"/api/v1/portfolio/imports/images/tasks/{task_id}/draft",
+                json={
+                    "expected_revision": 1,
+                    "files": [{"index": 0, "removed": False}],
+                    "positions": [{**parsed["positions"][0], "quantity": 200}],
+                },
+            )
+            self.assertEqual(saved.status_code, 200, saved.text)
+            self.assertEqual(saved.json()["draft_revision"], 2)
+
+            stale = self.client.patch(
+                f"/api/v1/portfolio/imports/images/tasks/{task_id}/draft",
+                json={
+                    "expected_revision": 1,
+                    "files": [{"index": 0, "removed": False}],
+                    "positions": parsed["positions"],
+                },
+            )
+            self.assertEqual(stale.status_code, 409, stale.text)
+            self.assertEqual(stale.json()["error"], "portfolio_image_draft_conflict")
+
+            committed = self.client.post(
+                "/api/v1/portfolio/imports/images/positions/commit",
+                json={
+                    "task_id": task_id,
+                    "expected_revision": 2,
+                    "batch_id": "batch-async-position",
+                    "account_id": account_id,
+                    "snapshot_date": "2026-07-13",
+                    "positions": [
+                        {"symbol": "600000", "name": "浦发银行", "quantity": 200, "avg_cost": 10}
+                    ],
+                },
+            )
+            self.assertEqual(committed.status_code, 200, committed.text)
+
+        self.assertIsNone(self.client.get("/api/v1/portfolio/imports/images/tasks/current").json()["task"])
+        trades = self.client.get("/api/v1/portfolio/trades", params={"account_id": account_id}).json()
+        self.assertEqual(trades["total"], 1)
+
     def test_position_image_parse_rejects_more_than_five_files(self) -> None:
         response = self.client.post(
             "/api/v1/portfolio/imports/images/positions/parse",
@@ -1100,6 +1205,20 @@ class PortfolioApiTestCase(unittest.TestCase):
         self.assertEqual(response.json()["files"][0]["status"], "failed")
         self.assertEqual(response.json()["files"][0]["error"], "file_too_large")
         mock_completion.assert_not_called()
+
+    def test_async_image_submit_rejects_oversized_file_before_creating_task(self) -> None:
+        account_id = self._create_account()
+        oversized = PNG_BYTES + b"\x00" * (5 * 1024 * 1024)
+
+        response = self.client.post(
+            "/api/v1/portfolio/imports/images/positions/tasks",
+            data={"account_id": str(account_id), "snapshot_date": "2026-07-13"},
+            files=[("files", ("large.png", oversized, "image/png"))],
+        )
+
+        self.assertEqual(response.status_code, 400, response.text)
+        self.assertEqual(response.json()["error"], "file_too_large")
+        self.assertIsNone(self.client.get("/api/v1/portfolio/imports/images/tasks/current").json()["task"])
 
     def test_trade_image_parse_returns_per_file_failure_without_raw_error(self) -> None:
         parsed = {

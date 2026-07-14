@@ -16,6 +16,10 @@ import type {
   PortfolioDeleteResponse,
   PortfolioEventCreatedResponse,
   PortfolioFxRefreshResponse,
+  PortfolioImageDraftUpdateRequest,
+  PortfolioImageTaskAccepted,
+  PortfolioImageTaskCurrentResponse,
+  PortfolioImageTaskSnapshot,
   PortfolioImportBrokerListResponse,
   PortfolioImportCommitResponse,
   PortfolioImportParseResponse,
@@ -320,6 +324,20 @@ export const portfolioApi = {
     return toCamelCase<PositionImageParseResponse>(response.data);
   },
 
+  async submitPositionImageTask(
+    accountId: number,
+    snapshotDate: string,
+    files: File[],
+  ): Promise<PortfolioImageTaskAccepted> {
+    const formData = buildImageImportFormData(accountId, 'snapshot_date', snapshotDate, files);
+    const response = await apiClient.post<Record<string, unknown>>(
+      '/api/v1/portfolio/imports/images/positions/tasks',
+      formData,
+      { headers: { 'Content-Type': 'multipart/form-data' } },
+    );
+    return toCamelCase<PortfolioImageTaskAccepted>(response.data);
+  },
+
   async commitPositionImages(request: PositionImageCommitRequest): Promise<ImageImportCommitResponse> {
     const response = await apiClient.post<Record<string, unknown>>(
       '/api/v1/portfolio/imports/images/positions/commit',
@@ -327,6 +345,8 @@ export const portfolioApi = {
         batch_id: request.batchId,
         account_id: request.accountId,
         snapshot_date: request.snapshotDate,
+        task_id: request.taskId,
+        expected_revision: request.expectedRevision,
         positions: request.positions.map((position) => ({
           symbol: position.symbol,
           name: position.name,
@@ -352,12 +372,28 @@ export const portfolioApi = {
     return toCamelCase<TradeImageParseResponse>(response.data);
   },
 
+  async submitTradeImageTask(
+    accountId: number,
+    defaultTradeDate: string,
+    files: File[],
+  ): Promise<PortfolioImageTaskAccepted> {
+    const formData = buildImageImportFormData(accountId, 'default_trade_date', defaultTradeDate, files);
+    const response = await apiClient.post<Record<string, unknown>>(
+      '/api/v1/portfolio/imports/images/trades/tasks',
+      formData,
+      { headers: { 'Content-Type': 'multipart/form-data' } },
+    );
+    return toCamelCase<PortfolioImageTaskAccepted>(response.data);
+  },
+
   async commitTradeImages(request: TradeImageCommitRequest): Promise<ImageImportCommitResponse> {
     const response = await apiClient.post<Record<string, unknown>>(
       '/api/v1/portfolio/imports/images/trades/commit',
       {
         batch_id: request.batchId,
         account_id: request.accountId,
+        task_id: request.taskId,
+        expected_revision: request.expectedRevision,
         trades: request.trades.map((trade) => ({
           trade_date: trade.tradeDate,
           trade_time: trade.tradeTime,
@@ -375,4 +411,87 @@ export const portfolioApi = {
     );
     return toCamelCase<ImageImportCommitResponse>(response.data);
   },
+
+  async getCurrentImageTask(): Promise<PortfolioImageTaskCurrentResponse> {
+    const response = await apiClient.get<Record<string, unknown>>('/api/v1/portfolio/imports/images/tasks/current');
+    return toCamelCase<PortfolioImageTaskCurrentResponse>(response.data);
+  },
+
+  async getImageTask(taskId: string): Promise<PortfolioImageTaskSnapshot> {
+    const response = await apiClient.get<Record<string, unknown>>(
+      `/api/v1/portfolio/imports/images/tasks/${encodeURIComponent(taskId)}`,
+    );
+    return toCamelCase<PortfolioImageTaskSnapshot>(response.data);
+  },
+
+  async updateImageTaskDraft(
+    taskId: string,
+    request: PortfolioImageDraftUpdateRequest,
+  ): Promise<PortfolioImageTaskSnapshot> {
+    const response = await apiClient.patch<Record<string, unknown>>(
+      `/api/v1/portfolio/imports/images/tasks/${encodeURIComponent(taskId)}/draft`,
+      {
+        expected_revision: request.expectedRevision,
+        files: request.files,
+        positions: request.positions?.map((position) => ({
+          source_refs: position.sourceRefs.map((ref) => ({ file_index: ref.fileIndex, row_index: ref.rowIndex })),
+          symbol: position.symbol,
+          name: position.name,
+          quantity: position.quantity,
+          avg_cost: position.avgCost,
+          current_price: position.currentPrice,
+          market_value: position.marketValue,
+          available_quantity: position.availableQuantity,
+          weight_pct: position.weightPct,
+          profit_loss: position.profitLoss,
+          confidence: position.confidence,
+          status: position.status,
+          issues: position.issues,
+        })),
+        trades: request.trades?.map((trade) => ({
+          source_refs: trade.sourceRefs.map((ref) => ({ file_index: ref.fileIndex, row_index: ref.rowIndex })),
+          trade_date: trade.tradeDate,
+          trade_time: trade.tradeTime,
+          symbol: trade.symbol,
+          name: trade.name,
+          side: trade.side,
+          quantity: trade.quantity,
+          price: trade.price,
+          fee: trade.fee,
+          tax: trade.tax,
+          trade_uid: trade.tradeUid,
+          confidence: trade.confidence,
+          occurrence_index: trade.occurrenceIndex,
+          fingerprint: trade.fingerprint,
+          dedup_hash: trade.dedupHash,
+          status: trade.status,
+          issues: trade.issues,
+        })),
+      },
+    );
+    return toCamelCase<PortfolioImageTaskSnapshot>(response.data);
+  },
+
+  async cancelImageTask(taskId: string): Promise<PortfolioImageTaskSnapshot> {
+    const response = await apiClient.post<Record<string, unknown>>(
+      `/api/v1/portfolio/imports/images/tasks/${encodeURIComponent(taskId)}/cancel`,
+    );
+    return toCamelCase<PortfolioImageTaskSnapshot>(response.data);
+  },
+
+  async discardImageTask(taskId: string): Promise<void> {
+    await apiClient.delete(`/api/v1/portfolio/imports/images/tasks/${encodeURIComponent(taskId)}`);
+  },
 };
+
+export function getExistingPortfolioImageTaskId(error: unknown): string | null {
+  const response = (error as { response?: { data?: Record<string, unknown> } } | null)?.response;
+  const data = response?.data;
+  if (!data) return null;
+  if (typeof data.existing_task_id === 'string') return data.existing_task_id;
+  const detail = data.detail;
+  if (detail && typeof detail === 'object' && typeof (detail as Record<string, unknown>).existing_task_id === 'string') {
+    return (detail as Record<string, unknown>).existing_task_id as string;
+  }
+  return null;
+}

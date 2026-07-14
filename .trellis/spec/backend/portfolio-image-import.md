@@ -2,78 +2,145 @@
 
 ## 1. Scope / Trigger
 
-- 修改持仓截图、成交截图、`trade_time`、Vision 图片调用、四个图片导入 API 或 Web 校对流程时适用。
-- 该能力跨越 Vision -> Service -> Repository/DB -> API -> Web，必须同步检查完整数据流。
+- 修改持仓截图、成交截图、Vision 图片调用、图片任务状态、草稿 revision、图片导入 API 或 Web 校对流程时适用。
+- 该能力跨越 Vision -> Service -> 进程内任务 -> Repository/DB -> API/SSE -> Web，必须检查完整数据流。
 
 ## 2. Signatures
 
-- `POST /api/v1/portfolio/imports/images/positions/parse`：multipart `account_id`、`snapshot_date`、重复 `files`。
-- `POST /api/v1/portfolio/imports/images/positions/commit`：JSON `batch_id/account_id/snapshot_date/positions`。
-- `POST /api/v1/portfolio/imports/images/trades/parse`：multipart `account_id`、`default_trade_date`、重复 `files`。
-- `POST /api/v1/portfolio/imports/images/trades/commit`：JSON `batch_id/account_id/trades`。
-- DB：`PortfolioTrade.trade_time` 为 nullable `TIME`；旧 SQLite 表初始化时幂等补列。
+- 创建任务：
+  - `POST /api/v1/portfolio/imports/images/positions/tasks`
+  - `POST /api/v1/portfolio/imports/images/trades/tasks`
+- 查询与控制：
+  - `GET /api/v1/portfolio/imports/images/tasks/current`
+  - `GET /api/v1/portfolio/imports/images/tasks/{task_id}`
+  - `PATCH /api/v1/portfolio/imports/images/tasks/{task_id}/draft`
+  - `POST /api/v1/portfolio/imports/images/tasks/{task_id}/cancel`
+  - `DELETE /api/v1/portfolio/imports/images/tasks/{task_id}`
+- 提交：
+  - `POST /api/v1/portfolio/imports/images/positions/commit`
+  - `POST /api/v1/portfolio/imports/images/trades/commit`
+  - 异步 Web 调用必须携带 `task_id/expected_revision`；旧调用字段可省略。
+- 兼容接口：`positions/parse`、`trades/parse` 保留并标记 deprecated，在线程池执行且共享全局任务槽和识别核心。
+- SSE：复用 `/api/v1/analysis/tasks/stream`，事件类型 `portfolio_image_task_updated`，载荷只含轻量摘要。
+- DB：`PortfolioTrade.trade_time` 为 nullable `TIME`；图片任务和草稿不新增数据库表。
 
 ## 3. Contracts
 
+### 3.1 上传、任务与恢复
+
 - 只支持活跃 `cn/CNY` 账户、6 位证券代码、每批 1-5 张 JPEG/PNG/WebP/GIF，单文件最大 5MB。
+- 新任务上传只完成账户、日期、数量、MIME、大小和魔数校验，快速返回 HTTP 202；Vision 不占用原始 HTTP 请求。
+- 全服务全局只有一个阻塞槽，持仓/成交和所有账户共享。阻塞状态：`pending/processing/cancel_requested/review_required/committing`。
+- 重复提交返回 HTTP 409 `portfolio_image_task_active`、`existing_task_id/existing_status`，不得启动第二次 Vision。
+- 正常状态：`pending -> processing -> review_required -> committing -> committed(清除)`；全部文件失败进入 `failed`。
+- `review_required` 表示识别完成但未写账本，不按时间过期。确认导入或放弃后清除；服务重启自然丢失任务、草稿和槽位。
+- Web 首屏查询 current task，并用本地 task ID 识别服务重启后的 404；SSE 只触发 REST 刷新，不能作为权威状态真源。
+
+### 3.2 Vision 预算、顺序与取消
+
 - Vision 只使用显式 `VISION_MODEL`，兼容废弃别名 `OPENAI_VISION_MODEL`；不得使用 `LITELLM_MODEL` 文本主模型顶替。
-- 持仓初始化要求账户无任何交易，提交 `symbol/name/quantity/avg_cost`，生成费用和税费为 0 的期初买入；资金汇总不入账。
-- 成交提交接受可空 `trade_time`、非负 `fee/tax` 和稳定 `occurrence_index`；前端不得提交或信任客户端生成的 fingerprint/hash。
-- 同一指纹的多笔成交必须显式提交不同 `occurrence_index`；批内重复 occurrence 表示重叠冲突未解决，后端必须拒绝，不能自动递增掩盖歧义。
-- 成交插入、账本重放、卖出可用量校验和列表查询统一按 `trade_date -> 已知 trade_time -> null time -> stable id/input order` 排序；单笔卖出不得使用同日更晚成交的买入数量。
-- parse 只返回校对数据；commit 在单事务中重新校验重复、顺序、超卖和账户条件。原图、base64、raw model response 不持久化、不写普通日志。
-- Web 编辑识别错误行后必须按当前字段重算 editable issues/status；`not_executed_trade` 等不可通过字段编辑修复的业务错误继续阻断，跨图 conflict 仍需显式合并或保留。
+- 单次调用 timeout 为 300 秒；每张最多 2 次，只对 timeout/connection 类瞬时错误重试一次。
+- rate limit、鉴权失败、模型不支持图片、无效图片、空响应和格式错误不重试，并使用低敏稳定错误码。
+- 1-5 张图片按上传顺序串行；整批 deadline 为 60 分钟，达到上限后不启动下一张，当前调用收敛后任务失败。
+- `pending/processing -> cancel_requested -> cancelled`。阻塞上游调用不保证强杀；取消确认前继续占槽，迟到结果不得进入 review。
+- `review_required` 使用 discard，不称为取消；失败图片不能在原 task 原位重试。
+
+### 3.3 草稿与提交
+
+- 至少一张成功才进入 `review_required`；部分失败保留成功行和失败文件，失败文件必须标记 removed 后才能 commit。
+- 服务端草稿只保存结构化 files/positions/trades，不保存原图、base64 或模型原始响应。
+- 草稿使用单调递增 `draft_revision`。PATCH 和 commit 都必须携带 `expected_revision`；不一致返回 409 `portfolio_image_draft_conflict`。
+- 草稿自动保存必须串行；保存进行中产生的新编辑不能被旧保存结果标记为已保存或覆盖。
+- commit 校验当前 task、mode、account_id、batch_id、日期和 revision；旧标签页不得提交新版本草稿。
+- commit 失败恢复 `review_required` 并保留草稿；成功后只写一次并清除任务。
+- 内存草稿不绕过现有账本事务：持仓初始化要求账户无交易；成交仍重新校验重复 occurrence、顺序、超卖和写锁。
+
+### 3.4 数据与隐私
+
+- 持仓初始化只提交 `symbol/name/quantity/avg_cost`，生成 fee/tax=0 的期初买入；资金汇总不入账。
+- 成交提交接受可空 `trade_time`、非负 `fee/tax` 和稳定 `occurrence_index`；客户端 fingerprint/hash 不可信。
+- 成交插入、账本重放、超卖校验和列表查询统一按 `trade_date -> known trade_time -> null -> stable order`。
+- 日志只记录 task_id、mode、account_id、文件序号、尝试、状态和低敏错误码；不得记录原图、base64、完整 prompt、模型响应、Key、Authorization 或 provider body。
+- 客户端 Axios `ECONNABORTED` 必须与服务端 Vision timeout 分开提示。
 
 ## 4. Validation & Error Matrix
 
 | 条件 | 结果 |
 | --- | --- |
+| 已有阻塞图片任务 | 409 `portfolio_image_task_active` + existing task |
+| task 不存在/服务重启 | 404 `portfolio_image_task_not_found` |
+| 草稿或 commit revision 过期 | 409 `portfolio_image_draft_conflict` |
+| 状态/mode/account/batch/date 不匹配 | 409 `portfolio_image_task_state_conflict` |
+| 整批超过 60 分钟 | `failed/portfolio_image_task_timeout` |
 | 未配置 Vision / 缺 provider key | `vision_not_configured` |
-| Hermes route 或不支持的图片 | `vision_unsupported` / `unsupported_type` / `invalid_image` |
-| 超过 5 张 / 单图超过 5MB | `too_many_files` / `file_too_large` |
-| 持仓账户已有交易 | HTTP 409 `account_not_empty`，零写入 |
-| 跨图同指纹未决 | Web 禁止提交，用户选择合并或保留 |
-| 同指纹批内 occurrence 重复 | HTTP 400 `validation_error`，零写入 |
-| 时间线顺序歧义 / 超卖 | HTTP 409 `ambiguous_trade_order` / `portfolio_oversell`，整批回滚 |
-| SQLite 写锁冲突 | HTTP 409 `portfolio_busy` |
+| 上游 timeout / 网络 / 限流 / 鉴权 | `vision_timeout` / `vision_network_error` / `vision_rate_limited` / `vision_auth_failed` |
+| 模型不支持图片 / 非法文件 | `vision_unsupported` / `unsupported_type` / `invalid_image` |
+| 持仓账户已有交易 | HTTP 409 `account_not_empty`，草稿保留、零写入 |
+| 时间线歧义 / 超卖 / 写锁 | 409 `ambiguous_trade_order` / `portfolio_oversell` / `portfolio_busy`，草稿保留 |
 
 ## 5. Good / Base / Bad Cases
 
-- Good：两张成交图存在同秒合法分笔，用户选择保留多笔后 occurrence 连续编号并原子写入。
-- Good：请求中先出现 10:02 卖出、后出现 10:01 买入，提交按成交时间插入，列表倒序展示，快照按 10:01 -> 10:02 重放。
-- Base：旧交易 `trade_time=null`，API 返回 `null`，Web 只显示日期，手工录入与 CSV 不受影响。
-- Bad：前端把顶部总资产转换成现金流水，提交模型返回的 dedup hash，或让后端把两条 occurrence=1 的相同成交静默改成 1/2。
+- Good：Vision 运行超过浏览器原 30 秒阈值，Web 仍可关闭抽屉并从横幅/刷新恢复同一任务。
+- Good：两个标签页同时编辑，旧 revision 保存/提交得到 409，不覆盖新草稿。
+- Good：取消发生在第 1 张上游调用中；调用返回后不启动第 2 张，迟到结果不进入 review。
+- Base：单图成功进入 review，确认提交后原子写入并清除 current task。
+- Base：旧同步 parse 保持成功响应，但运行期间占用同一全局槽。
+- Bad：Web 仍调用同步 parse 或为图片请求单纯放大 Axios timeout。
+- Bad：失败/取消后迟到 worker 覆盖终态，或 `review_required` 自动 TTL 清理。
+- Bad：草稿保存并发发送相同 revision，旧响应把后续编辑误标为已保存。
+- Bad：通过不带 task_id 的旧 commit 绕过正在等待校对的异步任务。
 
 ## 6. Tests Required
 
-- 后端：`tests/test_vision_extraction_service.py`、`tests/test_portfolio_screenshot_import_service.py`、`tests/test_portfolio_api.py`、`tests/test_portfolio_service.py`、`tests/test_storage.py`；必须覆盖重复 occurrence 拒绝、请求顺序与成交时间相反时的真实快照、同日更晚买入不能支持更早卖出。
-- Web：API multipart/JSON/snake-case 映射；Dialog 两模式、逐图失败、错误字段编辑后重校验、删除、冲突、未来日期和提交禁用；PortfolioPage 刷新 snapshot/risk/trades 与可空时间显示。
-- 可视：桌面/390px 移动视口验证文件列表、错误、review 行和 footer；截图只作 PR/外部证据，不入库。
+- 后端：
+  - `tests/test_vision_extraction_service.py`
+  - `tests/test_portfolio_screenshot_import_service.py`
+  - `tests/test_portfolio_image_task_manager.py`
+  - `tests/test_portfolio_api.py`
+  - `tests/test_analysis_api_contract.py`
+- 必须覆盖：202、全局防重、状态转移、部分/全部失败、300 秒/两次尝试、错误重试矩阵、60 分钟 deadline、取消迟到结果、draft revision、两阶段 commit、旧 API 兼容、SSE 事件隔离。
+- Web：API snake/camel 映射、任务恢复横幅、SSE 后 REST 刷新、关闭抽屉继续执行、草稿串行防抖保存、revision 冲突、取消/放弃/commit、服务重启提示。
+- 可视：桌面和 390px 移动视口验证任务横幅、文件进度、review 行和 footer；截图只作 PR 外部证据，不入库。
 
 ## 7. Wrong vs Correct
 
-### Wrong
+### Wrong：用同步请求或单纯放大 Axios timeout 等待 Vision
 
-```ts
-await apiClient.post('/positions/commit', parsedResponse);
+```typescript
+const parsed = await parsePositionImages(formData, { timeout: 300_000 })
+setDraft(parsed)
 ```
 
-这会提交 summary、状态和客户端 hash，并绕过用户校对边界。
+长请求仍会被浏览器、反向代理或网络切换中断，刷新后也没有可恢复的服务端任务。
 
-### Correct
+### Correct：快速创建任务，SSE 只通知，REST 恢复权威快照
 
-```ts
-await portfolioApi.commitPositionImages({
-  batchId,
-  accountId,
-  snapshotDate,
-  positions: reviewedRows.map(({ symbol, name, quantity, avgCost }) => ({
-    symbol,
-    name,
-    quantity,
-    avgCost,
-  })),
-});
+```typescript
+const accepted = await createPositionImageTask(formData)
+rememberTaskId(accepted.taskId)
+
+// portfolio_image_task_updated 只触发刷新；完整状态始终来自 REST。
+const task = await getPortfolioImageTask(accepted.taskId)
 ```
 
-后端仍必须重新校验并在一个事务中写入。
+### Wrong：多个防抖 PATCH 并发复用同一 revision
+
+```typescript
+void saveDraft({ expectedRevision: revision, draft: firstEdit })
+void saveDraft({ expectedRevision: revision, draft: secondEdit })
+```
+
+旧响应可能覆盖或误标后续编辑；两个标签页也无法可靠识别过期版本。
+
+### Correct：完整草稿严格串行保存，并用服务端新 revision 推进
+
+```typescript
+await saveDraft({ expectedRevision: revision, draft: latestDraft })
+revision = response.draftRevision
+
+if (editedWhileSaving) {
+  await saveLatestDraftSerially()
+}
+```
+
+收到 `portfolio_image_draft_conflict` 后必须停止自动保存并重新加载权威草稿，不能静默重试覆盖。

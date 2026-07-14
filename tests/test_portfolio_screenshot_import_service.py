@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
@@ -21,6 +22,8 @@ from src.services.portfolio_screenshot_import_service import (
     AccountNotEmptyError,
     AmbiguousTradeOrderError,
     ImageInput,
+    PortfolioImageBatchTimeoutError,
+    PortfolioImageProcessingCancelled,
     PortfolioScreenshotImportService,
     build_trade_dedup_hash,
     build_trade_fingerprint,
@@ -236,6 +239,70 @@ class PortfolioScreenshotImportServiceTestCase(unittest.TestCase):
         self.assertEqual(result["files"][1]["status"], "failed")
         self.assertEqual(result["files"][1]["error"], "vision_failed")
         self.assertNotIn("vision timeout", json.dumps(result, ensure_ascii=False))
+
+    def test_position_parse_emits_file_and_attempt_progress_with_deadline(self) -> None:
+        events: list[dict] = []
+        seen_kwargs: dict = {}
+
+        def complete(*_args, **kwargs):
+            seen_kwargs.update(kwargs)
+            kwargs["attempt_callback"](1, 2)
+            return self._position_response()
+
+        service = PortfolioScreenshotImportService(
+            portfolio_service=self.portfolio_service,
+            vision_complete=complete,
+        )
+        deadline = time.monotonic() + 60
+
+        result = service.parse_position_images(
+            account_id=self.account["id"],
+            snapshot_date=date.today(),
+            images=[self._image()],
+            progress_callback=events.append,
+            deadline_monotonic=deadline,
+        )
+
+        self.assertEqual(result["files"][0]["status"], "success")
+        self.assertEqual([event["phase"] for event in events], ["file_started", "attempt", "file_completed"])
+        self.assertEqual(seen_kwargs["deadline_monotonic"], deadline)
+
+    def test_position_parse_stops_before_next_image_after_cancel_request(self) -> None:
+        completion = MagicMock(return_value=self._position_response())
+        service = PortfolioScreenshotImportService(
+            portfolio_service=self.portfolio_service,
+            vision_complete=completion,
+        )
+        cancelled = False
+
+        def on_progress(event: dict) -> None:
+            nonlocal cancelled
+            if event["phase"] == "file_completed":
+                cancelled = True
+
+        with self.assertRaises(PortfolioImageProcessingCancelled):
+            service.parse_position_images(
+                account_id=self.account["id"],
+                snapshot_date=date.today(),
+                images=[self._image(0), self._image(1)],
+                progress_callback=on_progress,
+                cancel_requested=lambda: cancelled,
+            )
+
+        self.assertEqual(completion.call_count, 1)
+
+    def test_position_parse_rejects_expired_batch_deadline_before_vision(self) -> None:
+        service, completion = self._service(self._position_response())
+
+        with self.assertRaises(PortfolioImageBatchTimeoutError):
+            service.parse_position_images(
+                account_id=self.account["id"],
+                snapshot_date=date.today(),
+                images=[self._image()],
+                deadline_monotonic=time.monotonic() - 1,
+            )
+
+        completion.assert_not_called()
 
     def test_position_parse_rejects_invalid_batch_account_and_date(self) -> None:
         service, completion = self._service(self._position_response())

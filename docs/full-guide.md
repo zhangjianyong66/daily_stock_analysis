@@ -1333,14 +1333,27 @@ Web 持仓页在选中具体的活跃 `cn/CNY` 账户后提供“图片导入”
 - **持仓初始化**：仅用于没有任何交易流水的账户。快照日期默认当天、禁止未来日期；逐行导入 6 位证券代码、名称、持仓数量和平均成本，并生成费用、税费均为 0 的期初买入。页面顶部总资产、可用资金、可取资金、总市值、仓位和盈亏仅作校对参考，不导入资金账本。
 - **成交增量**：向已有账户导入“当日成交”“历史成交”或交割单中的实际成交，不接受委托、撤单或未成交记录。行内日期优先，否则使用批次日期；成交时间可空，有值时精确到秒展示。截图未提供手续费或税费时默认 0，允许校对时修改，系统不会按费率猜测。
 
-每批支持 1-5 张 JPEG、PNG、WebP 或 GIF，单文件最大 5MB。失败图片必须重试或移除；字段错误和跨图重复冲突必须解决后才能提交。存在成交编号时优先按编号去重；缺少编号时按可见字段做 best-effort 指纹去重，同一图片内的合法同秒分笔可保留，跨图片相同记录需明确选择合并一笔或保留多笔。
+每批支持 1-5 张 JPEG、PNG、WebP 或 GIF，单文件最大 5MB。上传接口只做账户、日期和文件校验，随后立即返回 HTTP 202 与 `task_id`；Vision 在进程内单 worker 后台串行执行，因此普通 Web 请求不会被图片识别占住。整个服务同时只允许一个持仓/成交图片任务或待校对草稿，重复提交返回现有 `task_id`，不会触发第二次 Vision 调用。
 
-解析与提交分离，提交端会重新校验账户、字段、重复、交易顺序和超卖约束，并在单个事务中原子写入。原图、base64、模型原始响应和完整资产明细不会写入数据库或普通日志。相关接口为：
+页面顶部会常驻显示当前任务。关闭抽屉、刷新页面、SSE 断线或切换标签页后，前端都会通过 REST 恢复权威状态；SSE 只负责通知状态变化。`review_required` 表示“识别完成、等待校对”，不是“导入完成”，在确认导入或主动放弃前不会自动过期。服务重启会清空进程内任务和草稿，页面会提示重新提交。
 
-- `POST /api/v1/portfolio/imports/images/positions/parse`
+Vision 单次调用上限为 300 秒，每张图片最多尝试 2 次，只对 timeout/connection 等瞬时网络错误重试一次；rate limit、鉴权失败、不支持图片、无效图片、空响应和格式错误不重试。整批运行上限为 60 分钟。运行中可尽力取消：当前上游调用返回后停止后续图片；进入校对阶段后使用“放弃本次识别”。失败图片不能在原任务内重新上传，移除后可继续校对，或放弃整批后重新创建任务。
+
+字段错误和跨图重复冲突必须解决后才能提交。存在成交编号时优先按编号去重；缺少编号时按可见字段做 best-effort 指纹去重，同一图片内的合法同秒分笔可保留，跨图片相同记录需明确选择合并一笔或保留多笔。校对草稿保存在服务端内存并使用单调递增的 `draft_revision`；多标签页旧版本保存或提交会返回 409，禁止静默覆盖新草稿。
+
+识别与提交分离，提交端会重新校验任务、草稿 revision、账户、字段、重复、交易顺序和超卖约束，并在单个事务中原子写入。原图、base64 和模型原始响应不会写入数据库或普通日志。主要接口为：
+
+- `POST /api/v1/portfolio/imports/images/positions/tasks`
+- `POST /api/v1/portfolio/imports/images/trades/tasks`
+- `GET /api/v1/portfolio/imports/images/tasks/current`
+- `GET /api/v1/portfolio/imports/images/tasks/{task_id}`
+- `PATCH /api/v1/portfolio/imports/images/tasks/{task_id}/draft`
+- `POST /api/v1/portfolio/imports/images/tasks/{task_id}/cancel`
+- `DELETE /api/v1/portfolio/imports/images/tasks/{task_id}`
 - `POST /api/v1/portfolio/imports/images/positions/commit`
-- `POST /api/v1/portfolio/imports/images/trades/parse`
 - `POST /api/v1/portfolio/imports/images/trades/commit`
+
+旧的 `positions/parse` 与 `trades/parse` 同步接口仍保留并标记 deprecated，使用线程池且共享同一全局任务槽；Web 新流程只使用异步任务 API。
 
 ### 调试模式
 
@@ -1563,10 +1576,16 @@ FastAPI 提供 RESTful API 服务，支持配置管理和触发分析。
 | `/api/v1/backtest/results` | GET | 查询回测结果（分页） |
 | `/api/v1/backtest/performance` | GET | 获取整体回测表现 |
 | `/api/v1/backtest/performance/{code}` | GET | 获取单股回测表现 |
-| `/api/v1/portfolio/imports/images/positions/parse` | POST | 解析 1-5 张持仓截图并返回逐图状态与可编辑预览 |
-| `/api/v1/portfolio/imports/images/positions/commit` | POST | 向空 `cn/CNY` 账户原子提交校对后的期初持仓 |
-| `/api/v1/portfolio/imports/images/trades/parse` | POST | 解析 1-5 张实际成交截图并返回去重与冲突预览 |
-| `/api/v1/portfolio/imports/images/trades/commit` | POST | 向 `cn/CNY` 账户原子提交校对后的成交增量 |
+| `/api/v1/portfolio/imports/images/positions/tasks` | POST | 校验并创建持仓截图异步任务，返回 HTTP 202 与 `task_id` |
+| `/api/v1/portfolio/imports/images/trades/tasks` | POST | 校验并创建成交截图异步任务，返回 HTTP 202 与 `task_id` |
+| `/api/v1/portfolio/imports/images/tasks/current` | GET | 查询当前图片任务或待校对草稿 |
+| `/api/v1/portfolio/imports/images/tasks/{task_id}` | GET | 查询图片任务权威状态、文件进度与草稿 |
+| `/api/v1/portfolio/imports/images/tasks/{task_id}/draft` | PATCH | 使用 `expected_revision` 保存完整校对草稿 |
+| `/api/v1/portfolio/imports/images/tasks/{task_id}/cancel` | POST | 尽力取消 pending/processing 图片任务 |
+| `/api/v1/portfolio/imports/images/tasks/{task_id}` | DELETE | 放弃待校对结果或清除失败/取消任务 |
+| `/api/v1/portfolio/imports/images/positions/commit` | POST | 使用可选 `task_id/expected_revision` 原子提交期初持仓 |
+| `/api/v1/portfolio/imports/images/trades/commit` | POST | 使用可选 `task_id/expected_revision` 原子提交成交增量 |
+| `/api/v1/portfolio/imports/images/{positions\|trades}/parse` | POST | deprecated 同步兼容接口；与异步任务共享全局槽位和识别编排 |
 | `/api/v1/stocks/extract-from-image` | POST | 从图片提取股票代码（multipart，超时 60s） |
 | `/api/v1/stocks/parse-import` | POST | 解析 CSV/Excel/剪贴板（multipart file 或 JSON `{"text":"..."}`，文件≤2MB，文本≤100KB） |
 | `/api/health` | GET | 健康检查 |

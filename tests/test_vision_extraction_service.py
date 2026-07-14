@@ -137,20 +137,68 @@ def test_complete_vision_builds_request_with_prompt_timeout_and_api_base() -> No
     assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
 
 
-def test_complete_vision_retries_three_times_then_returns() -> None:
+def test_complete_vision_retries_transient_error_once_then_returns() -> None:
     cfg = _cfg(vision_model="gemini/gemini-2.0-flash", gemini_api_keys=[_GEMINI_KEY])
     response = SimpleNamespace(
         choices=[SimpleNamespace(message=SimpleNamespace(content="[]"))]
     )
-    completion = MagicMock(side_effect=[RuntimeError("one"), RuntimeError("two"), response])
+    completion = MagicMock(side_effect=[TimeoutError("read timeout"), response])
 
     with patch("src.services.vision_extraction_service.get_config", return_value=cfg), patch(
         "src.services.vision_extraction_service.litellm.completion", completion
     ), patch("src.services.vision_extraction_service.time.sleep") as mock_sleep:
         assert complete_vision(_image_bytes("image/jpeg"), "image/jpeg", "return []") == "[]"
 
-    assert completion.call_count == 3
-    assert [call.args[0] for call in mock_sleep.call_args_list] == [1, 2]
+    assert completion.call_count == 2
+    assert [call.args[0] for call in mock_sleep.call_args_list] == [1]
+
+
+@pytest.mark.parametrize(
+    ("provider_error", "expected_code"),
+    [
+        (RuntimeError("rate limit 429"), "vision_rate_limited"),
+        (RuntimeError("authentication failed"), "vision_auth_failed"),
+        (RuntimeError("unsupported image input"), "vision_unsupported"),
+        (RuntimeError("LiteLLM vision returned empty response"), "vision_failed"),
+        (RuntimeError("invalid JSON response"), "vision_failed"),
+    ],
+)
+def test_complete_vision_does_not_retry_deterministic_errors(
+    provider_error: Exception,
+    expected_code: str,
+) -> None:
+    cfg = _cfg(vision_model="openai/gpt-4o-mini", openai_api_keys=[_OPENAI_KEY])
+    completion = MagicMock(side_effect=provider_error)
+
+    with patch("src.services.vision_extraction_service.get_config", return_value=cfg), patch(
+        "src.services.vision_extraction_service.litellm.completion", completion
+    ), patch("src.services.vision_extraction_service.time.sleep") as mock_sleep:
+        with pytest.raises(ValueError) as exc_info:
+            complete_vision(_image_bytes("image/jpeg"), "image/jpeg", "return []")
+
+    assert completion.call_count == 1
+    mock_sleep.assert_not_called()
+    assert getattr(exc_info.value, "code", None) == expected_code
+
+
+def test_complete_vision_reports_attempts_and_uses_remaining_deadline() -> None:
+    cfg = _cfg(vision_model="openai/gpt-4o-mini", openai_api_keys=[_OPENAI_KEY])
+    response = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="[]"))])
+    attempts: list[tuple[int, int]] = []
+
+    with patch("src.services.vision_extraction_service.get_config", return_value=cfg), patch(
+        "src.services.vision_extraction_service.litellm.completion", return_value=response
+    ) as completion, patch("src.services.vision_extraction_service.time.monotonic", return_value=100.0):
+        assert complete_vision(
+            _image_bytes("image/png"),
+            "image/png",
+            "return []",
+            attempt_callback=lambda attempt, maximum: attempts.append((attempt, maximum)),
+            deadline_monotonic=112.5,
+        ) == "[]"
+
+    assert attempts == [(1, 2)]
+    assert completion.call_args.kwargs["timeout"] == 12.5
 
 
 def test_complete_vision_rejects_hermes_route_before_calling_model() -> None:

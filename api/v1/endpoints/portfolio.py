@@ -9,6 +9,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from api.v1.errors import api_error
 from api.v1.schemas.analysis import DuplicateTaskErrorResponse, TaskAccepted
@@ -30,6 +31,10 @@ from api.v1.schemas.portfolio import (
     PortfolioImportParseResponse,
     PortfolioImportTradeItem,
     PortfolioImageImportCommitResponse,
+    PortfolioImageDraftUpdateRequest,
+    PortfolioImageTaskAccepted,
+    PortfolioImageTaskCurrentResponse,
+    PortfolioImageTaskSnapshot,
     PortfolioPositionImageCommitRequest,
     PortfolioPositionImageParseResponse,
     PortfolioTradeImageCommitRequest,
@@ -41,6 +46,13 @@ from api.v1.schemas.portfolio import (
     PortfolioTradeCreateRequest,
 )
 from src.services.task_queue import get_task_queue
+from src.services.portfolio_image_task_manager import (
+    PortfolioImageDraftConflictError,
+    PortfolioImageTaskActiveError,
+    PortfolioImageTaskError,
+    PortfolioImageTaskNotFoundError,
+    get_portfolio_image_task_manager,
+)
 from src.services.portfolio_import_service import PortfolioImportService
 from src.services.portfolio_risk_service import PortfolioRiskService
 from src.services.portfolio_screenshot_import_service import (
@@ -55,6 +67,7 @@ from src.services.portfolio_service import (
     PortfolioOversellError,
     PortfolioService,
 )
+from src.services.vision_extraction_service import VisionExtractionError
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +90,32 @@ def _conflict_error(*, error: str, message: str) -> HTTPException:
 def _screenshot_internal_error(message: str, exc: Exception) -> HTTPException:
     logger.error("%s (%s)", message, type(exc).__name__, exc_info=True)
     return api_error(500, "internal_error", message)
+
+
+def _portfolio_image_task_http_error(exc: PortfolioImageTaskError) -> HTTPException:
+    if isinstance(exc, PortfolioImageTaskNotFoundError):
+        return api_error(404, exc.code, str(exc))
+    detail = None
+    if isinstance(exc, PortfolioImageDraftConflictError):
+        detail = {"current_revision": exc.current_revision}
+    elif isinstance(exc, PortfolioImageTaskActiveError):
+        detail = {
+            "existing_task_id": exc.existing_task_id,
+            "existing_status": exc.existing_status,
+        }
+    return api_error(409, exc.code, str(exc), detail=detail)
+
+
+def _active_image_task_response(exc: PortfolioImageTaskActiveError) -> JSONResponse:
+    return JSONResponse(
+        status_code=409,
+        content={
+            "error": exc.code,
+            "message": str(exc),
+            "existing_task_id": exc.existing_task_id,
+            "existing_status": exc.existing_status,
+        },
+    )
 
 
 async def _read_image_inputs(files: List[UploadFile]) -> List[ImageInput]:
@@ -589,26 +628,181 @@ def _resolve_position_analysis_context(
     }
 
 
+def _accepted_image_task(snapshot: dict) -> PortfolioImageTaskAccepted:
+    return PortfolioImageTaskAccepted(**snapshot)
+
+
+@router.post(
+    "/imports/images/positions/tasks",
+    status_code=202,
+    response_model=PortfolioImageTaskAccepted,
+    responses={400: {"model": ErrorResponse}, 409: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    summary="Submit an asynchronous position screenshot task",
+)
+async def submit_position_image_task(
+    account_id: int = Form(...),
+    snapshot_date: date = Form(...),
+    files: List[UploadFile] = File(...),
+) -> PortfolioImageTaskAccepted | JSONResponse:
+    service = PortfolioScreenshotImportService()
+    try:
+        images = await _read_image_inputs(files)
+        snapshot = get_portfolio_image_task_manager().submit_task(
+            mode="positions",
+            account_id=account_id,
+            date_value=snapshot_date,
+            images=images,
+            service=service,
+        )
+        return _accepted_image_task(snapshot)
+    except PortfolioImageTaskActiveError as exc:
+        return _active_image_task_response(exc)
+    except HTTPException:
+        raise
+    except VisionExtractionError as exc:
+        raise api_error(400, exc.code, str(exc))
+    except ValueError as exc:
+        raise _bad_request(exc)
+    except Exception as exc:
+        raise _screenshot_internal_error("Submit position screenshot task failed", exc)
+
+
+@router.post(
+    "/imports/images/trades/tasks",
+    status_code=202,
+    response_model=PortfolioImageTaskAccepted,
+    responses={400: {"model": ErrorResponse}, 409: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    summary="Submit an asynchronous executed-trade screenshot task",
+)
+async def submit_trade_image_task(
+    account_id: int = Form(...),
+    default_trade_date: date = Form(...),
+    files: List[UploadFile] = File(...),
+) -> PortfolioImageTaskAccepted | JSONResponse:
+    service = PortfolioScreenshotImportService()
+    try:
+        images = await _read_image_inputs(files)
+        snapshot = get_portfolio_image_task_manager().submit_task(
+            mode="trades",
+            account_id=account_id,
+            date_value=default_trade_date,
+            images=images,
+            service=service,
+        )
+        return _accepted_image_task(snapshot)
+    except PortfolioImageTaskActiveError as exc:
+        return _active_image_task_response(exc)
+    except HTTPException:
+        raise
+    except VisionExtractionError as exc:
+        raise api_error(400, exc.code, str(exc))
+    except ValueError as exc:
+        raise _bad_request(exc)
+    except Exception as exc:
+        raise _screenshot_internal_error("Submit trade screenshot task failed", exc)
+
+
+@router.get(
+    "/imports/images/tasks/current",
+    response_model=PortfolioImageTaskCurrentResponse,
+    responses={500: {"model": ErrorResponse}},
+    summary="Get the current portfolio image task",
+)
+def get_current_image_task() -> PortfolioImageTaskCurrentResponse:
+    return PortfolioImageTaskCurrentResponse(task=get_portfolio_image_task_manager().get_current_task())
+
+
+@router.get(
+    "/imports/images/tasks/{task_id}",
+    response_model=PortfolioImageTaskSnapshot,
+    responses={404: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    summary="Get a portfolio image task",
+)
+def get_image_task(task_id: str) -> PortfolioImageTaskSnapshot:
+    try:
+        return PortfolioImageTaskSnapshot(**get_portfolio_image_task_manager().get_task(task_id))
+    except PortfolioImageTaskError as exc:
+        raise _portfolio_image_task_http_error(exc)
+
+
+@router.patch(
+    "/imports/images/tasks/{task_id}/draft",
+    response_model=PortfolioImageTaskSnapshot,
+    responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    summary="Replace the reviewed portfolio image draft",
+)
+def update_image_task_draft(
+    task_id: str,
+    request: PortfolioImageDraftUpdateRequest,
+) -> PortfolioImageTaskSnapshot:
+    try:
+        snapshot = get_portfolio_image_task_manager().update_draft(
+            task_id,
+            expected_revision=request.expected_revision,
+            files=[item.model_dump() for item in request.files],
+            positions=[item.model_dump() for item in request.positions] if request.positions is not None else None,
+            trades=[item.model_dump() for item in request.trades] if request.trades is not None else None,
+        )
+        return PortfolioImageTaskSnapshot(**snapshot)
+    except PortfolioImageTaskError as exc:
+        raise _portfolio_image_task_http_error(exc)
+
+
+@router.post(
+    "/imports/images/tasks/{task_id}/cancel",
+    response_model=PortfolioImageTaskSnapshot,
+    responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    summary="Request cancellation of a running portfolio image task",
+)
+def cancel_image_task(task_id: str) -> PortfolioImageTaskSnapshot:
+    try:
+        return PortfolioImageTaskSnapshot(**get_portfolio_image_task_manager().cancel_task(task_id))
+    except PortfolioImageTaskError as exc:
+        raise _portfolio_image_task_http_error(exc)
+
+
+@router.delete(
+    "/imports/images/tasks/{task_id}",
+    response_model=PortfolioDeleteResponse,
+    responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    summary="Discard or clear a portfolio image task",
+)
+def discard_image_task(task_id: str) -> PortfolioDeleteResponse:
+    try:
+        get_portfolio_image_task_manager().discard_task(task_id)
+        return PortfolioDeleteResponse(deleted=1)
+    except PortfolioImageTaskError as exc:
+        raise _portfolio_image_task_http_error(exc)
+
+
 @router.post(
     "/imports/images/positions/parse",
     response_model=PortfolioPositionImageParseResponse,
-    responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    responses={400: {"model": ErrorResponse}, 409: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
     summary="Parse position screenshots for user review",
+    deprecated=True,
 )
 async def parse_position_images(
     account_id: int = Form(...),
     snapshot_date: date = Form(...),
     files: List[UploadFile] = File(...),
-) -> PortfolioPositionImageParseResponse:
+) -> PortfolioPositionImageParseResponse | JSONResponse:
     service = PortfolioScreenshotImportService()
     try:
         images = await _read_image_inputs(files)
-        result = service.parse_position_images(
+        result = await run_in_threadpool(
+            get_portfolio_image_task_manager().run_sync_parse,
+            mode="positions",
             account_id=account_id,
-            snapshot_date=snapshot_date,
+            date_value=snapshot_date,
             images=images,
+            service=service,
         )
         return PortfolioPositionImageParseResponse(**result)
+    except PortfolioImageTaskActiveError as exc:
+        return _active_image_task_response(exc)
+    except PortfolioImageTaskError as exc:
+        raise _portfolio_image_task_http_error(exc)
     except HTTPException:
         raise
     except ValueError as exc:
@@ -620,23 +814,31 @@ async def parse_position_images(
 @router.post(
     "/imports/images/trades/parse",
     response_model=PortfolioTradeImageParseResponse,
-    responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    responses={400: {"model": ErrorResponse}, 409: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
     summary="Parse executed-trade screenshots for user review",
+    deprecated=True,
 )
 async def parse_trade_images(
     account_id: int = Form(...),
     default_trade_date: date = Form(...),
     files: List[UploadFile] = File(...),
-) -> PortfolioTradeImageParseResponse:
+) -> PortfolioTradeImageParseResponse | JSONResponse:
     service = PortfolioScreenshotImportService()
     try:
         images = await _read_image_inputs(files)
-        result = service.parse_trade_images(
+        result = await run_in_threadpool(
+            get_portfolio_image_task_manager().run_sync_parse,
+            mode="trades",
             account_id=account_id,
-            default_trade_date=default_trade_date,
+            date_value=default_trade_date,
             images=images,
+            service=service,
         )
         return PortfolioTradeImageParseResponse(**result)
+    except PortfolioImageTaskActiveError as exc:
+        return _active_image_task_response(exc)
+    except PortfolioImageTaskError as exc:
+        raise _portfolio_image_task_http_error(exc)
     except HTTPException:
         raise
     except ValueError as exc:
@@ -655,21 +857,49 @@ def commit_position_images(
     request: PortfolioPositionImageCommitRequest,
 ) -> PortfolioImageImportCommitResponse:
     service = PortfolioScreenshotImportService()
+    task_manager = get_portfolio_image_task_manager()
+    commit_started = False
     try:
+        if request.task_id:
+            task_manager.begin_commit(
+                request.task_id,
+                mode="positions",
+                account_id=request.account_id,
+                batch_id=request.batch_id,
+                expected_revision=request.expected_revision,
+                date_value=request.snapshot_date,
+            )
+            commit_started = True
+        else:
+            task_manager.ensure_legacy_commit_allowed()
         result = service.commit_initial_positions(
             account_id=request.account_id,
             batch_id=request.batch_id,
             snapshot_date=request.snapshot_date,
             positions=[item.model_dump() for item in request.positions],
         )
+        if commit_started and request.task_id:
+            task_manager.finish_commit(request.task_id)
         return PortfolioImageImportCommitResponse(**result)
+    except PortfolioImageTaskError as exc:
+        if commit_started and request.task_id:
+            task_manager.rollback_commit(request.task_id)
+        raise _portfolio_image_task_http_error(exc)
     except AccountNotEmptyError as exc:
+        if commit_started and request.task_id:
+            task_manager.rollback_commit(request.task_id)
         raise _conflict_error(error="account_not_empty", message=str(exc))
     except PortfolioBusyError as exc:
+        if commit_started and request.task_id:
+            task_manager.rollback_commit(request.task_id)
         raise _conflict_error(error="portfolio_busy", message=str(exc))
     except ValueError as exc:
+        if commit_started and request.task_id:
+            task_manager.rollback_commit(request.task_id)
         raise _bad_request(exc)
     except Exception as exc:
+        if commit_started and request.task_id:
+            task_manager.rollback_commit(request.task_id)
         raise _screenshot_internal_error("Commit position screenshots failed", exc)
 
 
@@ -683,22 +913,51 @@ def commit_trade_images(
     request: PortfolioTradeImageCommitRequest,
 ) -> PortfolioImageImportCommitResponse:
     service = PortfolioScreenshotImportService()
+    task_manager = get_portfolio_image_task_manager()
+    commit_started = False
     try:
+        if request.task_id:
+            task_manager.begin_commit(
+                request.task_id,
+                mode="trades",
+                account_id=request.account_id,
+                batch_id=request.batch_id,
+                expected_revision=request.expected_revision,
+            )
+            commit_started = True
+        else:
+            task_manager.ensure_legacy_commit_allowed()
         result = service.commit_trade_batch(
             account_id=request.account_id,
             batch_id=request.batch_id,
             trades=[item.model_dump() for item in request.trades],
         )
+        if commit_started and request.task_id:
+            task_manager.finish_commit(request.task_id)
         return PortfolioImageImportCommitResponse(**result)
+    except PortfolioImageTaskError as exc:
+        if commit_started and request.task_id:
+            task_manager.rollback_commit(request.task_id)
+        raise _portfolio_image_task_http_error(exc)
     except AmbiguousTradeOrderError as exc:
+        if commit_started and request.task_id:
+            task_manager.rollback_commit(request.task_id)
         raise _conflict_error(error="ambiguous_trade_order", message=str(exc))
     except PortfolioOversellError as exc:
+        if commit_started and request.task_id:
+            task_manager.rollback_commit(request.task_id)
         raise _conflict_error(error="portfolio_oversell", message=str(exc))
     except PortfolioBusyError as exc:
+        if commit_started and request.task_id:
+            task_manager.rollback_commit(request.task_id)
         raise _conflict_error(error="portfolio_busy", message=str(exc))
     except ValueError as exc:
+        if commit_started and request.task_id:
+            task_manager.rollback_commit(request.task_id)
         raise _bad_request(exc)
     except Exception as exc:
+        if commit_started and request.task_id:
+            task_manager.rollback_commit(request.task_id)
         raise _screenshot_internal_error("Commit trade screenshots failed", exc)
 
 

@@ -1379,10 +1379,16 @@ For this feature, the product behavior is:
 | `/api/v1/backtest/results` | GET | Query backtest results (paginated) |
 | `/api/v1/backtest/performance` | GET | Get overall backtest performance |
 | `/api/v1/backtest/performance/{code}` | GET | Get per-stock backtest performance |
-| `/api/v1/portfolio/imports/images/positions/parse` | POST | Parse 1-5 position screenshots into per-file status and editable rows |
-| `/api/v1/portfolio/imports/images/positions/commit` | POST | Atomically initialize an empty `cn/CNY` account from reviewed rows |
-| `/api/v1/portfolio/imports/images/trades/parse` | POST | Parse 1-5 executed-trade screenshots into deduplication and conflict review rows |
-| `/api/v1/portfolio/imports/images/trades/commit` | POST | Atomically append reviewed executed trades to a `cn/CNY` account |
+| `/api/v1/portfolio/imports/images/positions/tasks` | POST | Validate and create an asynchronous position-image task; returns HTTP 202 and `task_id` |
+| `/api/v1/portfolio/imports/images/trades/tasks` | POST | Validate and create an asynchronous trade-image task; returns HTTP 202 and `task_id` |
+| `/api/v1/portfolio/imports/images/tasks/current` | GET | Fetch the current image task or pending review draft |
+| `/api/v1/portfolio/imports/images/tasks/{task_id}` | GET | Fetch authoritative task status, file progress, and review draft |
+| `/api/v1/portfolio/imports/images/tasks/{task_id}/draft` | PATCH | Save the complete review draft with `expected_revision` |
+| `/api/v1/portfolio/imports/images/tasks/{task_id}/cancel` | POST | Request best-effort cancellation for pending/processing tasks |
+| `/api/v1/portfolio/imports/images/tasks/{task_id}` | DELETE | Discard a review draft or clear a failed/cancelled task |
+| `/api/v1/portfolio/imports/images/positions/commit` | POST | Atomically initialize positions; async clients include `task_id/expected_revision` |
+| `/api/v1/portfolio/imports/images/trades/commit` | POST | Atomically append trades; async clients include `task_id/expected_revision` |
+| `/api/v1/portfolio/imports/images/{positions\|trades}/parse` | POST | Deprecated synchronous compatibility endpoint sharing the global slot |
 | `/api/health` | GET | Health check |
 | `/docs` | GET | API Swagger documentation |
 
@@ -1517,9 +1523,14 @@ A: Check if Actions is enabled, and if cron expression is correct (note it's UTC
 
 - The Image Import command is available after selecting one active `cn/CNY` account. Position initialization requires an account with no existing trade rows; executed-trade import supports an existing account.
 - Snapshot date and batch date default to today and cannot be in the future. Executed-trade time is optional; when present, the trade list displays date and time to the second. Missing fees and taxes default to zero and remain editable. Cash, total assets, available funds, and other summary figures are never imported.
-- Each batch accepts 1-5 JPEG, PNG, WebP, or GIF files up to 5 MB each. Failed files must be retried or removed. Invalid rows and cross-image conflicts block submission until the user edits, deletes, merges, or explicitly keeps the rows.
+- Each batch accepts 1-5 JPEG, PNG, WebP, or GIF files up to 5 MB each. Submission validates the account, date, count, MIME type, size, and magic bytes, then returns HTTP 202 with a `task_id`; Vision runs in a single in-process background worker and no longer occupies the original browser request.
+- The service has one global image-task slot across position/trade modes and all accounts. A duplicate submission returns the existing task ID and does not invoke Vision again. The Portfolio page keeps a persistent task banner; closing the drawer, refreshing, changing tabs, or losing SSE can recover the authoritative snapshot through REST. `review_required` means recognition is complete but nothing has been written yet.
+- One Vision call is capped at 300 seconds. Each image gets at most two attempts, with one retry only for transient timeout/connection failures. Rate limits, authentication failures, unsupported image input, invalid files, empty responses, and malformed output are not retried. The batch deadline is 60 minutes.
+- Running tasks support best-effort cancellation: the current blocking provider call may finish, but no later image starts. Review drafts are explicitly discarded rather than cancelled. Failed images cannot be retried in place; remove them and continue reviewing, or discard the batch and create a new task.
+- The structured review draft is kept only in server memory and uses a monotonic `draft_revision`. Stale tabs receive HTTP 409 for draft updates or commit, preventing last-write-wins overwrites. Review drafts do not expire during the process lifetime; a service restart clears the task and the Web UI asks the user to resubmit.
+- Invalid rows and cross-image conflicts block submission until the user edits, deletes, merges, or explicitly keeps the rows.
 - Trade IDs are preferred for deduplication. Without one, the service uses a visible-field fingerprint as best-effort deduplication. Original images, base64 payloads, and raw model responses are not persisted or written to normal logs.
-- Parse and commit are separate operations. Commit revalidates the account, normalized fields, duplicates, chronological ledger replay, and oversell constraints, then writes the accepted batch atomically.
+- Recognition and commit are separate operations. Commit revalidates the task ID, draft revision, account, normalized fields, duplicates, chronological ledger replay, and oversell constraints, then writes the accepted batch atomically. The legacy synchronous `positions/parse` and `trades/parse` endpoints remain deprecated compatibility paths and share the same global slot and recognition orchestration; the Web UI uses only the asynchronous task API.
 
 ### Portfolio account archive on `/portfolio`
 

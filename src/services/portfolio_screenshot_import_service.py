@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import hashlib
 import re
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import date, time as dt_time
@@ -17,7 +18,7 @@ from pydantic import BaseModel, Field
 
 from src.repositories.portfolio_repo import PortfolioRepository
 from src.services.portfolio_service import EPS, PortfolioOversellError, PortfolioService
-from src.services.vision_extraction_service import complete_vision
+from src.services.vision_extraction_service import complete_vision, validate_image
 
 
 POSITION_EXTRACTION_PROMPT = """你正在识别中国券商 App 的当前持仓截图。
@@ -48,6 +49,14 @@ class AccountNotEmptyError(Exception):
 
 class AmbiguousTradeOrderError(Exception):
     """Raised when null same-day times make ledger validity order-dependent."""
+
+
+class PortfolioImageProcessingCancelled(Exception):
+    """Raised when an in-memory image task stops after a cancellation request."""
+
+
+class PortfolioImageBatchTimeoutError(Exception):
+    """Raised when an image batch reaches its overall runtime deadline."""
 
 
 @dataclass(frozen=True)
@@ -169,23 +178,55 @@ class PortfolioScreenshotImportService:
         account_id: int,
         snapshot_date: date,
         images: List[ImageInput],
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+        cancel_requested: Optional[Callable[[], bool]] = None,
+        deadline_monotonic: Optional[float] = None,
     ) -> Dict[str, Any]:
-        self._validate_image_batch(images)
-        self._validate_import_date(snapshot_date, field_name="snapshot_date")
-        self._require_cn_cny_account(account_id)
+        self.validate_position_images_request(
+            account_id=account_id,
+            snapshot_date=snapshot_date,
+            images=images,
+        )
 
         file_results: List[Dict[str, Any]] = []
         summary: Dict[str, Optional[float]] = {}
         positions: List[Dict[str, Any]] = []
 
         for file_index, image in enumerate(images):
+            self._guard_processing(cancel_requested=cancel_requested, deadline_monotonic=deadline_monotonic)
+            self._emit_progress(
+                progress_callback,
+                phase="file_started",
+                file_index=file_index,
+                total_files=len(images),
+            )
             try:
+                def _on_attempt(attempt: int, max_attempts: int) -> None:
+                    self._guard_processing(
+                        cancel_requested=cancel_requested,
+                        deadline_monotonic=deadline_monotonic,
+                    )
+                    self._emit_progress(
+                        progress_callback,
+                        phase="attempt",
+                        file_index=file_index,
+                        total_files=len(images),
+                        attempt=attempt,
+                        max_attempts=max_attempts,
+                    )
+
+                vision_kwargs: Dict[str, Any] = {"max_tokens": 2048}
+                if progress_callback is not None or cancel_requested is not None:
+                    vision_kwargs["attempt_callback"] = _on_attempt
+                if deadline_monotonic is not None:
+                    vision_kwargs["deadline_monotonic"] = deadline_monotonic
                 raw_text = self.vision_complete(
                     image.content,
                     image.mime_type,
                     POSITION_EXTRACTION_PROMPT,
-                    max_tokens=2048,
+                    **vision_kwargs,
                 )
+                self._guard_processing(cancel_requested=cancel_requested, deadline_monotonic=deadline_monotonic)
                 response = _PositionVisionResponse.model_validate(_decode_json_object(raw_text))
                 for key, value in response.summary.items():
                     if value is not None and key not in summary:
@@ -201,6 +242,16 @@ class PortfolioScreenshotImportService:
                         "error": None,
                     }
                 )
+                self._emit_progress(
+                    progress_callback,
+                    phase="file_completed",
+                    file_index=file_index,
+                    total_files=len(images),
+                    status="success",
+                    record_count=len(response.positions),
+                )
+            except (PortfolioImageProcessingCancelled, PortfolioImageBatchTimeoutError):
+                raise
             except Exception as exc:
                 file_results.append(
                     {
@@ -210,6 +261,15 @@ class PortfolioScreenshotImportService:
                         "record_count": 0,
                         "error": getattr(exc, "code", "vision_failed"),
                     }
+                )
+                self._emit_progress(
+                    progress_callback,
+                    phase="file_completed",
+                    file_index=file_index,
+                    total_files=len(images),
+                    status="failed",
+                    record_count=0,
+                    error=getattr(exc, "code", "vision_failed"),
                 )
 
         return {
@@ -227,22 +287,54 @@ class PortfolioScreenshotImportService:
         account_id: int,
         default_trade_date: date,
         images: List[ImageInput],
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+        cancel_requested: Optional[Callable[[], bool]] = None,
+        deadline_monotonic: Optional[float] = None,
     ) -> Dict[str, Any]:
-        self._validate_image_batch(images)
-        self._validate_import_date(default_trade_date, field_name="default_trade_date")
-        self._require_cn_cny_account(account_id)
+        self.validate_trade_images_request(
+            account_id=account_id,
+            default_trade_date=default_trade_date,
+            images=images,
+        )
 
         file_results: List[Dict[str, Any]] = []
         trades: List[Dict[str, Any]] = []
         for file_index, image in enumerate(images):
+            self._guard_processing(cancel_requested=cancel_requested, deadline_monotonic=deadline_monotonic)
+            self._emit_progress(
+                progress_callback,
+                phase="file_started",
+                file_index=file_index,
+                total_files=len(images),
+            )
             try:
+                def _on_attempt(attempt: int, max_attempts: int) -> None:
+                    self._guard_processing(
+                        cancel_requested=cancel_requested,
+                        deadline_monotonic=deadline_monotonic,
+                    )
+                    self._emit_progress(
+                        progress_callback,
+                        phase="attempt",
+                        file_index=file_index,
+                        total_files=len(images),
+                        attempt=attempt,
+                        max_attempts=max_attempts,
+                    )
+
                 prompt = f"{TRADE_EXTRACTION_PROMPT}\n当行没有日期时使用批次日期 {default_trade_date.isoformat()}。"
+                vision_kwargs: Dict[str, Any] = {"max_tokens": 3072}
+                if progress_callback is not None or cancel_requested is not None:
+                    vision_kwargs["attempt_callback"] = _on_attempt
+                if deadline_monotonic is not None:
+                    vision_kwargs["deadline_monotonic"] = deadline_monotonic
                 raw_text = self.vision_complete(
                     image.content,
                     image.mime_type,
                     prompt,
-                    max_tokens=3072,
+                    **vision_kwargs,
                 )
+                self._guard_processing(cancel_requested=cancel_requested, deadline_monotonic=deadline_monotonic)
                 response = _TradeVisionResponse.model_validate(_decode_json_object(raw_text))
                 occurrences: Dict[str, int] = {}
                 for row_index, row in enumerate(response.trades):
@@ -267,6 +359,16 @@ class PortfolioScreenshotImportService:
                         "error": None,
                     }
                 )
+                self._emit_progress(
+                    progress_callback,
+                    phase="file_completed",
+                    file_index=file_index,
+                    total_files=len(images),
+                    status="success",
+                    record_count=len(response.trades),
+                )
+            except (PortfolioImageProcessingCancelled, PortfolioImageBatchTimeoutError):
+                raise
             except Exception as exc:
                 file_results.append(
                     {
@@ -276,6 +378,15 @@ class PortfolioScreenshotImportService:
                         "record_count": 0,
                         "error": getattr(exc, "code", "vision_failed"),
                     }
+                )
+                self._emit_progress(
+                    progress_callback,
+                    phase="file_completed",
+                    file_index=file_index,
+                    total_files=len(images),
+                    status="failed",
+                    record_count=0,
+                    error=getattr(exc, "code", "vision_failed"),
                 )
 
         self._mark_cross_image_overlaps(trades)
@@ -487,6 +598,54 @@ class PortfolioScreenshotImportService:
     def _validate_image_batch(images: List[ImageInput]) -> None:
         if not 1 <= len(images) <= 5:
             raise ValueError("image batch must contain 1-5 files")
+
+    def validate_position_images_request(
+        self,
+        *,
+        account_id: int,
+        snapshot_date: date,
+        images: List[ImageInput],
+    ) -> Any:
+        self._validate_image_batch(images)
+        self._validate_import_date(snapshot_date, field_name="snapshot_date")
+        account = self._require_cn_cny_account(account_id)
+        return account
+
+    def validate_trade_images_request(
+        self,
+        *,
+        account_id: int,
+        default_trade_date: date,
+        images: List[ImageInput],
+    ) -> Any:
+        self._validate_image_batch(images)
+        self._validate_import_date(default_trade_date, field_name="default_trade_date")
+        account = self._require_cn_cny_account(account_id)
+        return account
+
+    @staticmethod
+    def validate_uploaded_images(images: List[ImageInput]) -> None:
+        for image in images:
+            validate_image(image.content, image.mime_type)
+
+    @staticmethod
+    def _guard_processing(
+        *,
+        cancel_requested: Optional[Callable[[], bool]],
+        deadline_monotonic: Optional[float],
+    ) -> None:
+        if cancel_requested is not None and cancel_requested():
+            raise PortfolioImageProcessingCancelled("Portfolio image task cancellation requested")
+        if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+            raise PortfolioImageBatchTimeoutError("Portfolio image task exceeded its deadline")
+
+    @staticmethod
+    def _emit_progress(
+        callback: Optional[Callable[[Dict[str, Any]], None]],
+        **payload: Any,
+    ) -> None:
+        if callback is not None:
+            callback(payload)
 
     @staticmethod
     def _validate_import_date(value: date, *, field_name: str) -> None:

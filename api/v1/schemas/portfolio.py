@@ -268,6 +268,71 @@ class PortfolioImageFileResult(BaseModel):
     error: Optional[str] = None
 
 
+PortfolioImageTaskStatus = Literal[
+    "pending",
+    "processing",
+    "cancel_requested",
+    "cancelled",
+    "review_required",
+    "committing",
+    "failed",
+]
+
+
+class PortfolioImageTaskFileItem(BaseModel):
+    index: int
+    filename: Optional[str] = None
+    status: Literal["pending", "processing", "success", "failed", "cancelled"]
+    record_count: int = 0
+    error: Optional[str] = None
+    removed: bool = False
+
+
+class PortfolioImageTaskAccepted(BaseModel):
+    task_id: str
+    trace_id: str
+    status: PortfolioImageTaskStatus
+    mode: Literal["positions", "trades"]
+    account_id: int
+    account_name: str
+    message: str
+
+
+class PortfolioImageTaskSnapshot(BaseModel):
+    task_id: str
+    trace_id: str
+    mode: Literal["positions", "trades"]
+    account_id: int
+    account_name: str
+    status: PortfolioImageTaskStatus
+    message: str
+    error_code: Optional[str] = None
+    snapshot_date: Optional[str] = None
+    default_trade_date: Optional[str] = None
+    created_at: str
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    files: List[PortfolioImageTaskFileItem] = Field(default_factory=list)
+    current_file_index: Optional[int] = None
+    total_files: int = 0
+    current_attempt: Optional[int] = None
+    max_attempts: int = 2
+    success_count: int = 0
+    failure_count: int = 0
+    batch_id: Optional[str] = None
+    draft_revision: Optional[int] = None
+    draft: Optional[Dict[str, Any]] = None
+
+
+class PortfolioImageTaskCurrentResponse(BaseModel):
+    task: Optional[PortfolioImageTaskSnapshot] = None
+
+
+class PortfolioImageDraftFileUpdate(BaseModel):
+    index: int
+    removed: bool = False
+
+
 class PortfolioImageSourceRef(BaseModel):
     file_index: int
     row_index: int
@@ -326,6 +391,15 @@ class PortfolioTradeImageParseResponse(BaseModel):
     trades: List[PortfolioTradeImageItem] = Field(default_factory=list)
 
 
+class PortfolioImageDraftUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(..., ge=1)
+    files: List[PortfolioImageDraftFileUpdate] = Field(default_factory=list)
+    positions: Optional[List[PortfolioPositionImageItem]] = None
+    trades: Optional[List[PortfolioTradeImageItem]] = None
+
+
 class PortfolioPositionImageCommitItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -342,6 +416,8 @@ class PortfolioPositionImageCommitRequest(BaseModel):
     account_id: int
     snapshot_date: date
     positions: List[PortfolioPositionImageCommitItem] = Field(..., min_length=1)
+    task_id: Optional[str] = Field(None, min_length=1, max_length=64)
+    expected_revision: Optional[int] = Field(None, ge=1)
 
 
 class PortfolioTradeImageCommitItem(BaseModel):
@@ -366,6 +442,8 @@ class PortfolioTradeImageCommitRequest(BaseModel):
     batch_id: str = Field(..., min_length=1, max_length=64)
     account_id: int
     trades: List[PortfolioTradeImageCommitItem] = Field(..., min_length=1)
+    task_id: Optional[str] = Field(None, min_length=1, max_length=64)
+    expected_revision: Optional[int] = Field(None, ge=1)
 
 
 class PortfolioImageImportCommitResponse(BaseModel):

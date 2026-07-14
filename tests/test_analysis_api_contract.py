@@ -3227,6 +3227,25 @@ class BatchTaskQueueContractTestCase(unittest.TestCase):
         self.assertEqual(updated.message, "LLM 正在生成分析结果")
         self.assertEqual(events, [("task_progress", updated.to_dict())])
 
+    def test_external_portfolio_image_event_keeps_its_own_sse_type(self) -> None:
+        queue = AnalysisTaskQueue(max_workers=1)
+        events = []
+        queue._broadcast_event = lambda event_type, data: events.append((event_type, data))
+        payload = {"task_id": "image-1", "status": "review_required", "mode": "positions"}
+
+        queue.publish_event("portfolio_image_task_updated", payload)
+        payload["status"] = "failed"
+
+        self.assertEqual(
+            events,
+            [
+                (
+                    "portfolio_image_task_updated",
+                    {"task_id": "image-1", "status": "review_required", "mode": "positions"},
+                )
+            ],
+        )
+
 
 class ImageStockExtractorContractTestCase(unittest.TestCase):
     def test_litellm_completion_patch_target_remains_available(self) -> None:

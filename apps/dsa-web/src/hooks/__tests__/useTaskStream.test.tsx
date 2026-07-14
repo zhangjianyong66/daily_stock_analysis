@@ -155,6 +155,40 @@ describe('useTaskStream', () => {
     );
   });
 
+  it('routes portfolio image task events without treating them as stock analysis tasks', async () => {
+    const onPortfolioImageTaskUpdated = vi.fn();
+    const onTaskProgress = vi.fn();
+    renderHook(() => useTaskStream({ enabled: true, onPortfolioImageTaskUpdated, onTaskProgress }));
+    await waitFor(() => expect(eventSourceInstance.listeners.portfolio_image_task_updated).toBeDefined());
+
+    eventSourceInstance.listeners.portfolio_image_task_updated?.(
+      new MessageEvent('portfolio_image_task_updated', {
+        data: JSON.stringify({
+          task_id: 'image-1',
+          mode: 'positions',
+          account_id: 7,
+          account_name: 'Main',
+          status: 'review_required',
+          message: '请校对',
+          current_file_index: 2,
+          total_files: 2,
+          current_attempt: 1,
+          max_attempts: 2,
+          success_count: 1,
+          failure_count: 1,
+          draft_revision: 1,
+        }),
+      }),
+    );
+
+    expect(onPortfolioImageTaskUpdated).toHaveBeenCalledWith(expect.objectContaining({
+      taskId: 'image-1',
+      currentFileIndex: 2,
+      draftRevision: 1,
+    }));
+    expect(onTaskProgress).not.toHaveBeenCalled();
+  });
+
   it('shares one SSE connection across multiple hook instances', async () => {
     const firstConnected = vi.fn();
     const secondConnected = vi.fn();

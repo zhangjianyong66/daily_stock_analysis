@@ -10,6 +10,7 @@ export type ApiErrorCategory =
   | 'portfolio_busy'
   | 'upstream_llm_400'
   | 'upstream_timeout'
+  | 'client_timeout'
   | 'upstream_network'
   | 'local_connection_failed'
   | 'http_error'
@@ -463,7 +464,17 @@ export function parseApiError(error: unknown): ParsedApiError {
     });
   }
 
-  if (includesAny(matchText, ['timeout', 'timed out', 'read timeout', 'connect timeout']) || code === 'ECONNABORTED') {
+  if (code === 'ECONNABORTED') {
+    return createParsedApiError({
+      title: '浏览器等待响应超时',
+      message: '浏览器在等待本地服务响应时超过了请求时限。请检查任务状态；后台任务可能仍在继续，不要立即重复提交。',
+      rawMessage,
+      status,
+      category: 'client_timeout',
+    });
+  }
+
+  if (includesAny(matchText, ['timeout', 'timed out', 'read timeout', 'connect timeout'])) {
     return createParsedApiError({
       title: '连接上游服务超时',
       message: '服务端访问外部依赖时超时，请稍后重试，或检查当前网络与代理设置。',

@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 - [新功能] 飞书推送新增文件上传能力：`FeishuSender.send_feishu_file(file_path)` 通过 App Bot SDK (`im.v1.file.create`) 上传文件并发送文件消息；Webhook 模式回退为发送文件内容文本；新增 `FEISHU_SEND_AS_FILE=true` 配置开关，开启后飞书以文件形式发送报告而非文字消息。
 - [新功能] Web 持仓页支持通过 1-5 张截图校对后初始化空账户持仓或增量导入实际成交，复用独立 `VISION_MODEL`，并在交易流水中展示可空的成交时间。
+- [修复] 持仓与成交截图识别改为可恢复的进程内异步任务，新增全局防重、真实文件进度、取消、60 分钟截止、服务端草稿 revision 与刷新/SSE 恢复，避免浏览器 30 秒超时误判仍在执行的 Vision 请求。
 - [修复] 资讯源抓取为每次请求独立复制禁用代理映射，避免 Requests 原地补入环境代理后污染后续抓取。
 
 ## [3.25.0] - 2026-07-03

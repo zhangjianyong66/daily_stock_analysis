@@ -1069,6 +1069,12 @@ class AnalysisTaskQueue:
                 logger.debug(f"[TaskQueue] 广播事件跳过（循环已关闭）: {e}")
             except Exception as e:
                 logger.warning(f"[TaskQueue] 广播事件失败: {e}")
+
+    def publish_event(self, event_type: str, data: Dict[str, Any]) -> None:
+        """Publish a typed external event through the shared task SSE channel."""
+        if not event_type or not isinstance(data, dict):
+            raise ValueError("event_type and dict data are required")
+        self._broadcast_event(event_type, copy.deepcopy(data))
     
     # ========== 清理方法 ==========
     

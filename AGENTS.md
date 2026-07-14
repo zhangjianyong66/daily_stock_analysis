@@ -106,6 +106,7 @@ python -m py_compile <changed_python_files>
 ```
 
 - Trellis 升级产生的 `.trellis/.backup-*` 是 Git 忽略的本地恢复备份，Flake8 配置会排除该目录，避免历史模板代码阻断当前工作树的 `./scripts/ci_gate.sh`。
+- 本机真实 `.env` 启用管理员认证或配置 LLM 路由时，LiteLLM 导入会自行读取仓库 `.env`，可能让离线 API/配置测试误报 401 或模型契约失败。需要隔离部署配置执行完整门禁时，使用：`tmp_env=$(mktemp); trap 'rm -f "$tmp_env"' EXIT; ENV_FILE="$tmp_env" LITELLM_MODE=PRODUCTION PATH="$PWD/.venv/bin:$PATH" ./scripts/ci_gate.sh`。
 
 ### Web / Desktop
 
@@ -140,7 +141,11 @@ npm run build
 - Web 持仓图片导入只支持活跃 `cn/CNY` 账户；持仓初始化要求账户没有任何交易流水，成交增量只接受实际成交记录。
 - 图片能力必须显式配置 `VISION_MODEL`，不会使用 `LITELLM_MODEL` 文本主模型兜底；`OPENAI_VISION_MODEL` 仅为废弃兼容别名，Hermes Vision 尚未验证。
 - 每批支持 1-5 张 JPEG、PNG、WebP 或 GIF，单文件最大 5MB。原图、base64 和模型原始响应不得持久化或写入普通日志。
-- 前端目标回归：`cd apps/dsa-web && npm run test -- src/api/__tests__/portfolio.test.ts src/components/portfolio/__tests__/PortfolioImageImportDialog.test.tsx src/pages/__tests__/PortfolioPage.test.tsx src/utils/__tests__/portfolioFormat.test.ts`。
+- 图片识别使用进程内单 worker 和全局唯一槽，持仓/成交及所有账户共享；新 API 快速返回 HTTP 202，`review_required` 在确认导入或放弃前不自动过期，服务重启会丢失任务和草稿。
+- Vision 单次上限 300 秒、每图最多 2 次，只对 timeout/connection 瞬时错误重试一次；图片按上传顺序串行，整批 deadline 为 60 分钟。取消是尽力语义，当前阻塞调用返回前继续占槽，迟到结果不得覆盖终态。
+- 校对草稿保存在服务端内存并使用 `draft_revision` 乐观锁；Web 保存必须串行，commit 携带 `task_id/expected_revision`，失败文件标记移除后才允许提交。旧同步 parse 标记 deprecated，但与异步 API 共享槽位和识别编排。
+- 后端目标回归：`python3 -m pytest tests/test_vision_extraction_service.py tests/test_portfolio_screenshot_import_service.py tests/test_portfolio_image_task_manager.py tests/test_portfolio_api.py tests/test_analysis_api_contract.py -q`。
+- 前端目标回归：`cd apps/dsa-web && npm run test -- src/api/__tests__/error.test.ts src/api/__tests__/portfolio.test.ts src/components/portfolio/__tests__/PortfolioImageImportDialog.test.tsx src/pages/__tests__/PortfolioPage.test.tsx src/hooks/__tests__/useTaskStream.test.tsx src/utils/__tests__/portfolioFormat.test.ts`。
 
 ### Docker 构建代理
 

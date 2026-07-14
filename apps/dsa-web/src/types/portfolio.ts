@@ -338,6 +338,51 @@ export interface PortfolioImageFileResult {
   status: 'success' | 'failed';
   recordCount: number;
   error?: string | null;
+  removed?: boolean;
+}
+
+export type PortfolioImageTaskStatus =
+  | 'pending'
+  | 'processing'
+  | 'cancel_requested'
+  | 'cancelled'
+  | 'review_required'
+  | 'committing'
+  | 'failed';
+
+export interface PortfolioImageTaskFile {
+  index: number;
+  filename?: string | null;
+  status: 'pending' | 'processing' | 'success' | 'failed' | 'cancelled';
+  recordCount: number;
+  error?: string | null;
+  removed: boolean;
+}
+
+export interface PortfolioImageTaskSummary {
+  taskId: string;
+  mode: 'positions' | 'trades';
+  accountId: number;
+  accountName: string;
+  status: PortfolioImageTaskStatus | 'committed' | 'discarded';
+  message: string;
+  currentFileIndex?: number | null;
+  totalFiles: number;
+  currentAttempt?: number | null;
+  maxAttempts: number;
+  successCount: number;
+  failureCount: number;
+  draftRevision?: number | null;
+}
+
+export interface PortfolioImageTaskAccepted {
+  taskId: string;
+  traceId: string;
+  mode: 'positions' | 'trades';
+  accountId: number;
+  accountName: string;
+  status: PortfolioImageTaskStatus;
+  message: string;
 }
 
 export interface PortfolioImageSourceRef {
@@ -382,6 +427,8 @@ export interface PositionImageCommitRequest {
   accountId: number;
   snapshotDate: string;
   positions: PositionImageCommitItem[];
+  taskId?: string;
+  expectedRevision?: number;
 }
 
 export interface TradeImageItem {
@@ -430,6 +477,34 @@ export interface TradeImageCommitRequest {
   batchId: string;
   accountId: number;
   trades: TradeImageCommitItem[];
+  taskId?: string;
+  expectedRevision?: number;
+}
+
+export interface PortfolioImageTaskSnapshot extends PortfolioImageTaskSummary {
+  traceId: string;
+  status: PortfolioImageTaskStatus;
+  errorCode?: string | null;
+  snapshotDate?: string | null;
+  defaultTradeDate?: string | null;
+  createdAt: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  files: PortfolioImageTaskFile[];
+  batchId?: string | null;
+  draftRevision?: number | null;
+  draft?: PositionImageParseResponse | TradeImageParseResponse | null;
+}
+
+export interface PortfolioImageTaskCurrentResponse {
+  task?: PortfolioImageTaskSnapshot | null;
+}
+
+export interface PortfolioImageDraftUpdateRequest {
+  expectedRevision: number;
+  files: Array<{ index: number; removed: boolean }>;
+  positions?: PositionImageItem[];
+  trades?: TradeImageItem[];
 }
 
 export interface ImageImportCommitResponse {

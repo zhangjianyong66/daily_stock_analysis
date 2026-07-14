@@ -8,7 +8,7 @@ import logging
 import random
 import sys
 import time
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from src.config import Config, extra_litellm_params, get_config
 from src.llm.hermes import build_hermes_redaction_values, route_has_hermes, sanitize_hermes_error_text
@@ -35,7 +35,8 @@ litellm = sys.modules.get("litellm") or _LiteLLMPlaceholder()
 
 ALLOWED_MIME = frozenset({"image/jpeg", "image/png", "image/webp", "image/gif"})
 MAX_SIZE_BYTES = 5 * 1024 * 1024
-VISION_API_TIMEOUT = 60
+VISION_API_TIMEOUT = 300
+VISION_MAX_ATTEMPTS = 2
 
 _IMAGE_SIGNATURES = {
     "image/jpeg": (b"\xff\xd8\xff",),
@@ -118,6 +119,7 @@ def _call_vision_once(
     config: Config,
     completion_module=None,
     api_key: Optional[str] = None,
+    timeout_seconds: Optional[float] = None,
 ) -> str:
     model = resolve_vision_model(config)
     if not model:
@@ -153,7 +155,7 @@ def _call_vision_once(
         ],
         "max_tokens": max_tokens,
         "api_key": key,
-        "timeout": VISION_API_TIMEOUT,
+        "timeout": timeout_seconds if timeout_seconds is not None else VISION_API_TIMEOUT,
     }
     call_kwargs.update(extra_litellm_params(model, config))
 
@@ -170,6 +172,8 @@ def complete_vision(
     prompt: str,
     *,
     max_tokens: int = 1024,
+    attempt_callback: Optional[Callable[[int, int], None]] = None,
+    deadline_monotonic: Optional[float] = None,
     _config: Config | None = None,
     _completion_module=None,
 ) -> str:
@@ -197,7 +201,15 @@ def complete_vision(
     last_error: Optional[Exception] = None
     last_safe_error = "unknown provider error"
     redaction_values = build_hermes_redaction_values(*get_vision_api_keys(model, cfg))
-    for attempt in range(3):
+    for attempt in range(VISION_MAX_ATTEMPTS):
+        if attempt_callback is not None:
+            attempt_callback(attempt + 1, VISION_MAX_ATTEMPTS)
+        timeout_seconds = float(VISION_API_TIMEOUT)
+        if deadline_monotonic is not None:
+            remaining = deadline_monotonic - time.monotonic()
+            if remaining <= 0:
+                raise VisionExtractionError("Vision 任务已超过整体运行上限", code="vision_timeout")
+            timeout_seconds = min(timeout_seconds, remaining)
         try:
             return _call_vision_once(
                 image_b64,
@@ -206,29 +218,70 @@ def complete_vision(
                 max_tokens=max_tokens,
                 config=cfg,
                 completion_module=_completion_module,
+                timeout_seconds=timeout_seconds,
             )
         except Exception as exc:
+            if isinstance(exc, VisionExtractionError):
+                raise
             last_error = exc
             provider_error = sanitize_hermes_error_text(exc, redaction_values=redaction_values)
             last_safe_error = sanitize_diagnostic_text(provider_error) or type(exc).__name__
-            if attempt < 2:
-                delay = 2**attempt
+            if attempt < VISION_MAX_ATTEMPTS - 1 and _is_transient_vision_error(exc, last_safe_error):
+                delay = 1
+                if deadline_monotonic is not None:
+                    remaining = deadline_monotonic - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    delay = min(delay, remaining)
                 logger.warning(
-                    "Vision 调用尝试 %s/3 失败，%ss 后重试: %s",
+                    "Vision 调用尝试 %s/%s 失败，%ss 后重试: %s",
                     attempt + 1,
+                    VISION_MAX_ATTEMPTS,
                     delay,
                     last_safe_error,
                 )
                 time.sleep(delay)
+                continue
+            break
 
     error_lower = f"{type(last_error).__name__} {last_safe_error}".lower()
     if "timeout" in error_lower or "timed out" in error_lower:
         error_code = "vision_timeout"
     elif "rate" in error_lower or "429" in error_lower:
         error_code = "vision_rate_limited"
+    elif any(token in error_lower for token in ("authentication", "unauthorized", "invalid api key", "401", "403")):
+        error_code = "vision_auth_failed"
+    elif any(token in error_lower for token in ("unsupported", "does not support", "image input")):
+        error_code = "vision_unsupported"
+    elif any(token in error_lower for token in ("connection", "network", "dns", "name resolution")):
+        error_code = "vision_network_error"
     else:
         error_code = "vision_failed"
     raise VisionExtractionError(
         f"Vision API 调用失败，请检查 API Key 与网络: {last_safe_error}",
         code=error_code,
     ) from last_error
+
+
+def _is_transient_vision_error(exc: Exception, safe_error: str) -> bool:
+    """Return whether a provider failure is safe to retry once."""
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return True
+    error_text = f"{type(exc).__name__} {safe_error}".lower()
+    if any(token in error_text for token in ("rate limit", "ratelimit", "429", "authentication", "unauthorized")):
+        return False
+    if any(token in error_text for token in ("unsupported", "invalid image", "bad request", "empty response")):
+        return False
+    return any(
+        token in error_text
+        for token in (
+            "timeout",
+            "timed out",
+            "connection",
+            "connecterror",
+            "readerror",
+            "remote disconnected",
+            "network is unreachable",
+            "temporary failure",
+        )
+    )

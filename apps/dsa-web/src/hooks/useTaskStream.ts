@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback, useState, type MutableRefObject } from 
 import { analysisApi } from '../api/analysis';
 import { toCamelCase } from '../api/utils';
 import type { TaskInfo } from '../types/analysis';
+import type { PortfolioImageTaskSummary } from '../types/portfolio';
 import type { RunFlowEvent } from '../types/runFlow';
 
 /**
@@ -14,6 +15,7 @@ export type SSEEventType =
   | 'task_progress'
   | 'task_completed'
   | 'task_failed'
+  | 'portfolio_image_task_updated'
   | 'heartbeat';
 
 /**
@@ -42,6 +44,8 @@ export interface UseTaskStreamOptions {
   onTaskFailed?: (task: TaskInfo) => void;
   /** Incremental run-flow event callback carried by task_progress */
   onTaskFlowEvent?: (task: TaskInfo, event: RunFlowEvent) => void;
+  /** Portfolio image task state changed; fetch the REST snapshot for authority. */
+  onPortfolioImageTaskUpdated?: (task: PortfolioImageTaskSummary) => void;
   /** Connected callback */
   onConnected?: () => void;
   /** Connection error callback */
@@ -74,6 +78,7 @@ type TaskStreamCallbacks = Pick<
   | 'onTaskProgress'
   | 'onTaskFailed'
   | 'onTaskFlowEvent'
+  | 'onPortfolioImageTaskUpdated'
   | 'onConnected'
   | 'onError'
 >;
@@ -238,6 +243,15 @@ function connectSharedStream() {
     }
   });
 
+  eventSource.addEventListener('portfolio_image_task_updated', (e) => {
+    try {
+      const task = toCamelCase<PortfolioImageTaskSummary>(JSON.parse((e as MessageEvent<string>).data));
+      forEachSubscriber((callbacks) => callbacks.onPortfolioImageTaskUpdated?.(task));
+    } catch (error) {
+      console.error('Failed to parse portfolio image task SSE event:', error);
+    }
+  });
+
   eventSource.addEventListener('heartbeat', () => {
     // Optional place to record the latest heartbeat timestamp.
   });
@@ -269,6 +283,7 @@ export function useTaskStream(options: UseTaskStreamOptions = {}): UseTaskStream
     onTaskProgress,
     onTaskFailed,
     onTaskFlowEvent,
+    onPortfolioImageTaskUpdated,
     onConnected,
     onError,
     autoReconnect = true,
@@ -288,6 +303,7 @@ export function useTaskStream(options: UseTaskStreamOptions = {}): UseTaskStream
     onTaskProgress,
     onTaskFailed,
     onTaskFlowEvent,
+    onPortfolioImageTaskUpdated,
     onConnected,
     onError,
   });
@@ -301,6 +317,7 @@ export function useTaskStream(options: UseTaskStreamOptions = {}): UseTaskStream
       onTaskProgress,
       onTaskFailed,
       onTaskFlowEvent,
+      onPortfolioImageTaskUpdated,
       onConnected,
       onError,
     };
