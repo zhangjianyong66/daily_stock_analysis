@@ -305,3 +305,37 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 10: 修复大盘上下文跨日重复生成
+
+**Date**: 2026-07-15
+**Task**: 修复大盘上下文跨日重复生成
+**Branch**: `main`
+
+### Summary
+
+分离大盘报告生成日与每日上下文目标交易日，补充严格历史复用、并发锁等待、旧记录兼容测试及项目规范。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1d981ab` | (see git log) |
+| `4fcf440` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

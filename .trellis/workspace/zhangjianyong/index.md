@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 9
+- **Total Sessions**: 10
 - **Last Active**: 2026-07-15
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~307 | Active |
+| `journal-1.md` | ~341 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 10 | 2026-07-15 | 修复大盘上下文跨日重复生成 | `1d981ab`, `4fcf440` | `main` |
 | 9 | 2026-07-15 | 完成图片识别异步任务与超时修复 | `c2a88ba`, `d34cc87` | `main` |
 | 8 | 2026-07-14 | 修复实时行情慢响应与超时隔离 | `f8b3b8b`, `4ffce8f` | `main` |
 | 7 | 2026-07-14 | 修复 ETF 实时行情多源兜底 | `74e7e47` | `fix/etf-realtime-fallback` |
