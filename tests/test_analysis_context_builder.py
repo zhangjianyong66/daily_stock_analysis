@@ -189,6 +189,60 @@ def test_quote_block_maps_realtime_metadata_and_status_priority() -> None:
     assert "quote_stale" in stale.warnings
 
 
+def test_quote_block_distinguishes_fetch_failed_from_unrequested_missing() -> None:
+    failed = AnalysisContextBuilder.build(
+        _artifacts(
+            realtime_quote=None,
+            metadata={
+                "query_id": "q-1",
+                "realtime_quote_diagnostics": {
+                    "attempted": True,
+                    "all_failed": True,
+                    "summary": "tencent:timeout; akshare_sina:connection_error",
+                    "failures": [
+                        {"source": "tencent", "error_type": "timeout"},
+                        {"source": "akshare_sina", "error_type": "connection_error"},
+                    ],
+                },
+            },
+        )
+    ).blocks["quote"]
+
+    assert failed.status == ContextFieldStatus.FETCH_FAILED
+    assert failed.items["quote"].status == ContextFieldStatus.FETCH_FAILED
+    assert failed.items["quote"].missing_reason == "realtime_quote_fetch_failed"
+    assert failed.metadata["failure_summary"] == (
+        "tencent:timeout; akshare_sina:connection_error"
+    )
+
+    missing = AnalysisContextBuilder.build(
+        _artifacts(realtime_quote=None, metadata={"query_id": "q-2"})
+    ).blocks["quote"]
+    assert missing.status == ContextFieldStatus.MISSING
+    assert missing.items["quote"].missing_reason == "realtime_quote_missing"
+
+
+def test_quote_block_exposes_last_good_cache_metadata() -> None:
+    stale = AnalysisContextBuilder.build(
+        _artifacts(
+            realtime_quote=_quote(
+                source=RealtimeSource.TENCENT,
+                is_stale=True,
+                data_quality="stale",
+                cache_age_seconds=420,
+                fallback_from="tencent",
+                fallback_reason="timeout",
+                failure_summary="tencent:timeout; akshare_sina:empty",
+            )
+        )
+    ).blocks["quote"]
+
+    assert stale.status == ContextFieldStatus.STALE
+    assert stale.metadata["cache_age_seconds"] == 420
+    assert stale.metadata["fallback_reason"] == "timeout"
+    assert stale.metadata["failure_summary"] == "tencent:timeout; akshare_sina:empty"
+
+
 def test_quote_block_ignores_invalid_or_legacy_timestamp_metadata() -> None:
     block = AnalysisContextBuilder.build(
         _artifacts(

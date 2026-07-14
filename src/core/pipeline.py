@@ -2533,6 +2533,53 @@ class StockAnalysisPipeline:
             logger.debug("读取本地资讯证据失败（fail-open）: %s", exc)
             return None
 
+    @staticmethod
+    def _build_realtime_quote_diagnostics_metadata() -> Optional[Dict[str, Any]]:
+        from data_provider.realtime_types import (
+            RealtimeFailureType,
+            build_realtime_failure_summary,
+        )
+
+        snapshot = current_diagnostic_snapshot()
+        if not isinstance(snapshot, dict):
+            return None
+        provider_runs = snapshot.get("provider_runs")
+        if not isinstance(provider_runs, list):
+            return None
+        realtime_runs = [
+            run
+            for run in provider_runs
+            if isinstance(run, dict) and run.get("data_type") == "realtime_quote"
+        ]
+        if not realtime_runs:
+            return None
+
+        stable_values = {failure.value for failure in RealtimeFailureType}
+        aliases = {
+            "provider_timeout_skip": RealtimeFailureType.TIMEOUT.value,
+            "unavailable": RealtimeFailureType.NOT_SUPPORTED.value,
+        }
+        failure_pairs = []
+        failure_details = []
+        for run in realtime_runs:
+            if run.get("success"):
+                continue
+            route_source = str(run.get("route_source") or run.get("provider") or "unknown")
+            raw_error_type = str(run.get("error_type") or RealtimeFailureType.INVALID_QUOTE.value)
+            error_type = aliases.get(raw_error_type, raw_error_type)
+            if error_type not in stable_values:
+                error_type = RealtimeFailureType.INVALID_QUOTE.value
+            failure = RealtimeFailureType(error_type)
+            failure_pairs.append((route_source, failure))
+            failure_details.append({"source": route_source, "error_type": failure.value})
+
+        return {
+            "attempted": True,
+            "all_failed": not any(bool(run.get("success")) for run in realtime_runs),
+            "summary": build_realtime_failure_summary(failure_pairs),
+            "failures": failure_details,
+        }
+
     def _build_legacy_analysis_artifacts(
         self,
         *,
@@ -2551,6 +2598,14 @@ class StockAnalysisPipeline:
         query_id: str,
         portfolio_context: Optional[Dict[str, Any]] = None,
     ) -> PipelineAnalysisArtifacts:
+        metadata = {
+            "query_id": query_id,
+            "trigger_source": self.query_source,
+        }
+        realtime_diagnostics = self._build_realtime_quote_diagnostics_metadata()
+        if realtime_diagnostics is not None:
+            metadata["realtime_quote_diagnostics"] = realtime_diagnostics
+
         return PipelineAnalysisArtifacts(
             code=code,
             stock_name=stock_name,
@@ -2564,10 +2619,7 @@ class StockAnalysisPipeline:
             fundamental_context=fundamental_context,
             news_context=news_context,
             news_result_count=news_result_count,
-            metadata={
-                "query_id": query_id,
-                "trigger_source": self.query_source,
-            },
+            metadata=metadata,
             portfolio_context=dict(portfolio_context) if isinstance(portfolio_context, dict) else None,
         )
 
@@ -2601,6 +2653,14 @@ class StockAnalysisPipeline:
                 "yesterday": {},
             }
 
+        metadata = {
+            "query_id": query_id,
+            "trigger_source": self.query_source,
+        }
+        realtime_diagnostics = self._build_realtime_quote_diagnostics_metadata()
+        if realtime_diagnostics is not None:
+            metadata["realtime_quote_diagnostics"] = realtime_diagnostics
+
         return PipelineAnalysisArtifacts(
             code=code,
             stock_name=stock_name,
@@ -2614,10 +2674,7 @@ class StockAnalysisPipeline:
             fundamental_context=fundamental_context,
             news_context=initial_context.get("news_context"),
             news_result_count=None,
-            metadata={
-                "query_id": query_id,
-                "trigger_source": self.query_source,
-            },
+            metadata=metadata,
             portfolio_context=dict(portfolio_context) if isinstance(portfolio_context, dict) else None,
         )
 

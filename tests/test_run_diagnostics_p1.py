@@ -216,6 +216,46 @@ class RunDiagnosticsP1TestCase(unittest.TestCase):
         self.assertNotIn("secret", message)
         self.assertNotIn("example.com/webhook", message)
 
+    def test_realtime_provider_run_serializes_routing_metadata(self) -> None:
+        events = []
+        token = activate_run_diagnostic_context(
+            trace_id="trace-realtime-routing",
+            event_sink=events.append,
+        )
+        try:
+            record_provider_run(
+                data_type="realtime_quote",
+                provider="AkshareFetcher",
+                operation="get_realtime_quote",
+                success=False,
+                error_type="timeout",
+                error_message="https://secret.example token=hidden",
+                route_source="tencent",
+                physical_source="tencent",
+                attempt=2,
+                retry=True,
+                budget_remaining_ms=17500,
+                cache_age_seconds=240,
+            )
+            snapshot = current_diagnostic_snapshot()
+        finally:
+            reset_run_diagnostic_context(token)
+
+        run = snapshot["provider_runs"][0]
+        self.assertEqual(run["route_source"], "tencent")
+        self.assertEqual(run["physical_source"], "tencent")
+        self.assertEqual(run["attempt"], 2)
+        self.assertIs(run["retry"], True)
+        self.assertEqual(run["budget_remaining_ms"], 17500)
+        self.assertEqual(run["cache_age_seconds"], 240)
+        self.assertNotIn("token=hidden", run["error_message_sanitized"])
+        self.assertIn("token=<redacted>", run["error_message_sanitized"])
+        event_metadata = events[0]["metadata"]
+        self.assertEqual(event_metadata["route_source"], "tencent")
+        self.assertEqual(event_metadata["physical_source"], "tencent")
+        self.assertEqual(event_metadata["attempt"], 2)
+        self.assertIs(event_metadata["retry"], True)
+
     def test_diagnostic_event_sink_receives_provider_llm_history_and_notification_events(self) -> None:
         events = []
         token = activate_run_diagnostic_context(

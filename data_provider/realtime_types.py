@@ -17,8 +17,8 @@
 import logging
 import time
 from threading import RLock
-from dataclasses import dataclass, field
-from typing import Optional, Dict, Any, Union
+from dataclasses import dataclass
+from typing import Optional, Dict, Any, Iterable, Tuple
 from enum import Enum
 
 logger = logging.getLogger(__name__)
@@ -106,6 +106,93 @@ class RealtimeSource(Enum):
     FALLBACK = "fallback"           # 降级兜底
 
 
+class RealtimeFailureType(str, Enum):
+    """Stable realtime failure categories shared across routing and diagnostics."""
+
+    TIMEOUT = "timeout"
+    CONNECTION_ERROR = "connection_error"
+    RATE_LIMITED = "rate_limited"
+    EMPTY = "empty"
+    INVALID_QUOTE = "invalid_quote"
+    NOT_SUPPORTED = "not_supported"
+    CIRCUIT_OPEN = "circuit_open"
+    ALL_SOURCES_FAILED = "all_sources_failed"
+
+
+def _exception_chain(error: BaseException) -> Iterable[BaseException]:
+    seen = set()
+    current: Optional[BaseException] = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        yield current
+        current = current.__cause__ or current.__context__
+
+
+def classify_realtime_failure(
+    error: Optional[BaseException],
+    *,
+    invalid_quote: bool = False,
+    not_supported: bool = False,
+    circuit_open: bool = False,
+) -> RealtimeFailureType:
+    """Normalize provider-specific failures without exposing exception details."""
+    if circuit_open:
+        return RealtimeFailureType.CIRCUIT_OPEN
+    if not_supported:
+        return RealtimeFailureType.NOT_SUPPORTED
+    if invalid_quote:
+        return RealtimeFailureType.INVALID_QUOTE
+    if error is None:
+        return RealtimeFailureType.EMPTY
+
+    for current in _exception_chain(error):
+        name = type(current).__name__.lower()
+        message = str(current).lower()
+        response = getattr(current, "response", None)
+        status_code = getattr(response, "status_code", None)
+
+        if status_code == 429 or "ratelimit" in name or "rate_limit" in name:
+            return RealtimeFailureType.RATE_LIMITED
+        if "http 429" in message or "too many requests" in message or "rate limit" in message:
+            return RealtimeFailureType.RATE_LIMITED
+        if "timeout" in name or "timed out" in message:
+            return RealtimeFailureType.TIMEOUT
+        if name in {
+            "connectionerror",
+            "remotedisconnected",
+            "connectionreseterror",
+            "connectionabortederror",
+            "brokenpipeerror",
+        }:
+            return RealtimeFailureType.CONNECTION_ERROR
+        if any(token in message for token in ("remote disconnected", "connection reset", "connection aborted")):
+            return RealtimeFailureType.CONNECTION_ERROR
+
+    return RealtimeFailureType.INVALID_QUOTE
+
+
+def build_realtime_failure_summary(
+    failures: Iterable[Tuple[str, RealtimeFailureType]],
+) -> str:
+    """Build a compact low-sensitivity summary from route tokens and categories."""
+    parts = []
+    seen = set()
+    for route_source, failure_type in failures:
+        safe_route = "".join(
+            char for char in str(route_source).strip().lower()
+            if char.isalnum() or char in {"_", "-"}
+        )[:48]
+        if not safe_route:
+            continue
+        category = RealtimeFailureType(failure_type).value
+        item = (safe_route, category)
+        if item in seen:
+            continue
+        seen.add(item)
+        parts.append(f"{safe_route}:{category}")
+    return "; ".join(parts)
+
+
 @dataclass
 class UnifiedRealtimeQuote:
     """
@@ -125,7 +212,10 @@ class UnifiedRealtimeQuote:
     provider_timestamp: Optional[str] = None     # Provider 真实行情时间（ISO 8601 datetime）
     is_stale: Optional[bool] = None              # provider_timestamp 超过最小 TTL 阈值时为 True
     stale_seconds: Optional[int] = None          # provider_timestamp 距 fetched_at 的秒数
+    cache_age_seconds: Optional[int] = None      # last-good 缓存距本次请求的秒数
     fallback_from: Optional[str] = None          # 整源 fallback 的失败首选源 token
+    fallback_reason: Optional[str] = None        # 低敏稳定失败分类
+    failure_summary: Optional[str] = None        # 本轮逐源低敏失败摘要
     market: Optional[str] = None                 # 市场标签（cn/hk/us/jp/kr/tw）
     currency: Optional[str] = None               # 报价币种（JPY/KRW/TWD/USD/HKD/CNY 等）
     data_quality: Optional[str] = None           # ok/partial/unavailable
@@ -170,7 +260,8 @@ class UnifiedRealtimeQuote:
         # 只添加非 None 的字段
         optional_fields = [
             'fetched_at', 'provider_timestamp', 'is_stale', 'stale_seconds',
-            'fallback_from', 'market', 'currency', 'data_quality', 'missing_fields',
+            'cache_age_seconds', 'fallback_from', 'fallback_reason', 'failure_summary',
+            'market', 'currency', 'data_quality', 'missing_fields',
             'price', 'change_pct', 'change_amount', 'volume', 'amount',
             'volume_ratio', 'turnover_rate', 'amplitude',
             'open_price', 'high', 'low', 'pre_close',

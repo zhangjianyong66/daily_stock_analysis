@@ -4,7 +4,11 @@
 import threading
 import time
 import unittest
+from http.client import RemoteDisconnected
 
+import requests
+
+from data_provider import realtime_types
 from data_provider.realtime_types import CircuitBreaker, RealtimeSource, UnifiedRealtimeQuote
 
 
@@ -31,7 +35,10 @@ class UnifiedRealtimeQuoteMetadataTestCase(unittest.TestCase):
             provider_timestamp="2026-05-31T10:00:00+00:00",
             is_stale=False,
             stale_seconds=5,
+            cache_age_seconds=12,
             fallback_from="efinance",
+            fallback_reason="timeout",
+            failure_summary="efinance:timeout",
         )
 
         data = quote.to_dict()
@@ -40,7 +47,65 @@ class UnifiedRealtimeQuoteMetadataTestCase(unittest.TestCase):
         self.assertEqual(data["provider_timestamp"], "2026-05-31T10:00:00+00:00")
         self.assertIs(data["is_stale"], False)
         self.assertEqual(data["stale_seconds"], 5)
+        self.assertEqual(data["cache_age_seconds"], 12)
         self.assertEqual(data["fallback_from"], "efinance")
+        self.assertEqual(data["fallback_reason"], "timeout")
+        self.assertEqual(data["failure_summary"], "efinance:timeout")
+
+
+class RealtimeFailureClassificationTestCase(unittest.TestCase):
+    def test_network_failures_use_stable_categories(self):
+        self.assertEqual(
+            realtime_types.classify_realtime_failure(TimeoutError("https://secret.example timeout")),
+            realtime_types.RealtimeFailureType.TIMEOUT,
+        )
+        self.assertEqual(
+            realtime_types.classify_realtime_failure(requests.Timeout("read timed out")),
+            realtime_types.RealtimeFailureType.TIMEOUT,
+        )
+        self.assertEqual(
+            realtime_types.classify_realtime_failure(RemoteDisconnected("remote closed")),
+            realtime_types.RealtimeFailureType.CONNECTION_ERROR,
+        )
+        self.assertEqual(
+            realtime_types.classify_realtime_failure(requests.ConnectionError("proxy failed")),
+            realtime_types.RealtimeFailureType.CONNECTION_ERROR,
+        )
+
+    def test_capability_and_data_failures_use_stable_categories(self):
+        rate_limited = RuntimeError("HTTP 429 too many requests")
+        self.assertEqual(
+            realtime_types.classify_realtime_failure(rate_limited),
+            realtime_types.RealtimeFailureType.RATE_LIMITED,
+        )
+        self.assertEqual(
+            realtime_types.classify_realtime_failure(None),
+            realtime_types.RealtimeFailureType.EMPTY,
+        )
+        self.assertEqual(
+            realtime_types.classify_realtime_failure(None, invalid_quote=True),
+            realtime_types.RealtimeFailureType.INVALID_QUOTE,
+        )
+        self.assertEqual(
+            realtime_types.classify_realtime_failure(None, not_supported=True),
+            realtime_types.RealtimeFailureType.NOT_SUPPORTED,
+        )
+        self.assertEqual(
+            realtime_types.classify_realtime_failure(None, circuit_open=True),
+            realtime_types.RealtimeFailureType.CIRCUIT_OPEN,
+        )
+
+    def test_failure_summary_contains_only_route_and_category(self):
+        summary = realtime_types.build_realtime_failure_summary(
+            [
+                ("tencent", realtime_types.RealtimeFailureType.TIMEOUT),
+                ("akshare_sina", realtime_types.RealtimeFailureType.CONNECTION_ERROR),
+            ]
+        )
+
+        self.assertEqual(summary, "tencent:timeout; akshare_sina:connection_error")
+        self.assertNotIn("http", summary)
+        self.assertNotIn("proxy", summary)
 
 
 class CircuitBreakerConcurrencyTestCase(unittest.TestCase):

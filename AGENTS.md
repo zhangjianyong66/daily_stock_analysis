@@ -125,6 +125,15 @@ npm run build
 - `scripts/generate_index_from_csv.py --source tushare` 依赖 `data/stock_list_a.csv`、`data/stock_list_hk.csv`、`data/stock_list_us.csv` 等完整股票列表；本地缺少这些 CSV 时直接写入会只生成种子市场 / ETF 子集，可能覆盖 `apps/dsa-web/public/stocks.index.json` 的完整索引。
 - 刷新完整索引前应先确认基础 CSV 可用，或使用 `scripts/refresh_stock_index.py` 先拉取 / 准备数据；只补少量离线 seed 时，应以现有完整 `stocks.index.json` 为基线合入，避免丢失 A 股、港股、美股条目。
 
+### 实时行情多源与降级
+
+- A 股 ETF 的 `tencent`、`akshare_sina`、`akshare_em` 必须分别路由到腾讯单标的、新浪单标的和 AkShare Eastmoney ETF 全量实现；`efinance` 与 `akshare_em` 虽是不同客户端，但同属 Eastmoney 物理上游。
+- 实时行情公共安全上限为：腾讯/新浪等轻量源单次 3 秒、Eastmoney 等全量源单次 8 秒、单只标的整链路 20 秒；`DATA_SOURCE_REALTIME_TIMEOUT_SECONDS=0` 只表示不额外收紧，不能取消这些上限。
+- 轻量源只对瞬时网络错误重试 1 次；空数据、无有效价格和不支持不重试。同一物理上游发生超时、连接失败或限流后，本轮不得通过另一个客户端重复请求。
+- 所有实时源失败后，仅同一市场交易日且年龄不超过 30 分钟的进程内 last-good 行情可作为 `stale` 降级；stale 不得回写延长寿命，也不得伪装为实时成功。
+- 实时源确已尝试但全部失败且无合格 stale 时，AnalysisContextPack 使用 `fetch_failed`；功能未启用或没有请求证据时才使用 `missing`。
+- 实时行情目标回归：`python3 -m pytest tests/test_realtime_types.py tests/test_realtime_quote_fallback_logging.py tests/test_akshare_realtime_quote.py tests/test_etf_realtime_singleflight.py tests/test_fetcher_source_optimization.py tests/test_hk_realtime_routing.py tests/test_tw_market_support.py tests/test_run_diagnostics_p1.py tests/test_analysis_context_builder.py tests/test_pipeline_market_phase_context.py -q`。
+
 ### 持仓与成交截图导入
 
 - Web 持仓图片导入只支持活跃 `cn/CNY` 账户；持仓初始化要求账户没有任何交易流水，成交增量只接受实际成交记录。

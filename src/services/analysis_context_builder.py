@@ -119,6 +119,19 @@ class AnalysisContextBuilder:
 def _build_quote_block(artifacts: PipelineAnalysisArtifacts) -> AnalysisContextBlock:
     quote = _to_dict(artifacts.realtime_quote)
     if not quote:
+        diagnostics = (artifacts.metadata or {}).get("realtime_quote_diagnostics")
+        if isinstance(diagnostics, Mapping) and diagnostics.get("attempted") and diagnostics.get("all_failed"):
+            failure_summary = str(diagnostics.get("summary") or "all_sources_failed")
+            return AnalysisContextBlock(
+                status=ContextFieldStatus.FETCH_FAILED,
+                items={
+                    "quote": AnalysisContextItem(
+                        status=ContextFieldStatus.FETCH_FAILED,
+                        missing_reason="realtime_quote_fetch_failed",
+                    )
+                },
+                metadata={"failure_summary": failure_summary},
+            )
         return AnalysisContextBlock(
             status=ContextFieldStatus.MISSING,
             items={
@@ -676,6 +689,10 @@ def _quote_metadata(
         "fetched_at",
         "provider_timestamp",
         "fallback_from",
+        "fallback_reason",
+        "failure_summary",
+        "cache_age_seconds",
+        "data_quality",
     ):
         if key in {"fetched_at", "provider_timestamp"}:
             value = _metadata_iso_datetime_value(artifacts.metadata or {}, key)

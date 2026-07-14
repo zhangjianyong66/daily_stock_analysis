@@ -155,6 +155,12 @@ class ProviderRun:
     fallback_to: Optional[str] = None
     cache_hit: Optional[bool] = None
     stale_seconds: Optional[int] = None
+    route_source: Optional[str] = None
+    physical_source: Optional[str] = None
+    attempt: Optional[int] = None
+    retry: Optional[bool] = None
+    budget_remaining_ms: Optional[int] = None
+    cache_age_seconds: Optional[int] = None
     record_count: Optional[int] = None
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
 
@@ -172,6 +178,12 @@ class ProviderRun:
             "fallback_to": self.fallback_to,
             "cache_hit": self.cache_hit,
             "stale_seconds": self.stale_seconds,
+            "route_source": self.route_source,
+            "physical_source": self.physical_source,
+            "attempt": self.attempt,
+            "retry": self.retry,
+            "budget_remaining_ms": self.budget_remaining_ms,
+            "cache_age_seconds": self.cache_age_seconds,
             "record_count": self.record_count,
             "created_at": self.created_at,
         }
@@ -677,6 +689,12 @@ def _provider_flow_event(
                 "fallback_from": run.fallback_from,
                 "fallback_to": run.fallback_to,
                 "error_type": run.error_type,
+                "route_source": run.route_source,
+                "physical_source": run.physical_source,
+                "attempt": run.attempt,
+                "retry": run.retry,
+                "budget_remaining_ms": run.budget_remaining_ms,
+                "cache_age_seconds": run.cache_age_seconds,
                 "node": {
                     "id": node_id,
                     "lane": "data_source",
@@ -688,6 +706,7 @@ def _provider_flow_event(
                     "ended_at": run.created_at,
                     "duration_ms": run.latency_ms,
                     "record_count": run.record_count,
+                    "attempts": run.attempt or 1,
                     "message": message,
                 },
             }
@@ -878,6 +897,12 @@ def record_provider_run(
     fallback_to: Optional[str] = None,
     cache_hit: Optional[bool] = None,
     stale_seconds: Optional[int] = None,
+    route_source: Optional[str] = None,
+    physical_source: Optional[str] = None,
+    attempt: Optional[int] = None,
+    retry: Optional[bool] = None,
+    budget_remaining_ms: Optional[int] = None,
+    cache_age_seconds: Optional[int] = None,
     record_count: Optional[int] = None,
 ) -> None:
     """Append a provider attempt to the active context without affecting callers."""
@@ -900,6 +925,12 @@ def record_provider_run(
                 fallback_to=fallback_to,
                 cache_hit=cache_hit,
                 stale_seconds=stale_seconds,
+                route_source=sanitize_diagnostic_text(route_source, max_length=48),
+                physical_source=sanitize_diagnostic_text(physical_source, max_length=48),
+                attempt=attempt,
+                retry=retry,
+                budget_remaining_ms=budget_remaining_ms,
+                cache_age_seconds=cache_age_seconds,
                 record_count=record_count,
             )
         )

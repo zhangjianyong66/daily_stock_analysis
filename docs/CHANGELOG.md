@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修复] ETF 实时行情改为腾讯、新浪、Eastmoney 真实多源路由，并统一重试预算、同上游去重、30 分钟 stale 降级和失败诊断。
 - [改进] Web 首页股票自动补全索引新增 ETF 支持，生成阶段 best-effort 拉取 AkShare 全量 ETF 并使用常用 ETF 种子清单兜底。
 - [修复] 普通分析任务新增队列级超时兜底并释放重复提交锁，数据源 manager 为股票名称、日线和实时行情调用增加 provider 级等待预算与 fallback，避免单个外部源卡住导致任务长期显示执行中。
 - [修复] 管理员认证开关在 Docker `env_file` 注入但容器内无 `/app/.env` 文件时也能读取 `ADMIN_AUTH_ENABLED` 环境变量，避免重建容器后公网 WebUI 误判为未启用认证。

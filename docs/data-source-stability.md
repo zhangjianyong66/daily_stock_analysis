@@ -19,6 +19,7 @@
 | --- | --- | --- | --- |
 | A 股日线 / 技术面 | Efinance、Tencent、AkShare、Tushare、Pytdx、Baostock、YFinance | `DataFetcherManager` 按优先级尝试；配置 `TUSHARE_TOKEN` 后 Tushare 自动进入候选源 | 单源失败后尝试下一个源；连续失败会短期熔断该源 |
 | A 股实时行情 | Tencent、AkShare Sina、Efinance、AkShare EM、Tushare | `REALTIME_SOURCE_PRIORITY` 控制顺序，默认偏向 Tencent / Sina 这类轻量源 | 失败源记录 `fallback_from`，成功源继续返回 |
+| A 股 ETF 实时行情 | Tencent、AkShare Sina、Efinance、AkShare EM | Tencent / Sina 使用单标的独立接口；Efinance / AkShare EM 同属 Eastmoney 物理上游 | 轻量源瞬时错误最多重试 1 次；同一物理上游网络失败后本轮不重复请求 |
 | A 股大盘复盘 | TickFlow、AkShare、Tushare、Efinance | 配置 `TICKFLOW_API_KEY` 后，主指数和市场宽度优先尝试 TickFlow | TickFlow 权限不足或失败时回退 AkShare / Tushare / Efinance 链路 |
 | AlphaSift 选股快照 | Tushare、Sina、Efinance、AkShare EM、EastMoney Datacenter | 有 `TUSHARE_TOKEN` 时自动把 `tushare` 放入快照优先级；否则使用免费源链路 | AlphaSift 维护 source health；DSA 状态接口透出 snapshot/daily health |
 | AlphaSift 日线补特征 | DSA `DataFetcherManager` | AlphaSift 调用 DSA provider context，优先复用 DSA 日线与缓存链路 | DSA 链路失败后才回到 AlphaSift 原始日线源 |
@@ -90,6 +91,8 @@ flowchart LR
 ```
 
 当前日线源熔断策略为连续失败 3 次后短期冷却约 5 分钟。它的目的不是永久禁用数据源，而是避免一个短时间不可用的源拖慢整批分析。
+
+实时行情另有请求级安全边界：腾讯、新浪等轻量单标的源单次最多等待 3 秒，Eastmoney 全量源单次最多等待 8 秒，单只标的整条链路最多等待 20 秒。所有实时源失败后，仅可使用同一市场交易日、年龄不超过 30 分钟的进程内 last-good 行情，并明确标记为 `stale`；无合格缓存时记录 `fetch_failed`，分析仍使用历史收盘价继续。
 
 ## AlphaSift 选股与热点链路
 
@@ -173,8 +176,8 @@ LONGBRIDGE_ACCESS_TOKEN=your_access_token
 | 情况 | 建议提示 |
 | --- | --- |
 | 单个源失败但 fallback 成功 | 本次使用了降级数据源，分析仍可继续；报告中会标记实际成功源。 |
-| 多个源失败但有缓存 | 实时源不可用，本次使用上一次成功缓存；结论会降低置信度。 |
-| 全部源失败且无缓存 | 当前数据不可用，请稍后重试，或配置 Tushare / TickFlow / Longbridge 等 token 型数据源。 |
+| 多个源失败但有缓存 | 实时源不可用，本次使用同交易日 30 分钟内的 last-good 行情；报告会显示缓存年龄并降低置信度。 |
+| 全部源失败且无缓存 | 本次实时行情标记为 `fetch_failed`，分析继续使用历史收盘价；可稍后重试或配置 token 型数据源。 |
 
 ## 后续可做的产品化增强
 

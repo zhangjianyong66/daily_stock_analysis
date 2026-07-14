@@ -17,10 +17,12 @@
 import logging
 import random
 import time
+from copy import deepcopy
 from threading import BoundedSemaphore, Event, RLock, Thread
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Callable, Optional, List, Tuple, Dict, Any
+from typing import Callable, Optional, List, Tuple, Dict, Any, Mapping, Set
 
 import pandas as pd
 import numpy as np
@@ -30,7 +32,12 @@ from src.services.market_symbol_utils import is_suffix_market_symbol
 from src.services.run_diagnostics import record_provider_run, record_provider_run_started
 from .fundamental_adapter import AkshareFundamentalAdapter
 from .yfinance_fundamental_adapter import YfinanceFundamentalAdapter
-from .realtime_types import CircuitBreaker
+from .realtime_types import (
+    CircuitBreaker,
+    RealtimeFailureType,
+    build_realtime_failure_summary,
+    classify_realtime_failure,
+)
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -38,6 +45,27 @@ logger = logging.getLogger(__name__)
 
 # === 标准化列名定义 ===
 STANDARD_COLUMNS = ['date', 'open', 'high', 'low', 'close', 'volume', 'amount', 'pct_chg']
+
+
+@dataclass(frozen=True)
+class RealtimeSourcePlan:
+    """One logical realtime route mapped to its physical upstream."""
+
+    route_source: str
+    physical_source: str
+    fetcher_name: str
+    request_code: str
+    kwargs: Mapping[str, Any]
+    timeout_seconds: float
+    max_attempts: int
+    lightweight: bool
+
+
+@dataclass(frozen=True)
+class _RealtimeLastGoodEntry:
+    quote: Any
+    cached_at: float
+    market_date: str
 
 
 def unwrap_exception(exc: Exception) -> Exception:
@@ -638,6 +666,12 @@ class DataFetcherManager:
     _CONCEPT_RANKINGS_EMPTY_CACHE_TTL_SECONDS = 30.0
     _concept_rankings_cache_lock = RLock()
     _concept_rankings_cache: Dict[int, Tuple[float, List[Dict], List[Dict]]] = {}
+    _REALTIME_TOTAL_BUDGET_SECONDS = 20.0
+    _REALTIME_LIGHTWEIGHT_TIMEOUT_SECONDS = 3.0
+    _REALTIME_BULK_TIMEOUT_SECONDS = 8.0
+    _REALTIME_LAST_GOOD_MAX_AGE_SECONDS = 1800.0
+    _realtime_last_good_lock = RLock()
+    _realtime_last_good_cache: Dict[Tuple[str, str], _RealtimeLastGoodEntry] = {}
 
     def __init__(self, fetchers: Optional[List[BaseFetcher]] = None):
         """
@@ -1766,316 +1800,434 @@ class DataFetcherManager:
         setattr(quote, "stale_seconds", stale_seconds)
         setattr(quote, "is_stale", stale_seconds > int(ttl))
         return quote
-    
-    def get_realtime_quote(self, stock_code: str, *, log_final_failure: bool = True):
-        """
-        获取实时行情数据（自动故障切换）
-        
-        故障切换策略（按配置的优先级）：
-        1. 美股：使用 YfinanceFetcher.get_realtime_quote()
-        2. EfinanceFetcher.get_realtime_quote()
-        3. AkshareFetcher.get_realtime_quote(source="em")  - 东财
-        4. AkshareFetcher.get_realtime_quote(source="sina") - 新浪
-        5. AkshareFetcher.get_realtime_quote(source="tencent") - 腾讯
-        6. 返回 None（降级兜底）
-        
-        Args:
-            stock_code: 股票代码
-            log_final_failure: Whether to emit the final "all sources failed"
-                summary log when no realtime quote is available.
-            
-        Returns:
-            UnifiedRealtimeQuote 对象，所有数据源都失败则返回 None
-        """
-        raw_stock_code = (stock_code or "").strip()
-        # Normalize code (strip SH/SZ prefix etc.)
-        stock_code = normalize_stock_code(stock_code)
 
-        from .akshare_fetcher import _is_us_code
-        from .us_index_mapping import is_us_index_code
-        from src.config import get_config
+    @classmethod
+    def _realtime_market_date(cls, market: str) -> str:
+        from src.core.trading_calendar import get_market_now
 
-        config = get_config()
-        realtime_timeout = _config_float(config, "data_source_realtime_timeout_seconds", 12.0)
+        return get_market_now(market).date().isoformat()
 
-        # 如果实时行情功能被禁用，直接返回 None
-        if not config.enable_realtime_quote:
-            logger.debug(f"[实时行情] 功能已禁用，跳过 {stock_code}")
+    @classmethod
+    def _remember_realtime_quote(cls, market: str, stock_code: str, quote: Any) -> None:
+        if quote is None or not quote.has_basic_data() or getattr(quote, "is_stale", False):
+            return
+        entry = _RealtimeLastGoodEntry(
+            quote=deepcopy(quote),
+            cached_at=time.monotonic(),
+            market_date=cls._realtime_market_date(market),
+        )
+        with cls._realtime_last_good_lock:
+            cls._realtime_last_good_cache[(market, stock_code)] = entry
+
+    @classmethod
+    def _get_stale_realtime_quote(
+        cls,
+        market: str,
+        stock_code: str,
+        failures: List[Tuple[str, RealtimeFailureType]],
+    ) -> Any:
+        with cls._realtime_last_good_lock:
+            entry = cls._realtime_last_good_cache.get((market, stock_code))
+            if entry is None:
+                return None
+            entry = _RealtimeLastGoodEntry(
+                quote=deepcopy(entry.quote),
+                cached_at=entry.cached_at,
+                market_date=entry.market_date,
+            )
+
+        age_seconds = max(0.0, time.monotonic() - entry.cached_at)
+        if age_seconds > cls._REALTIME_LAST_GOOD_MAX_AGE_SECONDS:
+            return None
+        if entry.market_date != cls._realtime_market_date(market):
+            return None
+        if not entry.quote.has_basic_data():
             return None
 
-        # ----------------------------------------------------------
-        # 美股 (指数 + 个股) / 港股 — 专用双源路由
-        #   配置长桥后: Longbridge 首选, YFinance/AkShare 补充
-        #   未配置长桥: YFinance/AkShare 首选, Longbridge 补充
-        #   美股指数:   始终 YFinance 首选（Longbridge 不提供指数行情）
-        # ----------------------------------------------------------
+        quote = entry.quote
+        quote.fetched_at = cls._utc_now_iso()
+        quote.is_stale = True
+        quote.data_quality = "stale"
+        quote.cache_age_seconds = int(age_seconds)
+        quote.failure_summary = build_realtime_failure_summary(failures)
+        if failures:
+            quote.fallback_from = failures[0][0]
+            quote.fallback_reason = failures[0][1].value
+        return quote
+
+    @classmethod
+    def _effective_realtime_timeout(
+        cls,
+        plan: RealtimeSourcePlan,
+        configured_timeout: float,
+        remaining: float,
+    ) -> float:
+        limits = [float(plan.timeout_seconds), max(0.001, float(remaining))]
+        if configured_timeout > 0:
+            limits.append(float(configured_timeout))
+        return max(0.001, min(limits))
+
+    def _build_realtime_source_plans(
+        self,
+        stock_code: str,
+        raw_stock_code: str,
+        config: Any,
+    ) -> Tuple[str, List[RealtimeSourcePlan]]:
+        from .akshare_fetcher import _is_us_code
+        from .us_index_mapping import is_us_index_code
+
         is_us_index = is_us_index_code(stock_code)
         is_us = is_us_index or _is_us_code(stock_code)
         is_hk = (not is_us) and _is_hk_market(stock_code)
-        is_jp = (not is_us) and (not is_hk) and _is_jp_market(stock_code)
-        is_kr = (not is_us) and (not is_hk) and _is_kr_market(stock_code)
-        is_tw = (not is_us) and (not is_hk) and _is_tw_market(stock_code)
+        is_jp = (not is_us) and (not is_hk) and _is_jp_market(raw_stock_code or stock_code)
+        is_kr = (not is_us) and (not is_hk) and _is_kr_market(raw_stock_code or stock_code)
+        is_tw = (not is_us) and (not is_hk) and _is_tw_market(raw_stock_code or stock_code)
+
+        def plan(
+            route_source: str,
+            physical_source: str,
+            fetcher_name: str,
+            *,
+            request_code: Optional[str] = None,
+            kwargs: Optional[Mapping[str, Any]] = None,
+            lightweight: bool = False,
+            max_attempts: Optional[int] = None,
+        ) -> RealtimeSourcePlan:
+            return RealtimeSourcePlan(
+                route_source=route_source,
+                physical_source=physical_source,
+                fetcher_name=fetcher_name,
+                request_code=request_code or stock_code,
+                kwargs=dict(kwargs or {}),
+                timeout_seconds=(
+                    self._REALTIME_LIGHTWEIGHT_TIMEOUT_SECONDS
+                    if lightweight
+                    else self._REALTIME_BULK_TIMEOUT_SECONDS
+                ),
+                max_attempts=max_attempts or (2 if lightweight else 1),
+                lightweight=lightweight,
+            )
 
         if is_jp or is_kr or is_tw:
-            market_label = "日股" if is_jp else "韩股" if is_kr else "台股"
-            quote = self._try_fetcher_quote(stock_code, "YfinanceFetcher")
-            if quote is not None:
-                logger.info(f"[实时行情] {market_label} {stock_code} 成功获取 (来源: YfinanceFetcher)")
-                return self._enrich_realtime_quote(
-                    quote,
-                    realtime_cache_ttl=getattr(config, "realtime_cache_ttl", None),
-                )
-            if log_final_failure:
-                logger.info(f"[实时行情] {market_label} {stock_code} 无可用数据源")
-            return None
+            market = "jp" if is_jp else "kr" if is_kr else "tw"
+            return market, [plan("yfinance", "yfinance", "YfinanceFetcher", request_code=raw_stock_code)]
 
-        if is_us or is_hk:
+        if is_us:
             prefer_lb = self._longbridge_preferred() and not is_us_index
-            if is_us:
-                primary_src = "LongbridgeFetcher" if prefer_lb else "YfinanceFetcher"
-                secondary_src = "YfinanceFetcher" if prefer_lb else "LongbridgeFetcher"
-                market_label = "美股指数" if is_us_index else "美股"
-                primary_kw: dict = {}
-                secondary_kw: dict = {}
-            else:
-                primary_src = "LongbridgeFetcher" if prefer_lb else "AkshareFetcher"
-                secondary_src = "AkshareFetcher" if prefer_lb else "LongbridgeFetcher"
-                market_label = "港股"
-                primary_kw = {"source": "hk"} if primary_src == "AkshareFetcher" else {}
-                secondary_kw = {"source": "hk"} if secondary_src == "AkshareFetcher" else {}
-
-            primary_token = self._realtime_fetcher_token(primary_src, **primary_kw)
-            primary_quote = self._try_fetcher_quote(stock_code, primary_src, **primary_kw)
-            fallback_from = primary_token if primary_quote is None else None
-            if primary_quote is not None:
-                logger.info(f"[实时行情] {market_label} {stock_code} 成功获取 (来源: {primary_src})")
-            primary_quote = self._supplement_quote(
-                stock_code, primary_quote, secondary_src, **secondary_kw,
-            )
-            # 美股个股（非指数）尝试从 Finnhub/AlphaVantage 补充缺失字段
-            if is_us and not is_us_index and primary_quote is not None:
-                for extra_src in ["FinnhubFetcher", "AlphaVantageFetcher"]:
-                    primary_quote = self._supplement_quote(
-                        stock_code, primary_quote, extra_src,
-                    )
-            if primary_quote is not None:
-                return self._enrich_realtime_quote(
-                    primary_quote,
-                    fallback_from=fallback_from,
-                    realtime_cache_ttl=getattr(config, "realtime_cache_ttl", None),
+            primary = "LongbridgeFetcher" if prefer_lb else "YfinanceFetcher"
+            secondary = "YfinanceFetcher" if prefer_lb else "LongbridgeFetcher"
+            plans = [
+                plan(self._realtime_fetcher_token(primary), primary.lower(), primary, request_code=raw_stock_code),
+                plan(self._realtime_fetcher_token(secondary), secondary.lower(), secondary, request_code=raw_stock_code),
+            ]
+            if not is_us_index:
+                plans.extend(
+                    [
+                        plan("finnhub", "finnhub", "FinnhubFetcher", request_code=raw_stock_code, lightweight=True, max_attempts=1),
+                        plan("alphavantage", "alphavantage", "AlphaVantageFetcher", request_code=raw_stock_code, lightweight=True, max_attempts=1),
+                    ]
                 )
-            if log_final_failure:
-                logger.info(f"[实时行情] {market_label} {stock_code} 无可用数据源")
-            return None
-        
-        # 获取配置的数据源优先级
+            return "us", plans
+
+        if is_hk:
+            prefer_lb = self._longbridge_preferred()
+            primary = "LongbridgeFetcher" if prefer_lb else "AkshareFetcher"
+            secondary = "AkshareFetcher" if prefer_lb else "LongbridgeFetcher"
+            return "hk", [
+                plan(
+                    self._realtime_fetcher_token(primary, source="hk"),
+                    "longbridge" if primary == "LongbridgeFetcher" else "akshare_hk",
+                    primary,
+                    kwargs={"source": "hk"} if primary == "AkshareFetcher" else {},
+                ),
+                plan(
+                    self._realtime_fetcher_token(secondary, source="hk"),
+                    "longbridge" if secondary == "LongbridgeFetcher" else "akshare_hk",
+                    secondary,
+                    kwargs={"source": "hk"} if secondary == "AkshareFetcher" else {},
+                ),
+            ]
+
         source_priority = [
             source.strip().lower()
-            for source in config.realtime_source_priority.split(',')
+            for source in str(getattr(config, "realtime_source_priority", "")).split(",")
             if source.strip()
         ]
-        
-        errors = []
-        failed_sources: List[str] = []
-        timed_out_fetcher_ids = set()
-        # primary_quote holds the first successful result; we may supplement
-        # missing fields (volume_ratio, turnover_rate, etc.) from later sources.
-        primary_quote = None
-        primary_fallback_from: Optional[str] = None
+        factories = {
+            "efinance": lambda: plan("efinance", "eastmoney", "EfinanceFetcher"),
+            "akshare_em": lambda: plan("akshare_em", "eastmoney", "AkshareFetcher", kwargs={"source": "em"}),
+            "akshare_sina": lambda: plan("akshare_sina", "sina", "AkshareFetcher", kwargs={"source": "sina"}, lightweight=True),
+            "tencent": lambda: plan("tencent", "tencent", "AkshareFetcher", kwargs={"source": "tencent"}, lightweight=True),
+            "akshare_qq": lambda: plan("akshare_qq", "tencent", "AkshareFetcher", kwargs={"source": "tencent"}, lightweight=True),
+            "tushare": lambda: plan("tushare", "tushare", "TushareFetcher", request_code=raw_stock_code or stock_code),
+            "tickflow": lambda: plan("tickflow", "tickflow", "TickFlowFetcher", request_code=raw_stock_code or stock_code, lightweight=True, max_attempts=1),
+        }
+        return "cn", [factories[source]() for source in source_priority if source in factories]
 
-        def _call_realtime_source(fetcher_obj, *call_args, route_source: str, fallback_source: Optional[str], **call_kwargs):
-            provider_name = fetcher_obj.name
-            if id(fetcher_obj) in timed_out_fetcher_ids:
+    def _finalize_realtime_quote(
+        self,
+        quote: Any,
+        *,
+        market: str,
+        stock_code: str,
+        config: Any,
+        failures: List[Tuple[str, RealtimeFailureType]],
+    ) -> Any:
+        quote = self._enrich_realtime_quote(
+            quote,
+            fallback_from=failures[0][0] if failures else None,
+            realtime_cache_ttl=getattr(config, "realtime_cache_ttl", None),
+        )
+        if getattr(quote, "market", None) is None:
+            quote.market = market
+        if getattr(quote, "is_stale", False):
+            quote.data_quality = "stale"
+        elif getattr(quote, "data_quality", None) in (None, ""):
+            quote.data_quality = "ok"
+        if failures:
+            quote.fallback_reason = failures[0][1].value
+            quote.failure_summary = build_realtime_failure_summary(failures)
+        self._remember_realtime_quote(market, stock_code, quote)
+        return quote
+
+    def _execute_realtime_plans(
+        self,
+        plans: List[RealtimeSourcePlan],
+        *,
+        market: str,
+        stock_code: str,
+        config: Any,
+        log_final_failure: bool,
+    ) -> Any:
+        configured_timeout = _config_float(config, "data_source_realtime_timeout_seconds", 12.0)
+        deadline = time.monotonic() + self._REALTIME_TOTAL_BUDGET_SECONDS
+        failures: List[Tuple[str, RealtimeFailureType]] = []
+        raw_errors: List[str] = []
+        blocked_physical_sources: Set[str] = set()
+        timed_out_fetcher_ids: Set[int] = set()
+        primary_quote = None
+
+        for index, source_plan in enumerate(plans):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            if source_plan.physical_source in blocked_physical_sources:
+                if primary_quote is None:
+                    failures.append((source_plan.route_source, RealtimeFailureType.CIRCUIT_OPEN))
                 record_provider_run(
                     data_type="realtime_quote",
-                    provider=provider_name,
+                    provider=source_plan.fetcher_name,
                     operation="get_realtime_quote",
                     success=False,
-                    latency_ms=int((time.time() - attempt_start) * 1000),
-                    error_type="provider_timeout_skip",
-                    error_message="provider skipped after manager-level timeout in current request",
-                    fallback_to=fallback_source,
+                    error_type=RealtimeFailureType.CIRCUIT_OPEN.value,
+                    error_message="physical source blocked after network failure",
+                    route_source=source_plan.route_source,
+                    physical_source=source_plan.physical_source,
+                    budget_remaining_ms=int(max(0.0, remaining) * 1000),
                     record_count=0,
                 )
+                continue
+
+            fetcher = self._get_fetcher_by_name(source_plan.fetcher_name, capability="realtime_quote")
+            if fetcher is None or not hasattr(fetcher, "get_realtime_quote"):
                 if primary_quote is None:
-                    failed_sources.append(route_source)
-                return None
+                    failures.append((source_plan.route_source, RealtimeFailureType.NOT_SUPPORTED))
+                record_provider_run(
+                    data_type="realtime_quote",
+                    provider=source_plan.fetcher_name,
+                    operation="get_realtime_quote",
+                    success=False,
+                    error_type=RealtimeFailureType.NOT_SUPPORTED.value,
+                    error_message=RealtimeFailureType.NOT_SUPPORTED.value,
+                    route_source=source_plan.route_source,
+                    physical_source=source_plan.physical_source,
+                    fallback_to=(plans[index + 1].route_source if index + 1 < len(plans) else None),
+                    record_count=0,
+                )
+                continue
+            if id(fetcher) in timed_out_fetcher_ids:
+                continue
 
-            record_provider_run_started(
-                data_type="realtime_quote",
-                provider=provider_name,
-                operation="get_realtime_quote",
-            )
-            return self._call_fetcher_method(
-                fetcher_obj,
-                'get_realtime_quote',
-                *call_args,
-                timeout_seconds=realtime_timeout,
-                capability="realtime_quote",
-                **call_kwargs,
-            )
-        
-        for source_index, source in enumerate(source_priority):
-            attempt_start = time.time()
-            fallback_to = source_priority[source_index + 1] if source_index + 1 < len(source_priority) else None
-            fetcher = None
-            try:
-                quote = None
-                
-                if source == "efinance":
-                    fetcher = self._get_fetcher_by_name("EfinanceFetcher", capability="realtime_quote")
-                    if fetcher is not None and hasattr(fetcher, 'get_realtime_quote'):
-                        quote = _call_realtime_source(
-                            fetcher,
-                            stock_code,
-                            route_source=source,
-                            fallback_source=fallback_to,
+            fallback_to = plans[index + 1].route_source if index + 1 < len(plans) else None
+            for attempt in range(1, source_plan.max_attempts + 1):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                timeout_seconds = self._effective_realtime_timeout(
+                    source_plan,
+                    configured_timeout,
+                    remaining,
+                )
+                attempt_start = time.monotonic()
+                record_provider_run_started(
+                    data_type="realtime_quote",
+                    provider=fetcher.name,
+                    operation="get_realtime_quote",
+                )
+                try:
+                    call_kwargs = dict(source_plan.kwargs)
+                    if type(fetcher).__module__ in {
+                        "data_provider.akshare_fetcher",
+                        "data_provider.efinance_fetcher",
+                    }:
+                        call_kwargs["request_timeout_seconds"] = timeout_seconds
+                        call_kwargs["raise_on_error"] = True
+                    quote = self._call_fetcher_method(
+                        fetcher,
+                        "get_realtime_quote",
+                        source_plan.request_code,
+                        timeout_seconds=timeout_seconds,
+                        capability="realtime_quote",
+                        **call_kwargs,
+                    )
+                    latency_ms = int((time.monotonic() - attempt_start) * 1000)
+                    if quote is None or not quote.has_basic_data():
+                        failure_type = classify_realtime_failure(
+                            None,
+                            invalid_quote=quote is not None,
                         )
-                
-                elif source == "akshare_em":
-                    fetcher = self._get_fetcher_by_name("AkshareFetcher", capability="realtime_quote")
-                    if fetcher is not None and hasattr(fetcher, 'get_realtime_quote'):
-                        quote = _call_realtime_source(
-                            fetcher,
-                            stock_code,
-                            source="em",
-                            route_source=source,
-                            fallback_source=fallback_to,
+                        record_provider_run(
+                            data_type="realtime_quote",
+                            provider=fetcher.name,
+                            operation="get_realtime_quote",
+                            success=False,
+                            latency_ms=latency_ms,
+                            error_type=failure_type.value,
+                            error_message=failure_type.value,
+                            fallback_to=fallback_to,
+                            route_source=source_plan.route_source,
+                            physical_source=source_plan.physical_source,
+                            attempt=attempt,
+                            retry=attempt > 1,
+                            budget_remaining_ms=int(max(0.0, deadline - time.monotonic()) * 1000),
+                            record_count=0,
                         )
-                
-                elif source == "akshare_sina":
-                    fetcher = self._get_fetcher_by_name("AkshareFetcher", capability="realtime_quote")
-                    if fetcher is not None and hasattr(fetcher, 'get_realtime_quote'):
-                        quote = _call_realtime_source(
-                            fetcher,
-                            stock_code,
-                            source="sina",
-                            route_source=source,
-                            fallback_source=fallback_to,
-                        )
-                
-                elif source in ("tencent", "akshare_qq"):
-                    fetcher = self._get_fetcher_by_name("AkshareFetcher", capability="realtime_quote")
-                    if fetcher is not None and hasattr(fetcher, 'get_realtime_quote'):
-                        quote = _call_realtime_source(
-                            fetcher,
-                            stock_code,
-                            source="tencent",
-                            route_source=source,
-                            fallback_source=fallback_to,
-                        )
-                
-                elif source == "tushare":
-                    fetcher = self._get_fetcher_by_name("TushareFetcher", capability="realtime_quote")
-                    if fetcher is not None and hasattr(fetcher, 'get_realtime_quote'):
-                        quote = _call_realtime_source(
-                            fetcher,
-                            raw_stock_code or stock_code,
-                            route_source=source,
-                            fallback_source=fallback_to,
-                        )
+                        if primary_quote is None:
+                            failures.append((source_plan.route_source, failure_type))
+                        break
 
-                elif source == "tickflow":
-                    fetcher = self._get_fetcher_by_name("TickFlowFetcher", capability="realtime_quote")
-                    if fetcher is not None and hasattr(fetcher, 'get_realtime_quote'):
-                        quote = _call_realtime_source(
-                            fetcher,
-                            raw_stock_code or stock_code,
-                            route_source=source,
-                            fallback_source=fallback_to,
-                        )
-
-                provider_name = fetcher.name if fetcher is not None else source
-                
-                if quote is not None and quote.has_basic_data():
                     record_provider_run(
                         data_type="realtime_quote",
-                        provider=provider_name,
+                        provider=fetcher.name,
                         operation="get_realtime_quote",
                         success=True,
-                        latency_ms=int((time.time() - attempt_start) * 1000),
+                        latency_ms=latency_ms,
+                        fallback_from=failures[0][0] if failures and primary_quote is None else None,
                         fallback_to=fallback_to if primary_quote is None and self._quote_needs_supplement(quote) else None,
+                        route_source=source_plan.route_source,
+                        physical_source=source_plan.physical_source,
+                        attempt=attempt,
+                        retry=attempt > 1,
+                        budget_remaining_ms=int(max(0.0, deadline - time.monotonic()) * 1000),
                         record_count=1,
                     )
                     if primary_quote is None:
-                        # First successful source becomes primary
                         primary_quote = quote
-                        primary_fallback_from = failed_sources[0] if failed_sources else None
-                        logger.info(f"[实时行情] {stock_code} 成功获取 (来源: {source})")
-                        # If all key supplementary fields are present, return early
-                        if not self._quote_needs_supplement(primary_quote):
-                            return self._enrich_realtime_quote(
-                                primary_quote,
-                                fallback_from=primary_fallback_from,
-                                realtime_cache_ttl=getattr(config, "realtime_cache_ttl", None),
-                            )
-                        # Otherwise, continue to try later sources for missing fields
-                        logger.debug(f"[实时行情] {stock_code} 部分字段缺失，尝试从后续数据源补充")
-                        supplement_attempts = 0
+                        logger.info("[实时行情] %s 成功获取 (来源: %s)", stock_code, source_plan.route_source)
                     else:
-                        # Supplement missing fields from this source (limit attempts)
-                        supplement_attempts += 1
-                        if supplement_attempts > 1:
-                            logger.debug(f"[实时行情] {stock_code} 补充尝试已达上限，停止继续")
-                            break
-                        merged = self._merge_quote_fields(primary_quote, quote)
-                        if merged:
-                            logger.info(f"[实时行情] {stock_code} 从 {source} 补充了缺失字段: {merged}")
-                        # Stop supplementing once all key fields are filled
-                        if not self._quote_needs_supplement(primary_quote):
-                            break
-                else:
+                        filled = self._merge_quote_fields(primary_quote, quote)
+                        if filled:
+                            logger.info("[实时行情] %s 从 %s 补充了缺失字段: %s", stock_code, source_plan.route_source, filled)
+                    break
+                except Exception as exc:
+                    latency_ms = int((time.monotonic() - attempt_start) * 1000)
+                    failure_type = classify_realtime_failure(unwrap_exception(exc))
                     record_provider_run(
                         data_type="realtime_quote",
-                        provider=provider_name,
+                        provider=fetcher.name,
                         operation="get_realtime_quote",
                         success=False,
-                        latency_ms=int((time.time() - attempt_start) * 1000),
-                        error_type="empty",
-                        error_message="empty or incomplete quote",
+                        latency_ms=latency_ms,
+                        error_type=failure_type.value,
+                        error_message=failure_type.value,
                         fallback_to=fallback_to,
+                        route_source=source_plan.route_source,
+                        physical_source=source_plan.physical_source,
+                        attempt=attempt,
+                        retry=attempt > 1,
+                        budget_remaining_ms=int(max(0.0, deadline - time.monotonic()) * 1000),
                         record_count=0,
                     )
+                    raw_errors.append(f"[{source_plan.route_source}] 失败: {str(exc)}")
+                    manager_timeout = isinstance(exc, TimeoutError)
+                    if manager_timeout:
+                        timed_out_fetcher_ids.add(id(fetcher))
+                    can_retry = (
+                        source_plan.lightweight
+                        and not manager_timeout
+                        and failure_type in {
+                            RealtimeFailureType.TIMEOUT,
+                            RealtimeFailureType.CONNECTION_ERROR,
+                            RealtimeFailureType.RATE_LIMITED,
+                        }
+                        and attempt < source_plan.max_attempts
+                    )
+                    if can_retry:
+                        continue
                     if primary_quote is None:
-                        failed_sources.append(source)
-                    
-            except Exception as e:
-                error_msg = f"[{source}] 失败: {str(e)}"
-                error_type, error_reason = summarize_exception(e)
-                if fetcher is not None and isinstance(unwrap_exception(e), TimeoutError):
-                    timed_out_fetcher_ids.add(id(fetcher))
-                record_provider_run(
-                    data_type="realtime_quote",
-                    provider=getattr(fetcher, "name", source),
-                    operation="get_realtime_quote",
-                    success=False,
-                    latency_ms=int((time.time() - attempt_start) * 1000),
-                    error_type=error_type,
-                    error_message=error_reason,
-                    fallback_to=fallback_to,
+                        failures.append((source_plan.route_source, failure_type))
+                    if failure_type in {
+                        RealtimeFailureType.TIMEOUT,
+                        RealtimeFailureType.CONNECTION_ERROR,
+                        RealtimeFailureType.RATE_LIMITED,
+                    }:
+                        blocked_physical_sources.add(source_plan.physical_source)
+                    break
+
+            if primary_quote is not None and not self._quote_needs_supplement(primary_quote):
+                return self._finalize_realtime_quote(
+                    primary_quote,
+                    market=market,
+                    stock_code=stock_code,
+                    config=config,
+                    failures=failures,
                 )
-                logger.info(f"[实时行情] {stock_code} {error_msg}，继续尝试下一个数据源")
-                errors.append(error_msg)
-                if primary_quote is None:
-                    failed_sources.append(source)
-                continue
-        
-        # Return primary even if some fields are still missing
+
         if primary_quote is not None:
-            return self._enrich_realtime_quote(
+            return self._finalize_realtime_quote(
                 primary_quote,
-                fallback_from=primary_fallback_from,
-                realtime_cache_ttl=getattr(config, "realtime_cache_ttl", None),
+                market=market,
+                stock_code=stock_code,
+                config=config,
+                failures=failures,
             )
 
-        # 所有数据源都失败，返回 None（降级兜底）
-        if log_final_failure:
-            if errors:
-                logger.info(f"[实时行情] {stock_code} 所有数据源均失败: {'; '.join(errors)}")
-            else:
-                logger.info(f"[实时行情] {stock_code} 无可用数据源")
+        stale_quote = self._get_stale_realtime_quote(market, stock_code, failures)
+        if stale_quote is not None:
+            logger.info("[实时行情] %s 实时源失败，使用 %s 秒前的 last-good 行情", stock_code, stale_quote.cache_age_seconds)
+            return stale_quote
 
+        if log_final_failure:
+            if raw_errors:
+                logger.info("[实时行情] %s 所有数据源均失败: %s", stock_code, "; ".join(raw_errors))
+            else:
+                logger.info("[实时行情] %s 无可用数据源", stock_code)
         return None
+
+    def get_realtime_quote(self, stock_code: str, *, log_final_failure: bool = True):
+        """获取实时行情，并在统一预算内执行跨源 fallback 与 stale 降级。"""
+        raw_stock_code = (stock_code or "").strip()
+        stock_code = normalize_stock_code(stock_code)
+
+        from src.config import get_config
+
+        config = get_config()
+        if not config.enable_realtime_quote:
+            logger.debug("[实时行情] 功能已禁用，跳过 %s", stock_code)
+            return None
+
+        market, plans = self._build_realtime_source_plans(
+            stock_code,
+            raw_stock_code,
+            config,
+        )
+        return self._execute_realtime_plans(
+            plans,
+            market=market,
+            stock_code=stock_code,
+            config=config,
+            log_final_failure=log_final_failure,
+        )
 
     # Fields worth supplementing from secondary sources when the primary
     # source returns None for them. Ordered by importance.

@@ -7,6 +7,7 @@ import logging
 import sys
 import threading
 import time
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -35,8 +36,10 @@ class _DummyFetcher:
         self.priority = priority
         self._result = result
         self._error = error
+        self.calls = 0
 
     def get_realtime_quote(self, *args, **kwargs):
+        self.calls += 1
         if self._error is not None:
             raise self._error
         return self._result
@@ -94,6 +97,275 @@ def _make_pipeline(enable_realtime_quote: bool, realtime_quote=None) -> StockAna
     pipeline._enhance_context = MagicMock(return_value={"realtime": {}})
     pipeline.save_context_snapshot = False
     return pipeline
+
+
+@pytest.fixture(autouse=True)
+def _clear_realtime_last_good_cache():
+    cache = getattr(DataFetcherManager, "_realtime_last_good_cache", None)
+    lock = getattr(DataFetcherManager, "_realtime_last_good_lock", None)
+    if cache is not None:
+        if lock is None:
+            cache.clear()
+        else:
+            with lock:
+                cache.clear()
+    yield
+    if cache is not None:
+        if lock is None:
+            cache.clear()
+        else:
+            with lock:
+                cache.clear()
+
+
+@patch("src.config.get_config")
+def test_manager_retries_lightweight_connection_error_once(mock_get_config):
+    expected = _make_quote(source=RealtimeSource.TENCENT)
+
+    class FlakyTencent(_DummyFetcher):
+        def get_realtime_quote(self, *args, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise ConnectionError("temporary connection reset")
+            return expected
+
+    mock_get_config.return_value = SimpleNamespace(
+        enable_realtime_quote=True,
+        realtime_source_priority="tencent",
+        data_source_realtime_timeout_seconds=30,
+        realtime_cache_ttl=600,
+    )
+    tencent = FlakyTencent("AkshareFetcher", 0)
+    manager = DataFetcherManager(fetchers=[tencent])
+
+    quote = manager.get_realtime_quote("600519")
+
+    assert quote is expected
+    assert tencent.calls == 2
+
+
+@patch("src.config.get_config")
+def test_manager_does_not_retry_empty_quote(mock_get_config):
+    expected = _make_quote(source=RealtimeSource.EFINANCE)
+    tencent = _DummyFetcher("AkshareFetcher", 0, result=None)
+    eastmoney = _DummyFetcher("EfinanceFetcher", 1, result=expected)
+    mock_get_config.return_value = SimpleNamespace(
+        enable_realtime_quote=True,
+        realtime_source_priority="tencent,efinance",
+        data_source_realtime_timeout_seconds=30,
+        realtime_cache_ttl=600,
+    )
+    manager = DataFetcherManager(fetchers=[tencent, eastmoney])
+
+    quote = manager.get_realtime_quote("600519")
+
+    assert quote is expected
+    assert tencent.calls == 1
+
+
+@patch("src.config.get_config")
+def test_manager_blocks_second_eastmoney_client_after_connection_failure(mock_get_config):
+    efinance = _DummyFetcher(
+        "EfinanceFetcher",
+        0,
+        error=ConnectionError("remote disconnected"),
+    )
+    akshare = _DummyFetcher("AkshareFetcher", 1, result=_make_quote())
+    mock_get_config.return_value = SimpleNamespace(
+        enable_realtime_quote=True,
+        realtime_source_priority="efinance,akshare_em",
+        data_source_realtime_timeout_seconds=30,
+        realtime_cache_ttl=600,
+    )
+    manager = DataFetcherManager(fetchers=[efinance, akshare])
+
+    quote = manager.get_realtime_quote("600519")
+
+    assert quote is None
+    assert efinance.calls == 1
+    assert akshare.calls == 0
+
+
+@patch("src.config.get_config")
+def test_manager_allows_second_eastmoney_client_after_parse_failure(mock_get_config):
+    expected = _make_quote()
+    efinance = _DummyFetcher(
+        "EfinanceFetcher",
+        0,
+        error=ValueError("provider payload changed"),
+    )
+    akshare = _DummyFetcher("AkshareFetcher", 1, result=expected)
+    mock_get_config.return_value = SimpleNamespace(
+        enable_realtime_quote=True,
+        realtime_source_priority="efinance,akshare_em",
+        data_source_realtime_timeout_seconds=30,
+        realtime_cache_ttl=600,
+    )
+    manager = DataFetcherManager(fetchers=[efinance, akshare])
+
+    quote = manager.get_realtime_quote("600519")
+
+    assert quote is expected
+    assert efinance.calls == 1
+    assert akshare.calls == 1
+
+
+@patch("src.config.get_config")
+def test_manager_returns_same_day_last_good_as_stale_deep_copy(mock_get_config):
+    live_quote = _make_quote(source=RealtimeSource.TENCENT)
+    tencent = _DummyFetcher("AkshareFetcher", 0, result=live_quote)
+    mock_get_config.return_value = SimpleNamespace(
+        enable_realtime_quote=True,
+        realtime_source_priority="tencent",
+        data_source_realtime_timeout_seconds=30,
+        realtime_cache_ttl=600,
+    )
+    manager = DataFetcherManager(fetchers=[tencent])
+
+    first = manager.get_realtime_quote("600519")
+    tencent._result = None
+    second = manager.get_realtime_quote("600519")
+
+    assert first is live_quote
+    assert second is not first
+    assert second.price == first.price
+    assert second.source == RealtimeSource.TENCENT
+    assert second.is_stale is True
+    assert second.data_quality == "stale"
+    assert second.cache_age_seconds is not None
+    assert second.failure_summary == "tencent:empty"
+
+    second.price = 1.0
+    third = manager.get_realtime_quote("600519")
+    assert third.price == 1688.0
+
+
+@patch("src.config.get_config")
+def test_manager_rejects_expired_last_good_quote(mock_get_config):
+    tencent = _DummyFetcher(
+        "AkshareFetcher",
+        0,
+        result=_make_quote(source=RealtimeSource.TENCENT),
+    )
+    mock_get_config.return_value = SimpleNamespace(
+        enable_realtime_quote=True,
+        realtime_source_priority="tencent",
+        data_source_realtime_timeout_seconds=30,
+        realtime_cache_ttl=600,
+    )
+    manager = DataFetcherManager(fetchers=[tencent])
+    assert manager.get_realtime_quote("600519") is not None
+
+    key = ("cn", "600519")
+    with DataFetcherManager._realtime_last_good_lock:
+        entry = DataFetcherManager._realtime_last_good_cache[key]
+        DataFetcherManager._realtime_last_good_cache[key] = replace(
+            entry,
+            cached_at=time.monotonic() - 1801,
+        )
+    tencent._result = None
+
+    assert manager.get_realtime_quote("600519") is None
+
+
+@patch("src.config.get_config")
+def test_manager_rejects_previous_market_day_last_good_quote(mock_get_config):
+    tencent = _DummyFetcher(
+        "AkshareFetcher",
+        0,
+        result=_make_quote(source=RealtimeSource.TENCENT),
+    )
+    mock_get_config.return_value = SimpleNamespace(
+        enable_realtime_quote=True,
+        realtime_source_priority="tencent",
+        data_source_realtime_timeout_seconds=30,
+        realtime_cache_ttl=600,
+    )
+    manager = DataFetcherManager(fetchers=[tencent])
+
+    with patch.object(
+        DataFetcherManager,
+        "_realtime_market_date",
+        side_effect=["2026-07-14", "2026-07-15"],
+    ):
+        assert manager.get_realtime_quote("600519") is not None
+        tencent._result = None
+        assert manager.get_realtime_quote("600519") is None
+
+
+@patch("src.config.get_config")
+def test_manager_stops_starting_sources_after_total_budget(mock_get_config):
+    release = threading.Event()
+
+    class BlockingTencent(_DummyFetcher):
+        def get_realtime_quote(self, *args, **kwargs):
+            self.calls += 1
+            release.wait(timeout=1)
+            return None
+
+    tencent = BlockingTencent("AkshareFetcher", 0)
+    eastmoney = _DummyFetcher("EfinanceFetcher", 1, result=_make_quote())
+    mock_get_config.return_value = SimpleNamespace(
+        enable_realtime_quote=True,
+        realtime_source_priority="tencent,efinance",
+        data_source_realtime_timeout_seconds=30,
+        realtime_cache_ttl=600,
+    )
+    manager = DataFetcherManager(fetchers=[tencent, eastmoney])
+
+    try:
+        with patch.object(DataFetcherManager, "_REALTIME_TOTAL_BUDGET_SECONDS", 0.02):
+            started = time.monotonic()
+            quote = manager.get_realtime_quote("600519")
+    finally:
+        release.set()
+
+    assert quote is None
+    assert time.monotonic() - started < 0.2
+    assert tencent.calls == 1
+    assert eastmoney.calls == 0
+
+
+@patch("src.config.get_config")
+def test_manager_last_good_cache_returns_independent_copies_concurrently(mock_get_config):
+    tencent = _DummyFetcher(
+        "AkshareFetcher",
+        0,
+        result=_make_quote(source=RealtimeSource.TENCENT),
+    )
+    mock_get_config.return_value = SimpleNamespace(
+        enable_realtime_quote=True,
+        realtime_source_priority="tencent",
+        data_source_realtime_timeout_seconds=30,
+        realtime_cache_ttl=600,
+    )
+    manager = DataFetcherManager(fetchers=[tencent])
+    assert manager.get_realtime_quote("600519") is not None
+    tencent._result = None
+
+    results = []
+    errors = []
+    barrier = threading.Barrier(8)
+
+    def worker():
+        try:
+            barrier.wait(timeout=1)
+            results.append(manager.get_realtime_quote("600519"))
+        except Exception as exc:  # pragma: no cover - thread collection
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert errors == []
+    assert len(results) == 8
+    assert all(result.is_stale is True for result in results)
+    assert len({id(result) for result in results}) == 8
+    results[0].price = 1.0
+    assert all(result.price == 1688.0 for result in results[1:])
 
 
 @patch("src.config.get_config")
@@ -180,14 +452,14 @@ def test_manager_realtime_timeout_falls_back_to_next_source(mock_get_config):
 
     mock_get_config.return_value = SimpleNamespace(
         enable_realtime_quote=True,
-        realtime_source_priority="efinance,akshare_em",
+        realtime_source_priority="tencent,efinance",
         data_source_realtime_timeout_seconds=0.01,
         realtime_cache_ttl=600,
     )
     manager = DataFetcherManager(
         fetchers=[
-            BlockingFetcher("EfinanceFetcher", 0),
-            _DummyFetcher("AkshareFetcher", 1, result=fallback_quote),
+            BlockingFetcher("AkshareFetcher", 0),
+            _DummyFetcher("EfinanceFetcher", 1, result=fallback_quote),
         ]
     )
 
@@ -200,7 +472,7 @@ def test_manager_realtime_timeout_falls_back_to_next_source(mock_get_config):
     assert blocked_entered.wait(timeout=0.5)
     assert time.monotonic() - started < 1
     assert quote is fallback_quote
-    assert quote.fallback_from == "efinance"
+    assert quote.fallback_from == "tencent"
 
 
 @patch("src.config.get_config")

@@ -19,7 +19,12 @@ ensure_litellm_stub()
 from src.analyzer import AnalysisResult
 from src.core.pipeline import StockAnalysisPipeline
 from src.enums import ReportType
-from src.services.run_diagnostics import activate_run_diagnostic_context, current_diagnostic_snapshot, reset_run_diagnostic_context
+from src.services.run_diagnostics import (
+    activate_run_diagnostic_context,
+    current_diagnostic_snapshot,
+    record_provider_run,
+    reset_run_diagnostic_context,
+)
 
 
 def _analysis_result() -> AnalysisResult:
@@ -235,6 +240,57 @@ class PipelineMarketPhaseContextTestCase(unittest.TestCase):
         self.assertEqual(
             artifacts.metadata,
             {"query_id": "q-legacy", "trigger_source": "api"},
+        )
+
+    def test_legacy_artifacts_project_realtime_failure_diagnostics(self):
+        pipeline = _make_pipeline(agent_mode=False, save_context_snapshot=True)
+        pipeline.query_source = "api"
+        token = activate_run_diagnostic_context(trace_id="trace-realtime-artifacts")
+        try:
+            record_provider_run(
+                data_type="realtime_quote",
+                provider="AkshareFetcher",
+                operation="get_realtime_quote",
+                success=False,
+                error_type="timeout",
+                error_message="timeout",
+                route_source="tencent",
+                physical_source="tencent",
+            )
+            record_provider_run(
+                data_type="realtime_quote",
+                provider="AkshareFetcher",
+                operation="get_realtime_quote",
+                success=False,
+                error_type="connection_error",
+                error_message="connection_error",
+                route_source="akshare_sina",
+                physical_source="sina",
+            )
+            artifacts = pipeline._build_legacy_analysis_artifacts(
+                code="600519",
+                stock_name="贵州茅台",
+                market="cn",
+                phase=_phase_payload(),
+                context={"code": "600519"},
+                enhanced_context={},
+                realtime_quote=None,
+                trend_result=None,
+                chip_data=None,
+                fundamental_context=None,
+                news_context=None,
+                news_result_count=0,
+                query_id="q-realtime-failed",
+            )
+        finally:
+            reset_run_diagnostic_context(token)
+
+        diagnostics = artifacts.metadata["realtime_quote_diagnostics"]
+        self.assertIs(diagnostics["attempted"], True)
+        self.assertIs(diagnostics["all_failed"], True)
+        self.assertEqual(
+            diagnostics["summary"],
+            "tencent:timeout; akshare_sina:connection_error",
         )
 
     def test_context_snapshot_strips_runtime_portfolio_context(self):
