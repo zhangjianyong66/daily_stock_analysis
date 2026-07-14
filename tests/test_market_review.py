@@ -7,6 +7,7 @@ import os
 import sys
 import tempfile
 import unittest
+from datetime import date
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -504,6 +505,9 @@ class MarketReviewLocalizationTestCase(unittest.TestCase):
         self.assertEqual(analyzer_cls.call_args.kwargs["region"], "cn")
         persist_history.assert_called_once()
         self.assertEqual(persist_history.call_args.kwargs["region"], "cn")
+        self.assertIsNone(
+            persist_history.call_args.kwargs["daily_market_context_target_date"]
+        )
         snapshots = persist_history.call_args.kwargs["market_light_snapshots"]
         self.assertEqual(set(snapshots), {"cn"})
         self.assertEqual(snapshots["cn"]["trade_date"], "2026-03-06")
@@ -775,6 +779,7 @@ class MarketReviewLocalizationTestCase(unittest.TestCase):
                         "region": "cn",
                         "sections": [{"title": "今日大盘", "markdown": "复盘正文"}],
                     },
+                    daily_market_context_target_date=date(2026, 3, 5),
                 )
 
                 self.assertGreater(saved, 0)
@@ -795,6 +800,28 @@ class MarketReviewLocalizationTestCase(unittest.TestCase):
                     self.assertIn('"trade_date": "2026-03-06"', row.context_snapshot)
                     snapshot = json.loads(row.context_snapshot or "{}")
                     self.assertIn("analysis_context_pack_overview", snapshot)
+                    self.assertEqual(
+                        snapshot["daily_market_context_target_date"],
+                        "2026-03-05",
+                    )
+
+                omitted_saved = market_review_module._persist_market_review_history(
+                    review_report="## 今日大盘\n\n兼容复盘正文",
+                    markdown_report="# 大盘复盘\n\n## 今日大盘\n\n兼容复盘正文",
+                    region="cn",
+                    config=SimpleNamespace(report_language="zh"),
+                    query_id="market-task-002",
+                )
+                self.assertGreater(omitted_saved, 0)
+                with db.get_session() as session:
+                    omitted_row = session.query(AnalysisHistory).filter(
+                        AnalysisHistory.query_id == "market-task-002"
+                    ).first()
+                    omitted_snapshot = json.loads(omitted_row.context_snapshot or "{}")
+                    self.assertNotIn(
+                        "daily_market_context_target_date",
+                        omitted_snapshot,
+                    )
             finally:
                 DatabaseManager.reset_instance()
                 Config._instance = None

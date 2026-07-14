@@ -13,7 +13,7 @@
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Dict, Optional
 import uuid
 
@@ -184,6 +184,7 @@ def run_market_review(
     save_report_file: bool = True,
     persist_history: bool = True,
     trigger_source: str = "cli",
+    daily_market_context_target_date: Optional[date] = None,
 ) -> Optional[str] | Optional[MarketReviewRunResult]:
     """
     执行大盘复盘分析
@@ -200,6 +201,7 @@ def run_market_review(
         save_report_file: 是否保存 Markdown 文件；上下文生成路径可关闭以避免多区域临时复盘互相覆盖
         persist_history: 是否写入 analysis_history；预热路径可关闭以避免覆盖用户可见的同日大盘复盘记录
         trigger_source: 触发来源，用于日志排障（cli/schedule/api/bot/service 等）
+        daily_market_context_target_date: 个股分析上下文使用的目标交易日，仅写入内部历史快照
 
     Returns:
         复盘报告文本
@@ -340,6 +342,7 @@ def run_market_review(
                     query_id=history_query_id,
                     market_light_snapshots=market_light_snapshots,
                     market_review_payload=market_review_payload,
+                    daily_market_context_target_date=daily_market_context_target_date,
                 )
             
             # 推送通知（合并模式下跳过，由 main 层统一发送）
@@ -774,6 +777,7 @@ def _persist_market_review_history(
     query_id: Optional[str] = None,
     market_light_snapshots: Optional[Dict[str, Dict[str, Any]]] = None,
     market_review_payload: Optional[Dict[str, Any]] = None,
+    daily_market_context_target_date: Optional[date] = None,
 ) -> int:
     """Persist market review output into the existing analysis history table."""
     try:
@@ -813,6 +817,12 @@ def _persist_market_review_history(
             "market_review_region": region,
             "report_language": report_language,
         }
+        if isinstance(daily_market_context_target_date, datetime):
+            daily_market_context_target_date = daily_market_context_target_date.date()
+        if isinstance(daily_market_context_target_date, date):
+            context_snapshot["daily_market_context_target_date"] = (
+                daily_market_context_target_date.isoformat()
+            )
         if market_light_snapshots:
             context_snapshot["market_light_snapshots"] = market_light_snapshots
         if market_review_payload:

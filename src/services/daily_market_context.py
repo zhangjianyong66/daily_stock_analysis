@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 MARKET_REVIEW_HISTORY_CODE = "MARKET"
 MARKET_REVIEW_REPORT_TYPE = "market_review"
+DAILY_MARKET_CONTEXT_TARGET_DATE_KEY = "daily_market_context_target_date"
 
 
 _REGION_LABEL_ZH = {"cn": "A股", "hk": "港股", "us": "美股", "jp": "日股", "kr": "韩股"}
@@ -275,6 +276,9 @@ class DailyMarketContextService:
                 payload=payload if isinstance(payload, Mapping) else {},
                 region=region,
                 target_date=target_date,
+                context_target_date=snapshot.get(
+                    DAILY_MARKET_CONTEXT_TARGET_DATE_KEY
+                ),
                 current_query_id=current_query_id,
                 require_query_id_match=require_query_id_match,
                 report_language=report_language,
@@ -458,6 +462,7 @@ class DailyMarketContextService:
                 save_report_file=False,
                 persist_history=persist_market_review_history,
                 trigger_source="daily_market_context",
+                daily_market_context_target_date=target_date,
             )
 
             if (
@@ -784,6 +789,23 @@ def _coerce_date(value: Any) -> Optional[date]:
     return None
 
 
+def _coerce_context_target_date(value: Any) -> Optional[date]:
+    if isinstance(value, datetime):
+        return None
+    if isinstance(value, date):
+        return value
+    if not isinstance(value, str):
+        return None
+
+    normalized = value.strip()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", normalized) is None:
+        return None
+    try:
+        return date.fromisoformat(normalized)
+    except ValueError:
+        return None
+
+
 def _payload_trade_date(payload: Mapping[str, Any], region: str) -> Optional[date]:
     scoped_payload = _payload_for_region(payload, region)
     market_light = scoped_payload.get("market_light")
@@ -822,12 +844,24 @@ def _record_matches_target_date(
     payload: Mapping[str, Any],
     region: str,
     target_date: date,
+    context_target_date: Any = None,
     current_query_id: Optional[str] = None,
     require_query_id_match: bool = False,
     report_language: str = "zh",
 ) -> bool:
-    payload_date = _payload_trade_date(payload, region)
     language_matches = _record_report_language_matches(record, report_language)
+    explicit_target_date = _coerce_context_target_date(context_target_date)
+    if explicit_target_date is not None:
+        if explicit_target_date != target_date:
+            return False
+        if require_query_id_match and not _record_matches_query_id(
+            record,
+            current_query_id,
+        ):
+            return False
+        return language_matches
+
+    payload_date = _payload_trade_date(payload, region)
     if payload_date is not None:
         if require_query_id_match:
             return _record_matches_query_id(record, current_query_id) and language_matches
