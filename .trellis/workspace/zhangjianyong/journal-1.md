@@ -204,3 +204,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 7: 修复 ETF 实时行情多源兜底
+
+**Date**: 2026-07-14
+**Task**: 修复 ETF 实时行情多源兜底
+**Branch**: `fix/etf-realtime-fallback`
+
+### Summary
+
+完成 ETF 腾讯/新浪/Eastmoney 真多源路由，统一实时行情重试预算、物理上游去重、last-good stale、singleflight 与失败诊断；完整后端门禁通过。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `74e7e47` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
