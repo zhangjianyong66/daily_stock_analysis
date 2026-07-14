@@ -237,3 +237,37 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 8: 修复实时行情慢响应与超时隔离
+
+**Date**: 2026-07-14
+**Task**: 修复实时行情慢响应与超时隔离
+**Branch**: `main`
+
+### Summary
+
+将腾讯和新浪实时行情硬上限调整为 10 秒，新增腾讯 5 秒后新浪并行 hedge，按物理上游隔离调用槽、限速与迟到结果，并同步诊断、回归测试和文档规范。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f8b3b8b` | (see git log) |
+| `4ffce8f` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

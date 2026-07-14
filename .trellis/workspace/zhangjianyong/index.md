@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 7
+- **Total Sessions**: 8
 - **Last Active**: 2026-07-14
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~239 | Active |
+| `journal-1.md` | ~273 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 8 | 2026-07-14 | 修复实时行情慢响应与超时隔离 | `f8b3b8b`, `4ffce8f` | `main` |
 | 7 | 2026-07-14 | 修复 ETF 实时行情多源兜底 | `74e7e47` | `fix/etf-realtime-fallback` |
 | 6 | 2026-07-14 | 完成持仓与成交截图识别导入 | `fd19d6e`, `3859ba7`, `db70fc5`, `60f801a` | `main` |
 | 5 | 2026-07-13 | 升级 Trellis 模板至 0.6.6 | `65ad64f` | `main` |
