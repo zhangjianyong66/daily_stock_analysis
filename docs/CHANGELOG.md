@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修复] 腾讯/新浪实时行情单源上限调整为 10 秒，并在腾讯等待 5 秒后并行启动新浪；按物理上游隔离调用锁、限速和迟到线程，避免慢响应被误判失败或阻断跨源兜底。
 - [修复] ETF 实时行情改为腾讯、新浪、Eastmoney 真实多源路由，并统一重试预算、同上游去重、30 分钟 stale 降级和失败诊断。
 - [改进] Web 首页股票自动补全索引新增 ETF 支持，生成阶段 best-effort 拉取 AkShare 全量 ETF 并使用常用 ETF 种子清单兜底。
 - [修复] 普通分析任务新增队列级超时兜底并释放重复提交锁，数据源 manager 为股票名称、日线和实时行情调用增加 provider 级等待预算与 fallback，避免单个外部源卡住导致任务长期显示执行中。

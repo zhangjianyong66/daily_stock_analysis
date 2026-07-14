@@ -109,7 +109,38 @@ def test_tencent_request_uses_lightweight_timeout_cap():
 
     assert quote is not None
     assert quote.price == 1.234
-    assert request.call_args.kwargs["timeout"] == 3.0
+    assert request.call_args.kwargs["timeout"] == 9.0
+
+
+def test_sina_request_uses_ten_second_cap_and_allows_manager_to_shrink_it():
+    fetcher = AkshareFetcher.__new__(AkshareFetcher)
+    response = MagicMock(
+        status_code=200,
+        text='var hq_str_sz159869="游戏ETF,1.200,1.210,1.234,1.250,1.180,1.230,1.234,100,1000"',
+    )
+
+    with patch.object(fetcher, "_enforce_rate_limit"), patch(
+        "data_provider.akshare_fetcher.requests.get",
+        return_value=response,
+    ) as request:
+        fetcher._get_stock_realtime_quote_sina("159869", request_timeout_seconds=12.0)
+        assert request.call_args.kwargs["timeout"] == 10.0
+
+        fetcher._get_stock_realtime_quote_sina("159869", request_timeout_seconds=2.5)
+        assert request.call_args.kwargs["timeout"] == 2.5
+
+
+def test_lightweight_rate_limit_state_is_isolated_by_physical_source():
+    fetcher = AkshareFetcher.__new__(AkshareFetcher)
+
+    with patch.object(fetcher, "random_sleep"), patch(
+        "data_provider.akshare_fetcher.time.time",
+        side_effect=[100.0, 100.0],
+    ), patch("data_provider.akshare_fetcher.time.sleep") as sleep:
+        fetcher._enforce_rate_limit("tencent")
+        fetcher._enforce_rate_limit("sina")
+
+    sleep.assert_not_called()
 
 
 def test_tencent_request_can_propagate_network_error_to_manager():

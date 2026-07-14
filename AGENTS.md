@@ -128,7 +128,8 @@ npm run build
 ### 实时行情多源与降级
 
 - A 股 ETF 的 `tencent`、`akshare_sina`、`akshare_em` 必须分别路由到腾讯单标的、新浪单标的和 AkShare Eastmoney ETF 全量实现；`efinance` 与 `akshare_em` 虽是不同客户端，但同属 Eastmoney 物理上游。
-- 实时行情公共安全上限为：腾讯/新浪等轻量源单次 3 秒、Eastmoney 等全量源单次 8 秒、单只标的整链路 20 秒；`DATA_SOURCE_REALTIME_TIMEOUT_SECONDS=0` 只表示不额外收紧，不能取消这些上限。
+- 实时行情公共安全上限为：腾讯/新浪等轻量源单次 10 秒、Eastmoney 等全量源单次 8 秒、单只标的整链路 20 秒；`DATA_SOURCE_REALTIME_TIMEOUT_SECONDS=0` 只表示不额外收紧，不能取消这些上限。
+- 默认优先级中腾讯位于新浪之前时，腾讯等待 5 秒仍未完成会启动新浪并行 hedge；腾讯快速失败、空数据或无有效价格时立即启动新浪。腾讯与新浪的调用锁、遗留线程和限速状态按物理上游隔离，迟到结果不得覆盖 winner 或写入 last-good。
 - 轻量源只对瞬时网络错误重试 1 次；空数据、无有效价格和不支持不重试。同一物理上游发生超时、连接失败或限流后，本轮不得通过另一个客户端重复请求。
 - 所有实时源失败后，仅同一市场交易日且年龄不超过 30 分钟的进程内 last-good 行情可作为 `stale` 降级；stale 不得回写延长寿命，也不得伪装为实时成功。
 - 实时源确已尝试但全部失败且无合格 stale 时，AnalysisContextPack 使用 `fetch_failed`；功能未启用或没有请求证据时才使用 `missing`。

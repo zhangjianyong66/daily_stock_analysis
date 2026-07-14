@@ -354,6 +354,8 @@ class RunDiagnosticContext:
             provider_run.data_type,
             provider_run.provider,
             provider_run.operation,
+            provider_run.route_source,
+            provider_run.physical_source,
         )
         pending_indexes = self.provider_pending_attempt_index_by_key.get(pending_key) or []
         if pending_indexes:
@@ -373,11 +375,19 @@ class RunDiagnosticContext:
         data_type: str,
         provider: str,
         operation: str,
+        route_source: Optional[str] = None,
+        physical_source: Optional[str] = None,
     ) -> None:
         data_type_key = _safe_event_key(data_type) or "provider"
         attempt_index = self.provider_attempt_index_by_type.get(data_type_key, 0) + 1
         self.provider_attempt_index_by_type[data_type_key] = attempt_index
-        pending_key = _provider_pending_key(data_type, provider, operation)
+        pending_key = _provider_pending_key(
+            data_type,
+            provider,
+            operation,
+            route_source,
+            physical_source,
+        )
         pending_indexes = self.provider_pending_attempt_index_by_key.get(pending_key) or []
         pending_indexes.append(attempt_index)
         self.provider_pending_attempt_index_by_key[pending_key] = pending_indexes
@@ -387,6 +397,8 @@ class RunDiagnosticContext:
                 data_type=data_type,
                 provider=provider,
                 operation=operation,
+                route_source=route_source,
+                physical_source=physical_source,
                 index=attempt_index,
             )
         )
@@ -572,12 +584,20 @@ def _clean_metadata(value: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _provider_pending_key(data_type: Any, provider: Any, operation: Any) -> str:
+def _provider_pending_key(
+    data_type: Any,
+    provider: Any,
+    operation: Any,
+    route_source: Any = None,
+    physical_source: Any = None,
+) -> str:
     return "|".join(
         (
             _safe_event_key(data_type) or "provider",
             _safe_event_key(provider) or "unknown",
             _safe_event_key(operation) or "operation",
+            _safe_event_key(route_source) or "route",
+            _safe_event_key(physical_source) or "physical",
         )
     )
 
@@ -617,6 +637,8 @@ def _provider_started_flow_event(
     data_type: str,
     provider: str,
     operation: str,
+    route_source: Optional[str],
+    physical_source: Optional[str],
     index: int,
 ) -> Dict[str, Any]:
     data_type_key = _safe_event_key(data_type) or "provider"
@@ -638,6 +660,8 @@ def _provider_started_flow_event(
                 "provider": provider,
                 "data_type": data_type,
                 "operation": operation,
+                "route_source": route_source,
+                "physical_source": physical_source,
                 "node": {
                     "id": node_id,
                     "lane": "data_source",
@@ -645,6 +669,8 @@ def _provider_started_flow_event(
                     "label": f"{label} · {provider}",
                     "status": "running",
                     "provider": provider,
+                    "route_source": route_source,
+                    "physical_source": physical_source,
                     "started_at": timestamp,
                     "attempts": 1,
                     "message": message,
@@ -943,6 +969,8 @@ def record_provider_run_started(
     data_type: str,
     provider: str,
     operation: str,
+    route_source: Optional[str] = None,
+    physical_source: Optional[str] = None,
 ) -> None:
     """Emit a live provider-start event without changing persisted diagnostics."""
     context = get_current_diagnostic_context()
@@ -954,6 +982,8 @@ def record_provider_run_started(
             data_type=data_type,
             provider=provider,
             operation=operation,
+            route_source=sanitize_diagnostic_text(route_source, max_length=48),
+            physical_source=sanitize_diagnostic_text(physical_source, max_length=48),
         )
     except Exception as exc:  # pragma: no cover - defensive fail-open guard
         logger.warning("provider started diagnostic record failed: %s", exc)

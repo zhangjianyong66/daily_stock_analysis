@@ -30,6 +30,7 @@ import random
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
+from threading import RLock
 from typing import Optional, Dict, Any, List, Tuple
 
 import pandas as pd
@@ -400,6 +401,9 @@ class AkshareFetcher(BaseFetcher):
         self.sleep_min = sleep_min
         self.sleep_max = sleep_max
         self._last_request_time: Optional[float] = None
+        self._rate_limit_state_lock = RLock()
+        self._rate_limit_locks: Dict[str, RLock] = {}
+        self._last_request_times: Dict[str, float] = {}
         self._history_call_timeout = _AKSHARE_HISTORY_CALL_TIMEOUT
         # 东财补丁开启才执行打补丁操作
         if get_config().enable_eastmoney_patch:
@@ -421,7 +425,7 @@ class AkshareFetcher(BaseFetcher):
         except Exception as e:
             logger.debug(f"设置 User-Agent 失败: {e}")
     
-    def _enforce_rate_limit(self) -> None:
+    def _enforce_rate_limit(self, source_key: Optional[str] = None) -> None:
         """
         强制执行速率限制
         
@@ -430,17 +434,43 @@ class AkshareFetcher(BaseFetcher):
         2. 如果间隔不足，补充休眠时间
         3. 然后再执行随机 jitter 休眠
         """
-        if self._last_request_time is not None:
-            elapsed = time.time() - self._last_request_time
-            min_interval = self.sleep_min
-            if elapsed < min_interval:
-                additional_sleep = min_interval - elapsed
-                logger.debug(f"补充休眠 {additional_sleep:.2f} 秒")
-                time.sleep(additional_sleep)
-        
-        # 执行随机 jitter 休眠
-        self.random_sleep(self.sleep_min, self.sleep_max)
-        self._last_request_time = time.time()
+        key = str(source_key or "default")
+        if not hasattr(self, "_rate_limit_state_lock"):
+            self._rate_limit_state_lock = RLock()
+        if not hasattr(self, "_rate_limit_locks"):
+            self._rate_limit_locks = {}
+        if not hasattr(self, "_last_request_times"):
+            self._last_request_times = {}
+        if not hasattr(self, "_last_request_time"):
+            self._last_request_time = None
+
+        with self._rate_limit_state_lock:
+            source_lock = self._rate_limit_locks.get(key)
+            if source_lock is None:
+                source_lock = RLock()
+                self._rate_limit_locks[key] = source_lock
+
+        sleep_min = float(getattr(self, "sleep_min", 2.0))
+        sleep_max = float(getattr(self, "sleep_max", 5.0))
+        with source_lock:
+            last_request_time = (
+                self._last_request_time
+                if key == "default"
+                else self._last_request_times.get(key)
+            )
+            if last_request_time is not None:
+                elapsed = time.time() - last_request_time
+                if elapsed < sleep_min:
+                    additional_sleep = sleep_min - elapsed
+                    logger.debug(f"补充休眠 {additional_sleep:.2f} 秒")
+                    time.sleep(additional_sleep)
+
+            self.random_sleep(sleep_min, sleep_max)
+            completed_at = time.time()
+            if key == "default":
+                self._last_request_time = completed_at
+            else:
+                self._last_request_times[key] = completed_at
     
     @retry(
         stop=stop_after_attempt(3),  # 最多重试3次
@@ -1099,8 +1129,8 @@ class AkshareFetcher(BaseFetcher):
                 f"[API调用] 新浪财经接口获取 {stock_code} 实时行情: endpoint={SINA_REALTIME_ENDPOINT}, symbol={symbol}"
             )
             
-            self._enforce_rate_limit()
-            request_timeout = 3.0
+            self._enforce_rate_limit("sina")
+            request_timeout = 10.0
             if request_timeout_seconds is not None and request_timeout_seconds > 0:
                 request_timeout = min(request_timeout, float(request_timeout_seconds))
             response = requests.get(url, headers=headers, timeout=request_timeout)
@@ -1261,8 +1291,8 @@ class AkshareFetcher(BaseFetcher):
                 f"[API调用] 腾讯财经接口获取 {stock_code} 实时行情: endpoint={TENCENT_REALTIME_ENDPOINT}, symbol={symbol}"
             )
             
-            self._enforce_rate_limit()
-            request_timeout = 3.0
+            self._enforce_rate_limit("tencent")
+            request_timeout = 10.0
             if request_timeout_seconds is not None and request_timeout_seconds > 0:
                 request_timeout = min(request_timeout, float(request_timeout_seconds))
             response = requests.get(url, headers=headers, timeout=request_timeout)

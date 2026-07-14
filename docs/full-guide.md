@@ -403,7 +403,7 @@ daily_stock_analysis/
 | `LONGBRIDGE_ACCESS_TOKEN` | Longbridge Legacy Access Token（不是 OAuth access token） | - | 可选 |
 | `LONGBRIDGE_*`（可选） | 见官方 [环境变量](https://open.longbridge.com/zh-CN/docs/getting-started#环境变量)；另有 `LONGBRIDGE_STATIC_INFO_TTL_SECONDS` 与 `LONGBRIDGE_CONNECTION_COOLDOWN_SECONDS` | - | 可选 |
 | `ENABLE_REALTIME_QUOTE` | 启用实时行情（关闭后使用历史收盘价分析） | `true` | 可选 |
-| `DATA_SOURCE_REALTIME_TIMEOUT_SECONDS` | 实时 provider 的额外单次等待上限；`0` 表示不额外收紧，但不能突破轻量源 3 秒、全量源 8 秒和整链路 20 秒安全上限。 | `12` | 可选 |
+| `DATA_SOURCE_REALTIME_TIMEOUT_SECONDS` | 实时 provider 的额外单次等待上限；`0` 表示不额外收紧，但不能突破腾讯/新浪 10 秒、全量源 8 秒和整链路 20 秒安全上限。默认腾讯等待 5 秒仍未完成时并行启动新浪，配置正数只能进一步收紧单源等待。 | `12` | 可选 |
 | `ENABLE_REALTIME_TECHNICAL_INDICATORS` | 盘中实时技术面：启用时用实时价计算 MA5/MA10/MA20 与多头排列（Issue #234）；关闭则用昨日收盘 | `true` | 可选 |
 | `ENABLE_CHIP_DISTRIBUTION` | 启用筹码分布分析（该接口不稳定，云端部署建议关闭）。GitHub Actions 用户需在 Repository Variables 中设置 `ENABLE_CHIP_DISTRIBUTION=true` 方可启用；workflow 默认关闭。 | `true` | 可选 |
 | `ENABLE_EASTMONEY_PATCH` | 东财接口补丁：东财接口频繁失败（如 RemoteDisconnected、连接被关闭）时建议设为 `true`，注入 NID 令牌与随机 User-Agent 以降低被限流概率 | `false` | 可选 |

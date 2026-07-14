@@ -20,7 +20,7 @@ import time
 from copy import deepcopy
 from threading import BoundedSemaphore, Event, RLock, Thread
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, Optional, List, Tuple, Dict, Any, Mapping, Set
 
@@ -59,6 +59,27 @@ class RealtimeSourcePlan:
     timeout_seconds: float
     max_attempts: int
     lightweight: bool
+    hedge_after_seconds: Optional[float] = None
+
+
+@dataclass
+class _RealtimeAttemptHandle:
+    """One isolated provider attempt whose result is consumed by the controller."""
+
+    plan: RealtimeSourcePlan
+    fetcher: "BaseFetcher"
+    attempt: int
+    timeout_seconds: float
+    fallback_to: Optional[str]
+    started_at: float
+    done: Event = field(default_factory=Event)
+    box: Dict[str, Any] = field(default_factory=dict)
+    finished_at: Optional[float] = None
+    recorded: bool = False
+
+    @property
+    def hard_deadline(self) -> float:
+        return self.started_at + self.timeout_seconds
 
 
 @dataclass(frozen=True)
@@ -667,8 +688,9 @@ class DataFetcherManager:
     _concept_rankings_cache_lock = RLock()
     _concept_rankings_cache: Dict[int, Tuple[float, List[Dict], List[Dict]]] = {}
     _REALTIME_TOTAL_BUDGET_SECONDS = 20.0
-    _REALTIME_LIGHTWEIGHT_TIMEOUT_SECONDS = 3.0
+    _REALTIME_LIGHTWEIGHT_TIMEOUT_SECONDS = 10.0
     _REALTIME_BULK_TIMEOUT_SECONDS = 8.0
+    _REALTIME_HEDGE_DELAY_SECONDS = 5.0
     _REALTIME_LAST_GOOD_MAX_AGE_SECONDS = 1800.0
     _realtime_last_good_lock = RLock()
     _realtime_last_good_cache: Dict[Tuple[str, str], _RealtimeLastGoodEntry] = {}
@@ -683,7 +705,8 @@ class DataFetcherManager:
         self._fetchers: List[BaseFetcher] = []
         self._fetchers_lock = RLock()
         self._fetchers_by_name: Dict[str, BaseFetcher] = {}
-        self._fetcher_call_locks: Dict[int, RLock] = {}
+        self._fetcher_call_locks: Dict[Tuple[int, Optional[str]], RLock] = {}
+        self._fetcher_call_slots: Dict[Tuple[int, Optional[str]], BoundedSemaphore] = {}
         self._fetcher_call_locks_lock = RLock()
         self._stock_name_cache: Dict[str, str] = {}
         self._stock_name_cache_lock = RLock()
@@ -713,6 +736,8 @@ class DataFetcherManager:
             self._fetchers_by_name = {}
         if not hasattr(self, "_fetcher_call_locks") or self._fetcher_call_locks is None:
             self._fetcher_call_locks = {}
+        if not hasattr(self, "_fetcher_call_slots") or self._fetcher_call_slots is None:
+            self._fetcher_call_slots = {}
         if not hasattr(self, "_fetcher_call_locks_lock") or self._fetcher_call_locks_lock is None:
             self._fetcher_call_locks_lock = RLock()
         if not hasattr(self, "_stock_name_cache") or self._stock_name_cache is None:
@@ -770,15 +795,33 @@ class DataFetcherManager:
                 return result
         return True
 
-    def _get_fetcher_call_lock(self, fetcher: BaseFetcher) -> RLock:
+    @staticmethod
+    def _fetcher_call_key(fetcher: BaseFetcher, call_scope: Optional[str] = None) -> Tuple[int, Optional[str]]:
+        return id(fetcher), str(call_scope) if call_scope else None
+
+    def _get_fetcher_call_lock(self, fetcher: BaseFetcher, call_scope: Optional[str] = None) -> RLock:
         self._ensure_concurrency_guards()
-        fetcher_id = id(fetcher)
+        key = self._fetcher_call_key(fetcher, call_scope)
         with self._fetcher_call_locks_lock:
-            lock = self._fetcher_call_locks.get(fetcher_id)
+            lock = self._fetcher_call_locks.get(key)
             if lock is None:
                 lock = RLock()
-                self._fetcher_call_locks[fetcher_id] = lock
+                self._fetcher_call_locks[key] = lock
             return lock
+
+    def _get_fetcher_call_slot(
+        self,
+        fetcher: BaseFetcher,
+        call_scope: Optional[str] = None,
+    ) -> BoundedSemaphore:
+        self._ensure_concurrency_guards()
+        key = self._fetcher_call_key(fetcher, call_scope)
+        with self._fetcher_call_locks_lock:
+            slot = self._fetcher_call_slots.get(key)
+            if slot is None:
+                slot = BoundedSemaphore(1)
+                self._fetcher_call_slots[key] = slot
+            return slot
 
     def _call_fetcher_method(
         self,
@@ -787,25 +830,39 @@ class DataFetcherManager:
         *args,
         timeout_seconds: Optional[float] = None,
         capability: str = "",
+        call_scope: Optional[str] = None,
         **kwargs,
     ):
         """Serialize shared fetcher access and optionally enforce a caller-side timeout."""
         method = getattr(fetcher, method_name)
         wait_seconds = float(timeout_seconds or 0)
+        slot = self._get_fetcher_call_slot(fetcher, call_scope)
+        lock = self._get_fetcher_call_lock(fetcher, call_scope)
         if wait_seconds <= 0:
-            with self._get_fetcher_call_lock(fetcher):
-                return method(*args, **kwargs)
+            slot.acquire()
+            try:
+                with lock:
+                    return method(*args, **kwargs)
+            finally:
+                slot.release()
+
+        acquire_started = time.monotonic()
+        if not slot.acquire(timeout=wait_seconds):
+            label = capability or method_name
+            raise TimeoutError(f"{fetcher.name}.{method_name} {label} timeout waiting for prior call")
+        remaining_wait = max(0.001, wait_seconds - (time.monotonic() - acquire_started))
 
         done = Event()
         box: Dict[str, Any] = {}
 
         def _worker() -> None:
             try:
-                with self._get_fetcher_call_lock(fetcher):
+                with lock:
                     box["result"] = method(*args, **kwargs)
             except Exception as exc:  # pragma: no cover - surfaced in caller thread
                 box["error"] = exc
             finally:
+                slot.release()
                 done.set()
 
         worker = Thread(
@@ -814,7 +871,7 @@ class DataFetcherManager:
             daemon=True,
         )
         worker.start()
-        if not done.wait(timeout=wait_seconds):
+        if not done.wait(timeout=remaining_wait):
             label = capability or method_name
             raise TimeoutError(f"{fetcher.name}.{method_name} {label} timeout after {wait_seconds:g}s")
         if "error" in box:
@@ -1892,6 +1949,7 @@ class DataFetcherManager:
             kwargs: Optional[Mapping[str, Any]] = None,
             lightweight: bool = False,
             max_attempts: Optional[int] = None,
+            hedge_after_seconds: Optional[float] = None,
         ) -> RealtimeSourcePlan:
             return RealtimeSourcePlan(
                 route_source=route_source,
@@ -1906,6 +1964,7 @@ class DataFetcherManager:
                 ),
                 max_attempts=max_attempts or (2 if lightweight else 1),
                 lightweight=lightweight,
+                hedge_after_seconds=hedge_after_seconds,
             )
 
         if is_jp or is_kr or is_tw:
@@ -1957,8 +2016,21 @@ class DataFetcherManager:
             "efinance": lambda: plan("efinance", "eastmoney", "EfinanceFetcher"),
             "akshare_em": lambda: plan("akshare_em", "eastmoney", "AkshareFetcher", kwargs={"source": "em"}),
             "akshare_sina": lambda: plan("akshare_sina", "sina", "AkshareFetcher", kwargs={"source": "sina"}, lightweight=True),
-            "tencent": lambda: plan("tencent", "tencent", "AkshareFetcher", kwargs={"source": "tencent"}, lightweight=True),
-            "akshare_qq": lambda: plan("akshare_qq", "tencent", "AkshareFetcher", kwargs={"source": "tencent"}, lightweight=True),
+            "tencent": lambda: plan(
+                "tencent",
+                "tencent",
+                "AkshareFetcher",
+                kwargs={"source": "tencent"},
+                lightweight=True,
+                hedge_after_seconds=self._REALTIME_HEDGE_DELAY_SECONDS,
+            ),
+            "akshare_qq": lambda: plan(
+                "akshare_qq",
+                "tencent",
+                "AkshareFetcher",
+                kwargs={"source": "tencent"},
+                lightweight=True,
+            ),
             "tushare": lambda: plan("tushare", "tushare", "TushareFetcher", request_code=raw_stock_code or stock_code),
             "tickflow": lambda: plan("tickflow", "tickflow", "TickFlowFetcher", request_code=raw_stock_code or stock_code, lightweight=True, max_attempts=1),
         }
@@ -1990,6 +2062,368 @@ class DataFetcherManager:
         self._remember_realtime_quote(market, stock_code, quote)
         return quote
 
+    def _start_realtime_attempt(
+        self,
+        plan: RealtimeSourcePlan,
+        fetcher: BaseFetcher,
+        *,
+        attempt: int,
+        timeout_seconds: float,
+        fallback_to: Optional[str],
+        completion_event: Event,
+    ) -> _RealtimeAttemptHandle:
+        """Start one provider call without allowing the worker to mutate controller state."""
+        handle = _RealtimeAttemptHandle(
+            plan=plan,
+            fetcher=fetcher,
+            attempt=attempt,
+            timeout_seconds=timeout_seconds,
+            fallback_to=fallback_to,
+            started_at=time.monotonic(),
+        )
+        slot = self._get_fetcher_call_slot(fetcher, plan.physical_source)
+        if not slot.acquire(blocking=False):
+            handle.box["error"] = TimeoutError(
+                f"{fetcher.name}.get_realtime_quote realtime_quote prior {plan.physical_source} call still running"
+            )
+            handle.finished_at = time.monotonic()
+            handle.done.set()
+            completion_event.set()
+            return handle
+
+        record_provider_run_started(
+            data_type="realtime_quote",
+            provider=fetcher.name,
+            operation="get_realtime_quote",
+            route_source=plan.route_source,
+            physical_source=plan.physical_source,
+        )
+
+        lock = self._get_fetcher_call_lock(fetcher, plan.physical_source)
+        call_kwargs = dict(plan.kwargs)
+        if type(fetcher).__module__ in {
+            "data_provider.akshare_fetcher",
+            "data_provider.efinance_fetcher",
+        }:
+            call_kwargs["request_timeout_seconds"] = timeout_seconds
+            call_kwargs["raise_on_error"] = True
+
+        def _worker() -> None:
+            try:
+                with lock:
+                    handle.box["result"] = fetcher.get_realtime_quote(plan.request_code, **call_kwargs)
+            except Exception as exc:  # pragma: no cover - consumed in controller thread
+                handle.box["error"] = exc
+            finally:
+                handle.finished_at = time.monotonic()
+                slot.release()
+                handle.done.set()
+                completion_event.set()
+
+        Thread(
+            target=_worker,
+            name=f"realtime_{plan.physical_source}_{attempt}",
+            daemon=True,
+        ).start()
+        return handle
+
+    def _consume_realtime_attempt(
+        self,
+        handle: _RealtimeAttemptHandle,
+        *,
+        deadline: float,
+        fallback_from: Optional[str] = None,
+        force_timeout: bool = False,
+    ) -> Tuple[Any, Optional[RealtimeFailureType], Optional[str]]:
+        """Record one observed attempt exactly once and return its normalized outcome."""
+        if handle.recorded:
+            return None, None, None
+        handle.recorded = True
+        finished_at = handle.finished_at or time.monotonic()
+        latency_ms = int(max(0.0, finished_at - handle.started_at) * 1000)
+        budget_remaining_ms = int(max(0.0, deadline - time.monotonic()) * 1000)
+
+        error = None
+        quote = None
+        if force_timeout:
+            error = TimeoutError(
+                f"{handle.fetcher.name}.get_realtime_quote realtime_quote timeout after {handle.timeout_seconds:g}s"
+            )
+        else:
+            error = handle.box.get("error")
+            quote = handle.box.get("result")
+
+        if error is not None:
+            failure_type = classify_realtime_failure(unwrap_exception(error))
+            record_provider_run(
+                data_type="realtime_quote",
+                provider=handle.fetcher.name,
+                operation="get_realtime_quote",
+                success=False,
+                latency_ms=latency_ms,
+                error_type=failure_type.value,
+                error_message=failure_type.value,
+                fallback_to=handle.fallback_to,
+                route_source=handle.plan.route_source,
+                physical_source=handle.plan.physical_source,
+                attempt=handle.attempt,
+                retry=handle.attempt > 1,
+                budget_remaining_ms=budget_remaining_ms,
+                record_count=0,
+            )
+            return None, failure_type, f"[{handle.plan.route_source}] 失败: {error}"
+
+        if quote is None or not quote.has_basic_data():
+            failure_type = classify_realtime_failure(None, invalid_quote=quote is not None)
+            record_provider_run(
+                data_type="realtime_quote",
+                provider=handle.fetcher.name,
+                operation="get_realtime_quote",
+                success=False,
+                latency_ms=latency_ms,
+                error_type=failure_type.value,
+                error_message=failure_type.value,
+                fallback_to=handle.fallback_to,
+                route_source=handle.plan.route_source,
+                physical_source=handle.plan.physical_source,
+                attempt=handle.attempt,
+                retry=handle.attempt > 1,
+                budget_remaining_ms=budget_remaining_ms,
+                record_count=0,
+            )
+            return None, failure_type, None
+
+        record_provider_run(
+            data_type="realtime_quote",
+            provider=handle.fetcher.name,
+            operation="get_realtime_quote",
+            success=True,
+            latency_ms=latency_ms,
+            fallback_from=fallback_from,
+            fallback_to=handle.fallback_to if self._quote_needs_supplement(quote) else None,
+            route_source=handle.plan.route_source,
+            physical_source=handle.plan.physical_source,
+            attempt=handle.attempt,
+            retry=handle.attempt > 1,
+            budget_remaining_ms=budget_remaining_ms,
+            record_count=1,
+        )
+        return quote, None, None
+
+    @staticmethod
+    def _is_retriable_realtime_failure(failure_type: Optional[RealtimeFailureType]) -> bool:
+        return failure_type in {
+            RealtimeFailureType.TIMEOUT,
+            RealtimeFailureType.CONNECTION_ERROR,
+            RealtimeFailureType.RATE_LIMITED,
+        }
+
+    def _execute_realtime_hedge_pair(
+        self,
+        primary_plan: RealtimeSourcePlan,
+        hedge_plan: RealtimeSourcePlan,
+        *,
+        deadline: float,
+        configured_timeout: float,
+        existing_failures: List[Tuple[str, RealtimeFailureType]],
+    ) -> Tuple[Any, List[Tuple[str, RealtimeFailureType]], List[str], Set[str]]:
+        """Race Tencent and Sina within one request budget and keep the first valid quote."""
+        fetchers: Dict[str, BaseFetcher] = {}
+        for plan in (primary_plan, hedge_plan):
+            fetcher = self._get_fetcher_by_name(plan.fetcher_name, capability="realtime_quote")
+            if fetcher is not None and hasattr(fetcher, "get_realtime_quote"):
+                fetchers[plan.route_source] = fetcher
+
+        pair_failures: Dict[str, RealtimeFailureType] = {}
+        raw_errors: List[str] = []
+        blocked_sources: Set[str] = set()
+        active: Dict[str, _RealtimeAttemptHandle] = {}
+        attempt_counts = {primary_plan.route_source: 0, hedge_plan.route_source: 0}
+        completion_event = Event()
+        primary_quote = None
+        winner_route: Optional[str] = None
+        hedge_started = False
+        primary_fallback_reason: Optional[RealtimeFailureType] = None
+
+        def start(plan: RealtimeSourcePlan, *, trigger: Optional[str] = None) -> None:
+            nonlocal hedge_started
+            fetcher = fetchers.get(plan.route_source)
+            if fetcher is None:
+                pair_failures.setdefault(plan.route_source, RealtimeFailureType.NOT_SUPPORTED)
+                record_provider_run(
+                    data_type="realtime_quote",
+                    provider=plan.fetcher_name,
+                    operation="get_realtime_quote",
+                    success=False,
+                    error_type=RealtimeFailureType.NOT_SUPPORTED.value,
+                    error_message=RealtimeFailureType.NOT_SUPPORTED.value,
+                    fallback_to=hedge_plan.route_source if plan is primary_plan else None,
+                    route_source=plan.route_source,
+                    physical_source=plan.physical_source,
+                    budget_remaining_ms=int(max(0.0, deadline - time.monotonic()) * 1000),
+                    record_count=0,
+                )
+                return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                pair_failures.setdefault(plan.route_source, RealtimeFailureType.TIMEOUT)
+                return
+            attempt_counts[plan.route_source] += 1
+            timeout_seconds = self._effective_realtime_timeout(plan, configured_timeout, remaining)
+            fallback_to = hedge_plan.route_source if plan is primary_plan else None
+            active[plan.route_source] = self._start_realtime_attempt(
+                plan,
+                fetcher,
+                attempt=attempt_counts[plan.route_source],
+                timeout_seconds=timeout_seconds,
+                fallback_to=fallback_to,
+                completion_event=completion_event,
+            )
+            if plan is hedge_plan:
+                hedge_started = True
+                if trigger == "soft_timeout":
+                    logger.info(
+                        "[实时行情] %s 等待 %.1f 秒未完成，启动 %s hedge",
+                        primary_plan.route_source,
+                        primary_plan.hedge_after_seconds or self._REALTIME_HEDGE_DELAY_SECONDS,
+                        hedge_plan.route_source,
+                    )
+                else:
+                    logger.info(
+                        "[实时行情] %s 已失败，立即启动 %s fallback",
+                        primary_plan.route_source,
+                        hedge_plan.route_source,
+                    )
+
+        start(primary_plan)
+        primary_handle = active.get(primary_plan.route_source)
+        primary_started_at = primary_handle.started_at if primary_handle is not None else time.monotonic()
+        hedge_at = min(
+            deadline,
+            primary_started_at + float(primary_plan.hedge_after_seconds or self._REALTIME_HEDGE_DELAY_SECONDS),
+        )
+
+        while time.monotonic() < deadline:
+            now = time.monotonic()
+            ready = sorted(
+                (handle for handle in active.values() if handle.done.is_set()),
+                key=lambda handle: handle.finished_at or now,
+            )
+            for handle in ready:
+                route = handle.plan.route_source
+                active.pop(route, None)
+                fallback_from = None
+                if handle.plan is hedge_plan and (
+                    primary_plan.route_source in pair_failures or primary_fallback_reason is not None
+                ):
+                    fallback_from = primary_plan.route_source
+                quote, failure_type, raw_error = self._consume_realtime_attempt(
+                    handle,
+                    deadline=deadline,
+                    fallback_from=fallback_from,
+                )
+                if raw_error:
+                    raw_errors.append(raw_error)
+                if quote is not None:
+                    if primary_quote is None:
+                        primary_quote = quote
+                        winner_route = route
+                        logger.info("[实时行情] hedge winner=%s", route)
+                    else:
+                        self._merge_quote_fields(primary_quote, quote)
+                    continue
+
+                if handle.plan is primary_plan:
+                    primary_fallback_reason = failure_type
+                    if not hedge_started:
+                        start(hedge_plan, trigger="failure")
+                if (
+                    handle.plan.lightweight
+                    and self._is_retriable_realtime_failure(failure_type)
+                    and handle.attempt < handle.plan.max_attempts
+                ):
+                    start(handle.plan)
+                elif failure_type is not None:
+                    pair_failures[route] = failure_type
+                    if self._is_retriable_realtime_failure(failure_type):
+                        blocked_sources.add(handle.plan.physical_source)
+
+            if primary_quote is not None and not self._quote_needs_supplement(primary_quote):
+                break
+
+            now = time.monotonic()
+            for route, handle in list(active.items()):
+                if now < handle.hard_deadline:
+                    continue
+                active.pop(route, None)
+                _, failure_type, raw_error = self._consume_realtime_attempt(
+                    handle,
+                    deadline=deadline,
+                    force_timeout=True,
+                )
+                if raw_error:
+                    raw_errors.append(raw_error)
+                if failure_type is not None:
+                    pair_failures[route] = failure_type
+                    blocked_sources.add(handle.plan.physical_source)
+                if handle.plan is primary_plan and not hedge_started:
+                    primary_fallback_reason = failure_type
+                    start(hedge_plan, trigger="hard_timeout")
+
+            now = time.monotonic()
+            if not hedge_started and primary_plan.route_source in active and now >= hedge_at:
+                primary_fallback_reason = RealtimeFailureType.TIMEOUT
+                start(hedge_plan, trigger="soft_timeout")
+
+            if not active:
+                if hedge_started or hedge_plan.route_source in pair_failures:
+                    break
+                if primary_plan.route_source in pair_failures:
+                    primary_fallback_reason = pair_failures[primary_plan.route_source]
+                    start(hedge_plan, trigger="failure")
+                    if not active:
+                        break
+
+            wake_at = deadline
+            if not hedge_started and primary_plan.route_source in active:
+                wake_at = min(wake_at, hedge_at)
+            for handle in active.values():
+                wake_at = min(wake_at, handle.hard_deadline)
+            completion_event.wait(timeout=max(0.001, wake_at - time.monotonic()))
+            completion_event.clear()
+
+        for route, handle in list(active.items()):
+            if primary_quote is not None and not self._quote_needs_supplement(primary_quote):
+                break
+            active.pop(route, None)
+            _, failure_type, raw_error = self._consume_realtime_attempt(
+                handle,
+                deadline=deadline,
+                force_timeout=True,
+            )
+            if raw_error:
+                raw_errors.append(raw_error)
+            if failure_type is not None:
+                pair_failures[route] = failure_type
+                blocked_sources.add(handle.plan.physical_source)
+
+        failures: List[Tuple[str, RealtimeFailureType]] = []
+        if primary_quote is None:
+            for plan in (primary_plan, hedge_plan):
+                failure_type = pair_failures.get(plan.route_source)
+                if failure_type is not None:
+                    failures.append((plan.route_source, failure_type))
+        elif winner_route == hedge_plan.route_source:
+            failure_type = pair_failures.get(primary_plan.route_source)
+            if failure_type is None:
+                failure_type = primary_fallback_reason
+            if failure_type is not None:
+                failures.append((primary_plan.route_source, failure_type))
+
+        if primary_quote is not None and existing_failures:
+            failures = list(existing_failures) + failures
+        return primary_quote, failures, raw_errors, blocked_sources
+
     def _execute_realtime_plans(
         self,
         plans: List[RealtimeSourcePlan],
@@ -2004,13 +2438,46 @@ class DataFetcherManager:
         failures: List[Tuple[str, RealtimeFailureType]] = []
         raw_errors: List[str] = []
         blocked_physical_sources: Set[str] = set()
-        timed_out_fetcher_ids: Set[int] = set()
         primary_quote = None
+        skipped_plan_indexes: Set[int] = set()
 
         for index, source_plan in enumerate(plans):
+            if index in skipped_plan_indexes:
+                continue
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
+            if (
+                primary_quote is None
+                and source_plan.hedge_after_seconds is not None
+                and index + 1 < len(plans)
+                and plans[index + 1].physical_source == "sina"
+                and source_plan.physical_source == "tencent"
+            ):
+                hedge_quote, hedge_failures, hedge_errors, hedge_blocked = self._execute_realtime_hedge_pair(
+                    source_plan,
+                    plans[index + 1],
+                    deadline=deadline,
+                    configured_timeout=configured_timeout,
+                    existing_failures=failures,
+                )
+                skipped_plan_indexes.add(index + 1)
+                raw_errors.extend(hedge_errors)
+                blocked_physical_sources.update(hedge_blocked)
+                if hedge_quote is not None:
+                    primary_quote = hedge_quote
+                    failures = hedge_failures
+                    if not self._quote_needs_supplement(primary_quote):
+                        return self._finalize_realtime_quote(
+                            primary_quote,
+                            market=market,
+                            stock_code=stock_code,
+                            config=config,
+                            failures=failures,
+                        )
+                else:
+                    failures.extend(hedge_failures)
+                continue
             if source_plan.physical_source in blocked_physical_sources:
                 if primary_quote is None:
                     failures.append((source_plan.route_source, RealtimeFailureType.CIRCUIT_OPEN))
@@ -2045,9 +2512,6 @@ class DataFetcherManager:
                     record_count=0,
                 )
                 continue
-            if id(fetcher) in timed_out_fetcher_ids:
-                continue
-
             fallback_to = plans[index + 1].route_source if index + 1 < len(plans) else None
             for attempt in range(1, source_plan.max_attempts + 1):
                 remaining = deadline - time.monotonic()
@@ -2063,6 +2527,8 @@ class DataFetcherManager:
                     data_type="realtime_quote",
                     provider=fetcher.name,
                     operation="get_realtime_quote",
+                    route_source=source_plan.route_source,
+                    physical_source=source_plan.physical_source,
                 )
                 try:
                     call_kwargs = dict(source_plan.kwargs)
@@ -2078,6 +2544,7 @@ class DataFetcherManager:
                         source_plan.request_code,
                         timeout_seconds=timeout_seconds,
                         capability="realtime_quote",
+                        call_scope=source_plan.physical_source,
                         **call_kwargs,
                     )
                     latency_ms = int((time.monotonic() - attempt_start) * 1000)
@@ -2150,8 +2617,6 @@ class DataFetcherManager:
                     )
                     raw_errors.append(f"[{source_plan.route_source}] 失败: {str(exc)}")
                     manager_timeout = isinstance(exc, TimeoutError)
-                    if manager_timeout:
-                        timed_out_fetcher_ids.add(id(fetcher))
                     can_retry = (
                         source_plan.lightweight
                         and not manager_timeout
