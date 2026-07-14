@@ -271,3 +271,37 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 9: 完成图片识别异步任务与超时修复
+
+**Date**: 2026-07-15
+**Task**: 完成图片识别异步任务与超时修复
+**Branch**: `main`
+
+### Summary
+
+将持仓与成交截图识别改为可恢复的进程内异步任务，补齐全局防重、取消、草稿 revision、两阶段提交、SSE/REST 恢复、前端任务横幅及中英文文档；后端完整门禁 4439 项通过，Web 目标回归 58 项、lint 与 build 通过。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c2a88ba` | (see git log) |
+| `d34cc87` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
