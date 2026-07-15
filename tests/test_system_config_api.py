@@ -778,6 +778,8 @@ class SystemConfigApiTestCase(unittest.TestCase):
                     api_key="sk-test",
                     models=["gpt-4o-mini"],
                     capability_checks=["json", "stream"],
+                    extra_headers={"User-Agent": "Mozilla/5.0"},
+                    vision_api_mode="responses",
                 ),
                 service=self.service,
             ).model_dump()
@@ -788,6 +790,8 @@ class SystemConfigApiTestCase(unittest.TestCase):
         self.assertEqual(payload["capability_results"], {})
         mock_test.assert_called_once()
         self.assertEqual(mock_test.call_args.kwargs["capability_checks"], ["json", "stream"])
+        self.assertEqual(mock_test.call_args.kwargs["extra_headers"], {"User-Agent": "Mozilla/5.0"})
+        self.assertEqual(mock_test.call_args.kwargs["vision_api_mode"], "responses")
 
     def test_test_notification_channel_endpoint_returns_service_payload(self) -> None:
         with patch.object(

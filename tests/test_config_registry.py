@@ -299,6 +299,18 @@ class TestLLMPromptCacheFieldsRegistered(unittest.TestCase):
         self.assertEqual(field["validation"], {"enum": ["off", "basic", "debug"]})
         self.assertEqual(field["help_key"], "settings.ai_model.LLM_PROMPT_CACHE_DIAGNOSTICS_LEVEL")
 
+    def test_vision_api_mode_is_select(self):
+        field = get_field_definition("VISION_API_MODE")
+
+        self.assertEqual(field["category"], "ai_model")
+        self.assertEqual(field["ui_control"], "select")
+        self.assertEqual(field["default_value"], "chat_completions")
+        self.assertEqual(
+            [option["value"] for option in field["options"]],
+            ["chat_completions", "responses"],
+        )
+        self.assertEqual(field["validation"], {"enum": ["chat_completions", "responses"]})
+
 
 class TestSettingsHelpMetadata(unittest.TestCase):
     """Field help metadata should be available for covered settings help slices."""
@@ -329,6 +341,7 @@ class TestSettingsHelpMetadata(unittest.TestCase):
         "OPENAI_VISION_MODEL",
         "OPENAI_TEMPERATURE",
         "VISION_MODEL",
+        "VISION_API_MODE",
     }
     _SYSTEM_HIDDEN_KEYS = {
         "ADMIN_AUTH_ENABLED",

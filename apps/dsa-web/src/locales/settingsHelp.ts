@@ -765,6 +765,14 @@ const settingsHelpZhCN: SettingsHelpMap = {
     impact: ['影响可选择模型、保存前失效模型清理和运行时模型路由。'],
     notes: ['模型是否真正可用仍取决于服务商权限和运行时连接测试。'],
   },
+  'settings.llm_channel.extra_headers': {
+    title: '渠道 Extra Headers',
+    summary: '为该渠道的 LLM 请求附加自定义 HTTP 请求头。',
+    usage: '填写字符串键值 JSON 对象，例如 {"User-Agent":"Mozilla/5.0"}。',
+    valueNotes: ['连接测试、能力检测和通过该渠道发出的运行时请求都会使用这些请求头。'],
+    impact: ['可用于满足中转站的 User-Agent、租户或路由请求头要求。'],
+    notes: ['请求头值可能包含敏感信息，不会显示在普通诊断日志中。'],
+  },
   'settings.llm_channel.capability_checks': {
     title: '运行时能力检测',
     summary: '手动验证当前渠道模型是否支持 JSON、tools、stream 或 vision。',
@@ -812,6 +820,14 @@ const settingsHelpZhCN: SettingsHelpMap = {
     valueNotes: ['保存后写入 VISION_MODEL。'],
     impact: ['影响图片/截图相关提取和视觉分析能力。'],
     notes: ['DeepSeek 等文本模型不一定支持 vision，请用能力检测确认。'],
+  },
+  'settings.llm_channel.vision_api_mode': {
+    title: 'Vision API 模式',
+    summary: '选择共享 Vision 能力向模型渠道发送图片时使用的 OpenAI 兼容协议。',
+    usage: '默认使用 Chat Completions；仅当渠道明确要求 Responses API 时切换为 Responses。',
+    valueNotes: ['Responses 模式要求 Vision 模型精确匹配一个已配置的 LLM 渠道路由。'],
+    impact: ['同时影响持仓/成交截图、自选股图片提取和渠道 Vision 能力检测。'],
+    notes: ['系统不会自动猜测协议，也不会在两个协议之间回退或重复发送图片。'],
   },
   // ------------------------------------------------------------------
   // Agent configuration
@@ -1933,6 +1949,14 @@ const settingsHelpEnUS: SettingsHelpMap = {
     impact: ['Affects selectable models, stale-model cleanup, and routing.'],
     notes: ['Actual availability still depends on provider permissions and runtime tests.'],
   },
+  'settings.llm_channel.extra_headers': {
+    title: 'Channel Extra Headers',
+    summary: 'Adds custom HTTP headers to LLM requests sent through this channel.',
+    usage: 'Enter a JSON object with string values, such as {"User-Agent":"Mozilla/5.0"}.',
+    valueNotes: ['Connection tests, capability checks, and runtime requests through the channel use these headers.'],
+    impact: ['Supports relay requirements such as User-Agent, tenant, or routing headers.'],
+    notes: ['Header values may be sensitive and are excluded from normal diagnostics.'],
+  },
   'settings.llm_channel.capability_checks': {
     title: 'Runtime Capability Checks',
     summary: 'Manually checks JSON, tools, stream, or vision support for the current channel model.',
@@ -1980,6 +2004,14 @@ const settingsHelpEnUS: SettingsHelpMap = {
     valueNotes: ['Saving writes VISION_MODEL.'],
     impact: ['Affects screenshot extraction and vision analysis.'],
     notes: ['Text-only models may not support vision; use capability checks to confirm.'],
+  },
+  'settings.llm_channel.vision_api_mode': {
+    title: 'Vision API Mode',
+    summary: 'Selects the OpenAI-compatible protocol used to send images through the shared Vision runtime.',
+    usage: 'Keep Chat Completions by default. Choose Responses only when the channel explicitly requires it.',
+    valueNotes: ['Responses mode requires the Vision model to exactly match a configured LLM channel route.'],
+    impact: ['Affects portfolio screenshots, watchlist image extraction, and channel Vision capability checks.'],
+    notes: ['The runtime does not infer the protocol or retry the same image through another protocol.'],
   },
   // ------------------------------------------------------------------
   // Agent configuration

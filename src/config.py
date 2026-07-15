@@ -101,6 +101,9 @@ class ConfigIssue:
 
 _MANAGED_LITELLM_KEY_PROVIDERS = {"gemini", "vertex_ai", "anthropic", "openai", "deepseek"}
 SUPPORTED_LLM_CHANNEL_PROTOCOLS = ("openai", "anthropic", "gemini", "vertex_ai", "deepseek", "ollama")
+VISION_API_MODE_CHAT_COMPLETIONS = "chat_completions"
+VISION_API_MODE_RESPONSES = "responses"
+SUPPORTED_VISION_API_MODES = (VISION_API_MODE_CHAT_COMPLETIONS, VISION_API_MODE_RESPONSES)
 _FALSEY_ENV_VALUES = {"0", "false", "no", "off"}
 PROMPT_CACHE_DIAGNOSTICS_LEVELS = {"off", "basic", "debug"}
 TICKFLOW_KLINE_ADJUST_VALUES = {"none", "forward", "backward", "forward_additive", "backward_additive"}
@@ -495,6 +498,36 @@ def get_configured_llm_models(model_list: List[Dict[str, Any]]) -> List[str]:
     return models
 
 
+def get_exact_llm_route_deployments(
+    model_list: List[Dict[str, Any]],
+    model: str,
+) -> List[Dict[str, Any]]:
+    """Return non-legacy Router deployments whose route name exactly matches model."""
+    normalized_model = str(model or "").strip()
+    if not normalized_model:
+        return []
+    return [
+        entry
+        for entry in (model_list or [])
+        if isinstance(entry, dict)
+        and str(entry.get("model_name") or "").strip() == normalized_model
+        and not normalized_model.startswith("__legacy_")
+    ]
+
+
+def normalize_vision_api_mode(value: Optional[str]) -> str:
+    """Normalize Vision API mode while preserving the compatible default."""
+    normalized = str(value or VISION_API_MODE_CHAT_COMPLETIONS).strip().lower()
+    if normalized in SUPPORTED_VISION_API_MODES:
+        return normalized
+    logger.warning(
+        "VISION_API_MODE=%s 不受支持，已回退为 %s",
+        normalized,
+        VISION_API_MODE_CHAT_COMPLETIONS,
+    )
+    return VISION_API_MODE_CHAT_COMPLETIONS
+
+
 def resolve_litellm_wire_model(
     model: str,
     model_list: Optional[List[Dict[str, Any]]] = None,
@@ -813,6 +846,8 @@ class Config:
     # VISION_MODEL: litellm model string used for image understanding calls.
     # Fallback chain: VISION_MODEL → OPENAI_VISION_MODEL → gemini/gemini-2.0-flash
     vision_model: str = ""
+    # VISION_API_MODE: chat_completions (compatible default) or responses.
+    vision_api_mode: str = VISION_API_MODE_CHAT_COMPLETIONS
     # VISION_PROVIDER_PRIORITY: comma-separated provider order for Vision fallback.
     vision_provider_priority: str = "gemini,anthropic,openai"
 
@@ -1700,6 +1735,7 @@ class Config:
                 or os.getenv('OPENAI_VISION_MODEL')
                 or ""
             ),
+            vision_api_mode=normalize_vision_api_mode(os.getenv('VISION_API_MODE')),
             vision_provider_priority=os.getenv('VISION_PROVIDER_PRIORITY', 'gemini,anthropic,openai'),
             anspire_api_keys=anspire_api_keys,
             bocha_api_keys=bocha_api_keys,
@@ -3068,6 +3104,7 @@ class Config:
 
             if (
                 self.vision_model
+                and self.vision_api_mode != VISION_API_MODE_RESPONSES
                 and not _uses_direct_env_provider(self.vision_model)
                 and not _matches_exact_route(self.vision_model, available_router_model_set)
             ):
@@ -3088,6 +3125,7 @@ class Config:
                     field="VISION_MODEL",
                     code="hermes_vision_unsupported",
                 ))
+
         elif (
             configured_agent_primary_model
             and effective_agent_primary_model
@@ -3101,6 +3139,19 @@ class Config:
                 ),
                 field="AGENT_LITELLM_MODEL",
             ))
+
+        if self.vision_model and self.vision_api_mode == VISION_API_MODE_RESPONSES:
+            vision_deployments = get_exact_llm_route_deployments(self.llm_model_list, self.vision_model)
+            if not vision_deployments:
+                issues.append(ConfigIssue(
+                    severity="error",
+                    message=(
+                        "VISION_API_MODE=responses 要求 VISION_MODEL 精确匹配一个非 legacy LLM Channel route。"
+                        "请在 LLM_CHANNELS 中声明该模型及渠道凭据。"
+                    ),
+                    field="VISION_MODEL",
+                    code="vision_responses_route_missing",
+                ))
 
         # --- Search engine (informational only) ---
         if not self.has_search_capability_enabled():
@@ -3328,7 +3379,11 @@ class Config:
             _all_providers = {_primary_prefix} | set(_priority_providers)
 
             # Align with get_api_keys_for_model: keys must be non-empty and len >= 8
-            _has_any_key = any(
+            _route_keys = [
+                str((deployment.get("litellm_params") or {}).get("api_key") or "").strip()
+                for deployment in get_exact_llm_route_deployments(self.llm_model_list, self.vision_model)
+            ]
+            _has_any_key = any(key and len(key) >= 8 for key in _route_keys) or any(
                 any(k and len(k) >= 8 for k in (_VISION_KEY_MAP.get(p) or []))
                 for p in _all_providers
                 if p in _VISION_KEY_MAP

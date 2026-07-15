@@ -542,6 +542,8 @@ def test_llm_channel(
             enabled=request.enabled,
             timeout_seconds=request.timeout_seconds,
             capability_checks=request.capability_checks,
+            extra_headers=request.extra_headers,
+            vision_api_mode=request.vision_api_mode,
             use_saved_secret=request.use_saved_secret,
         )
         return TestLLMChannelResponse.model_validate(payload)

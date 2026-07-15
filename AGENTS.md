@@ -140,6 +140,8 @@ npm run build
 
 - Web 持仓图片导入只支持活跃 `cn/CNY` 账户；持仓初始化要求账户没有任何交易流水，成交增量只接受实际成交记录。
 - 图片能力必须显式配置 `VISION_MODEL`，不会使用 `LITELLM_MODEL` 文本主模型兜底；`OPENAI_VISION_MODEL` 仅为废弃兼容别名，Hermes Vision 尚未验证。
+- `VISION_API_MODE` 默认为 `chat_completions`；设为 `responses` 时，`VISION_MODEL` 必须精确匹配非 legacy、非 Hermes LLM Channel route，并只复用该 deployment 的 Base URL、API Key 与 Extra Headers，不按域名/模型猜测或跨协议 fallback。
+- 设置页渠道连接、JSON/Tools/Stream/Vision 能力检测均携带渠道 Extra Headers；Vision 探针使用不含业务数据的 32×32 内置空白图。
 - 每批支持 1-5 张 JPEG、PNG、WebP 或 GIF，单文件最大 5MB。原图、base64 和模型原始响应不得持久化或写入普通日志。
 - 图片识别使用进程内单 worker 和全局唯一槽，持仓/成交及所有账户共享；新 API 快速返回 HTTP 202，`review_required` 在确认导入或放弃前不自动过期，服务重启会丢失任务和草稿。
 - Vision 单次上限 300 秒、每图最多 2 次，只对 timeout/connection 瞬时错误重试一次；图片按上传顺序串行，整批 deadline 为 60 分钟。取消是尽力语义，当前阻塞调用返回前继续占槽，迟到结果不得覆盖终态。
@@ -192,6 +194,16 @@ gh run view <run_id> --log-failed
 
 ## 6. 验证矩阵
 
+### 分层测试原则
+
+- 不要求在每次命令执行、每轮修改或每个中间步骤后运行全量测试套件；测试范围应与当前改动阶段和影响面匹配。
+- 开发迭代阶段优先运行受影响模块的定向测试，并补充必要的语法检查、类型检查或 lint，以便快速发现局部问题。
+- 单个功能或修复完成后，运行覆盖该功能及其直接上下游契约的回归测试；修复失败用例后，先重跑失败用例和相关用例。
+- 最终交付、提交或创建 / 更新 PR 前，至少执行一次覆盖实际改动面的完整门禁。完整门禁按后端、Web、Desktop、工作流等改动面选择，不要求为未受影响的技术栈机械执行测试。
+- 涉及公共配置、API / Schema、认证、调度、数据源 fallback、报告结构、共享基础模块，或无法可靠判断影响范围时，应扩大回归范围，并执行相关改动面的全量离线测试。
+- 网络测试和三方服务 smoke 默认与离线门禁分开，仅在相关改动、发布验证或明确要求时执行；不得用不稳定的在线测试替代确定性离线测试。
+- 纯文档改动不强制运行代码测试；AI 协作治理资产仍须执行本节指定的治理校验。
+
 ### CI 覆盖原则
 
 当前仓库 CI 主要包含：
@@ -211,13 +223,13 @@ gh run view <run_id> --log-failed
 
 - Python 后端改动：
   - 适用范围：`main.py`、`src/`、`data_provider/`、`api/`、`bot/`、`tests/`
-  - 优先执行：`./scripts/ci_gate.sh`
+  - 开发迭代：优先运行受影响测试；最终交付前默认执行 `./scripts/ci_gate.sh`
   - 最低要求：`python -m py_compile <changed_python_files>`
   - 若影响 API、任务编排、报告生成、通知发送、数据源 fallback、认证、调度，交付说明中要写明是否覆盖了对应路径。
 
 - Web 前端改动：
   - 适用范围：`apps/dsa-web/`
-  - 默认执行：`cd apps/dsa-web && npm ci && npm run lint && npm run build`
+  - 开发迭代：优先运行受影响测试；最终交付前默认执行 `cd apps/dsa-web && npm ci && npm run lint && npm run build`
   - 若涉及 API 联调、路由、状态管理、Markdown/图表渲染或认证状态，交付说明中要明确说明联动面和未覆盖风险。
 
 - 桌面端改动：

@@ -116,6 +116,14 @@ def test_daily_analysis_maps_prompt_cache_config() -> None:
         assert f"secrets.{key}" in env[key]
 
 
+def test_daily_analysis_maps_vision_api_mode() -> None:
+    env = _load_daily_analysis_env()
+
+    expression = env["VISION_API_MODE"]
+    assert "vars.VISION_API_MODE" in expression
+    assert "secrets.VISION_API_MODE" in expression
+
+
 def test_daily_analysis_maps_generation_backend_runtime_config() -> None:
     env = _load_daily_analysis_env()
 

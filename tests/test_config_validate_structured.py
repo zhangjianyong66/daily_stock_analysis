@@ -798,6 +798,48 @@ class TestVisionKeyValidation:
         issues = cfg.validate_structured()
         assert not any(i.field == "VISION_MODEL" for i in issues)
 
+    def test_responses_mode_accepts_exact_channel_route_credentials(self):
+        cfg = _make_config(
+            vision_model="openai/gpt-5.6-sol",
+            vision_api_mode="responses",
+            llm_model_list=[
+                {
+                    "model_name": "openai/gpt-5.6-sol",
+                    "litellm_params": {
+                        "model": "openai/gpt-5.6-sol",
+                        "api_key": "sk-channel-vision-key",
+                        "api_base": "https://relay.example/v1",
+                    },
+                }
+            ],
+            openai_api_keys=[],
+        )
+
+        issues = cfg.validate_structured()
+
+        assert not any(i.code == "vision_responses_route_missing" for i in issues)
+        assert not any(i.field == "VISION_MODEL" and i.severity == "warning" for i in issues)
+
+    def test_responses_mode_rejects_missing_exact_channel_route(self):
+        cfg = _make_config(
+            vision_model="openai/gpt-5.6-sol",
+            vision_api_mode="responses",
+            llm_model_list=[
+                {
+                    "model_name": "openai/other-model",
+                    "litellm_params": {
+                        "model": "openai/gpt-5.6-sol",
+                        "api_key": "sk-channel-vision-key",
+                    },
+                }
+            ],
+            openai_api_keys=["sk-legacy-openai-key"],
+        )
+
+        issues = cfg.validate_structured()
+
+        assert any(i.code == "vision_responses_route_missing" for i in issues)
+
 
 # ---------------------------------------------------------------------------
 # Env alias compatibility

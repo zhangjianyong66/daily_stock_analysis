@@ -1597,6 +1597,103 @@ describe('LLMChannelEditor', () => {
     expect(screen.queryByText(/调整模型顺序或移除不可用模型/i)).not.toBeInTheDocument();
   });
 
+  it('reuses channel extra headers and Responses mode for tests and saves them', async () => {
+    testLLMChannel.mockResolvedValue({
+      success: true,
+      message: 'LLM channel test succeeded',
+      resolvedProtocol: 'openai',
+      resolvedModel: 'openai/gpt-5.6-sol',
+      latencyMs: 80,
+      capabilityResults: {
+        vision: {
+          status: 'passed',
+          message: 'Vision capability check passed',
+          stage: 'capability_vision',
+          details: { reason: 'vision_response_received' },
+        },
+      },
+    });
+    update.mockResolvedValue({
+      success: true,
+      configVersion: 'v2',
+      appliedCount: 2,
+      skippedMaskedCount: 0,
+      reloadTriggered: true,
+      updatedKeys: ['LLM_TUDOU_EXTRA_HEADERS', 'VISION_API_MODE'],
+      warnings: [],
+    });
+
+    render(
+      <LLMChannelEditor
+        items={[
+          { key: 'LLM_CHANNELS', value: 'tudou' },
+          { key: 'LLM_TUDOU_PROTOCOL', value: 'openai' },
+          { key: 'LLM_TUDOU_BASE_URL', value: 'https://relay.example/v1' },
+          { key: 'LLM_TUDOU_ENABLED', value: 'true' },
+          { key: 'LLM_TUDOU_API_KEY', value: 'secret-key' },
+          { key: 'LLM_TUDOU_MODELS', value: 'gpt-5.6-sol' },
+          { key: 'LLM_TUDOU_EXTRA_HEADERS', value: '{"User-Agent":"Mozilla/5.0"}' },
+          { key: 'VISION_MODEL', value: 'openai/gpt-5.6-sol' },
+          { key: 'VISION_API_MODE', value: 'chat_completions' },
+        ]}
+        configVersion="v1"
+        maskToken="******"
+        onSaved={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /tudou/i }));
+    expect(await screen.findByLabelText('Extra Headers (JSON)')).toHaveValue('{"User-Agent":"Mozilla/5.0"}');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Responses' }));
+    fireEvent.click(screen.getByRole('button', { name: '测试连接' }));
+    await screen.findByText(/连接成功/i);
+    expect(testLLMChannel).toHaveBeenLastCalledWith(expect.objectContaining({
+      extraHeaders: { 'User-Agent': 'Mozilla/5.0' },
+      visionApiMode: 'responses',
+    }));
+
+    fireEvent.click(screen.getByLabelText('Vision'));
+    fireEvent.click(screen.getByRole('button', { name: '检测能力' }));
+    await screen.findByText(/能力检测完成：1 通过/i);
+    expect(testLLMChannel).toHaveBeenLastCalledWith(expect.objectContaining({
+      capabilityChecks: ['vision'],
+      extraHeaders: { 'User-Agent': 'Mozilla/5.0' },
+      visionApiMode: 'responses',
+    }));
+
+    fireEvent.change(screen.getByLabelText('Extra Headers (JSON)'), {
+      target: { value: '{"User-Agent":"DSA-Vision"}' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存 AI 配置' }));
+
+    await waitFor(() => expect(update).toHaveBeenCalled());
+    expect(update.mock.calls[0][0].items).toEqual(expect.arrayContaining([
+      { key: 'LLM_TUDOU_EXTRA_HEADERS', value: '{"User-Agent":"DSA-Vision"}' },
+      { key: 'VISION_API_MODE', value: 'responses' },
+    ]));
+  });
+
+  it('blocks channel tests when Extra Headers is not a string-value JSON object', async () => {
+    render(
+      <LLMChannelEditor
+        items={openAiItems}
+        configVersion="v1"
+        maskToken="******"
+        onSaved={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /OpenAI 官方/i }));
+    fireEvent.change(await screen.findByLabelText('Extra Headers (JSON)'), {
+      target: { value: '{"X-Retry":2}' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '测试连接' }));
+
+    expect(await screen.findByText(/Extra Headers 必须是字符串键值 JSON 对象/i)).toBeInTheDocument();
+    expect(testLLMChannel).not.toHaveBeenCalled();
+  });
+
   it('shows tested model and model-availability hints when a model is disabled', async () => {
     testLLMChannel.mockResolvedValue({
       success: false,

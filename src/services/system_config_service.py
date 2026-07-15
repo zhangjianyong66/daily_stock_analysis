@@ -21,6 +21,7 @@ from src.config import (
     ANSPIRE_LLM_BASE_URL_DEFAULT,
     ANSPIRE_LLM_MODEL_DEFAULT,
     SUPPORTED_LLM_CHANNEL_PROTOCOLS,
+    VISION_API_MODE_RESPONSES,
     Config,
     _get_litellm_provider,
     _uses_direct_env_provider,
@@ -30,6 +31,7 @@ from src.config import (
     normalize_agent_litellm_model,
     normalize_news_strategy_profile,
     normalize_llm_channel_model,
+    normalize_vision_api_mode,
     parse_env_bool,
     parse_env_int,
     resolve_news_window_days,
@@ -78,6 +80,10 @@ from src.notification_sender.gotify_sender import resolve_gotify_message_endpoin
 from src.notification_sender.ntfy_sender import resolve_ntfy_endpoint
 from src.services.stock_list_parser import split_stock_list
 from src.services.generation_backend_status_service import GenerationBackendStatusService
+from src.services.vision_extraction_service import (
+    build_vision_responses_input,
+    extract_vision_responses_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -168,7 +174,7 @@ class SystemConfigService:
     )
     _LLM_CAPABILITY_PROBE_IMAGE = (
         "data:image/png;base64,"
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+        "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR42u3NQQEAAAQEMPTvfErw2wqsk9SnqWcCgUAgEAgEAoHgygLH8QM9BsqtpQAAAABJRU5ErkJggg=="
     )
 
     _DISPLAY_KEY_ALIASES: Dict[str, Tuple[str, ...]] = {
@@ -1169,10 +1175,18 @@ class SystemConfigService:
         enabled: bool = True,
         timeout_seconds: float = 20.0,
         capability_checks: Sequence[str] = (),
+        extra_headers: Optional[Dict[str, str]] = None,
+        vision_api_mode: str = "chat_completions",
         use_saved_secret: bool = False,
     ) -> Dict[str, Any]:
         """Run a minimal completion call against one channel definition."""
         requested_capabilities = self._normalize_llm_capability_checks(capability_checks)
+        normalized_extra_headers = {
+            str(key).strip(): str(value)
+            for key, value in (extra_headers or {}).items()
+            if str(key).strip()
+        }
+        normalized_vision_api_mode = normalize_vision_api_mode(vision_api_mode)
         raw_models = [str(model).strip() for model in models if str(model).strip()]
         channel_name = name.strip() or "channel"
         resolved_secret, secret_error, redaction_values = self._resolve_hermes_saved_secret(
@@ -1195,6 +1209,8 @@ class SystemConfigService:
             return result
         api_key = resolved_secret
         redaction_values.update(self._build_redaction_values(api_key))
+        for header_value in normalized_extra_headers.values():
+            redaction_values.update(self._build_redaction_values(header_value))
         if is_reserved_hermes_name(channel_name):
             secret_error = self._validate_hermes_submitted_secret(
                 api_key=api_key,
@@ -1286,6 +1302,8 @@ class SystemConfigService:
             call_kwargs["api_key"] = selected_api_key
         if base_url.strip():
             call_kwargs["api_base"] = base_url.strip()
+        if normalized_extra_headers and not is_reserved_hermes_name(channel_name):
+            call_kwargs["extra_headers"] = normalized_extra_headers
         call_kwargs = apply_litellm_generation_params(
             call_kwargs,
             resolved_model,
@@ -1384,6 +1402,8 @@ class SystemConfigService:
                     base_url=base_url,
                     timeout_seconds=timeout_seconds,
                     capability_checks=requested_capabilities,
+                    extra_headers=normalized_extra_headers,
+                    vision_api_mode=normalized_vision_api_mode,
                 )
             return self._build_llm_channel_result(
                 success=True,
@@ -1555,6 +1575,8 @@ class SystemConfigService:
         base_url: str,
         timeout_seconds: float,
         capability_checks: Sequence[str],
+        extra_headers: Dict[str, str],
+        vision_api_mode: str,
     ) -> Dict[str, Dict[str, Any]]:
         results: Dict[str, Dict[str, Any]] = {}
         for capability in capability_checks:
@@ -1565,6 +1587,7 @@ class SystemConfigService:
                     selected_api_key=selected_api_key,
                     base_url=base_url,
                     timeout_seconds=timeout_seconds,
+                    extra_headers=extra_headers,
                 )
             elif capability == "tools":
                 results[capability] = cls._run_tools_capability_check(
@@ -1573,6 +1596,7 @@ class SystemConfigService:
                     selected_api_key=selected_api_key,
                     base_url=base_url,
                     timeout_seconds=timeout_seconds,
+                    extra_headers=extra_headers,
                 )
             elif capability == "stream":
                 results[capability] = cls._run_stream_capability_check(
@@ -1581,6 +1605,7 @@ class SystemConfigService:
                     selected_api_key=selected_api_key,
                     base_url=base_url,
                     timeout_seconds=timeout_seconds,
+                    extra_headers=extra_headers,
                 )
             elif capability == "vision":
                 results[capability] = cls._run_vision_capability_check(
@@ -1589,6 +1614,8 @@ class SystemConfigService:
                     selected_api_key=selected_api_key,
                     base_url=base_url,
                     timeout_seconds=timeout_seconds,
+                    extra_headers=extra_headers,
+                    vision_api_mode=vision_api_mode,
                 )
         return results
 
@@ -1601,6 +1628,7 @@ class SystemConfigService:
         selected_api_key: str,
         base_url: str,
         timeout_seconds: float,
+        extra_headers: Dict[str, str],
     ) -> Dict[str, Any]:
         try:
             started_at = time.perf_counter()
@@ -1612,6 +1640,7 @@ class SystemConfigService:
                     timeout_seconds=timeout_seconds,
                     messages=[{"role": "user", "content": 'Return exactly this JSON object: {"status":"ok"}'}],
                     max_tokens=64,
+                    extra_headers=extra_headers,
                     extra={"response_format": {"type": "json_object"}},
                 )
             )
@@ -1669,6 +1698,7 @@ class SystemConfigService:
         selected_api_key: str,
         base_url: str,
         timeout_seconds: float,
+        extra_headers: Dict[str, str],
     ) -> Dict[str, Any]:
         tools = [
             {
@@ -1694,6 +1724,7 @@ class SystemConfigService:
                     timeout_seconds=timeout_seconds,
                     messages=[{"role": "user", "content": "Call the dsa_probe_echo tool with text set to ok."}],
                     max_tokens=64,
+                    extra_headers=extra_headers,
                     extra={
                         "tools": tools,
                         "tool_choice": {"type": "function", "function": {"name": "dsa_probe_echo"}},
@@ -1732,6 +1763,7 @@ class SystemConfigService:
         selected_api_key: str,
         base_url: str,
         timeout_seconds: float,
+        extra_headers: Dict[str, str],
     ) -> Dict[str, Any]:
         stream = None
         started_at = time.perf_counter()
@@ -1744,6 +1776,7 @@ class SystemConfigService:
                     timeout_seconds=timeout_seconds,
                     messages=[{"role": "user", "content": "Reply with OK"}],
                     max_tokens=32,
+                    extra_headers=extra_headers,
                     extra={"stream": True},
                 )
             )
@@ -1790,29 +1823,52 @@ class SystemConfigService:
         selected_api_key: str,
         base_url: str,
         timeout_seconds: float,
+        extra_headers: Dict[str, str],
+        vision_api_mode: str,
     ) -> Dict[str, Any]:
         try:
             started_at = time.perf_counter()
-            response = litellm_module.completion(
-                **cls._build_llm_capability_completion_kwargs(
+            if vision_api_mode == VISION_API_MODE_RESPONSES:
+                responses_method = getattr(litellm_module, "responses", None)
+                if not callable(responses_method):
+                    raise RuntimeError("LiteLLM responses API is unavailable")
+                response_kwargs = cls._build_llm_capability_responses_kwargs(
                     resolved_model=resolved_model,
                     selected_api_key=selected_api_key,
                     base_url=base_url,
                     timeout_seconds=timeout_seconds,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "text", "text": "Reply with OK if this image is visible."},
-                                {"type": "image_url", "image_url": {"url": cls._LLM_CAPABILITY_PROBE_IMAGE}},
-                            ],
-                        }
-                    ],
-                    max_tokens=32,
+                    prompt="Reply with OK if this image is visible.",
+                    image_url=cls._LLM_CAPABILITY_PROBE_IMAGE,
+                    max_output_tokens=32,
+                    extra_headers=extra_headers,
                 )
-            )
+                response = responses_method(**response_kwargs)
+                content = extract_vision_responses_text(response)
+                parse_error_code = None
+                parse_error = None
+                parse_reason = None
+            else:
+                response = litellm_module.completion(
+                    **cls._build_llm_capability_completion_kwargs(
+                        resolved_model=resolved_model,
+                        selected_api_key=selected_api_key,
+                        base_url=base_url,
+                        timeout_seconds=timeout_seconds,
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": "Reply with OK if this image is visible."},
+                                    {"type": "image_url", "image_url": {"url": cls._LLM_CAPABILITY_PROBE_IMAGE}},
+                                ],
+                            }
+                        ],
+                        max_tokens=32,
+                        extra_headers=extra_headers,
+                    )
+                )
+                content, parse_error_code, parse_error, parse_reason = cls._extract_llm_completion_content(response)
             latency_ms = int((time.perf_counter() - started_at) * 1000)
-            content, parse_error_code, parse_error, parse_reason = cls._extract_llm_completion_content(response)
             if parse_error_code:
                 return cls._build_llm_capability_result(
                     capability="vision",
@@ -1844,6 +1900,7 @@ class SystemConfigService:
         timeout_seconds: float,
         messages: List[Dict[str, Any]],
         max_tokens: int,
+        extra_headers: Optional[Dict[str, str]] = None,
         extra: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         try:
@@ -1860,6 +1917,8 @@ class SystemConfigService:
             call_kwargs["api_key"] = selected_api_key
         if base_url.strip():
             call_kwargs["api_base"] = base_url.strip()
+        if extra_headers:
+            call_kwargs["extra_headers"] = dict(extra_headers)
         if extra:
             call_kwargs.update(extra)
         call_kwargs = apply_litellm_generation_params(
@@ -1867,6 +1926,37 @@ class SystemConfigService:
             resolved_model,
             0.0,
         )
+        return call_kwargs
+
+    @classmethod
+    def _build_llm_capability_responses_kwargs(
+        cls,
+        *,
+        resolved_model: str,
+        selected_api_key: str,
+        base_url: str,
+        timeout_seconds: float,
+        prompt: str,
+        image_url: str,
+        max_output_tokens: int,
+        extra_headers: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
+        try:
+            timeout = float(timeout_seconds)
+        except (TypeError, ValueError):
+            timeout = 10.0
+        call_kwargs: Dict[str, Any] = {
+            "model": resolved_model,
+            "input": build_vision_responses_input(image_url, prompt),
+            "max_output_tokens": max_output_tokens,
+            "timeout": min(max(5.0, timeout), 10.0),
+        }
+        if selected_api_key:
+            call_kwargs["api_key"] = selected_api_key
+        if base_url.strip():
+            call_kwargs["api_base"] = base_url.strip()
+        if extra_headers:
+            call_kwargs["extra_headers"] = dict(extra_headers)
         return call_kwargs
 
     @classmethod

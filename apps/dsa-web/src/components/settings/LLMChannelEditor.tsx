@@ -3,7 +3,7 @@ import type React from 'react';
 import type { ParsedApiError } from '../../api/error';
 import { getParsedApiError } from '../../api/error';
 import { systemConfigApi } from '../../api/systemConfig';
-import type { LLMCapabilityCheck, LLMCapabilityCheckResult } from '../../types/systemConfig';
+import type { LLMCapabilityCheck, LLMCapabilityCheckResult, VisionAPIMode } from '../../types/systemConfig';
 import { ApiErrorAlert, Badge, Button, InlineAlert, Input, Select, StatusDot, Tooltip } from '../common';
 import type { ChannelProtocol } from './llmProviderTemplates';
 import {
@@ -121,6 +121,7 @@ interface ChannelConfig {
   protocol: ChannelProtocol;
   baseUrl: string;
   apiKey: string;
+  extraHeaders: string;
   models: string;
   enabled: boolean;
 }
@@ -151,6 +152,7 @@ interface RuntimeConfig {
   agentPrimaryModel: string;
   fallbackModels: string[];
   visionModel: string;
+  visionApiMode: VisionAPIMode;
   temperature: string;
 }
 
@@ -389,6 +391,9 @@ function buildChangedItemKeys(
       changedKeys.add(`${prefix}_API_KEY`);
       changedKeys.add(`${prefix}_API_KEYS`);
     }
+    if (current.extraHeaders !== previous.extraHeaders) {
+      changedKeys.add(`${prefix}_EXTRA_HEADERS`);
+    }
     if (current.models !== previous.models) {
       changedKeys.add(`${prefix}_MODELS`);
     }
@@ -445,6 +450,7 @@ const ChannelRow: React.FC<ChannelRowProps> = ({
   const protocolInputId = `llm-channel-${channel.id}-protocol`;
   const baseUrlInputId = `llm-channel-${channel.id}-base-url`;
   const apiKeyInputId = `llm-channel-${channel.id}-api-key`;
+  const extraHeadersInputId = `llm-channel-${channel.id}-extra-headers`;
   const modelsInputId = `llm-channel-${channel.id}-models`;
 
   return (
@@ -655,6 +661,26 @@ const ChannelRow: React.FC<ChannelRowProps> = ({
             placeholder={channel.protocol === 'ollama' ? '本地 Ollama 可留空' : '支持多个 Key 逗号分隔'}
           />
           </div>
+
+          {!isHermesChannel(channel) ? (
+            <div>
+              <HelpLabel
+                htmlFor={extraHeadersInputId}
+                label="Extra Headers (JSON)"
+                fieldKey="LLM_CHANNEL_EXTRA_HEADERS"
+                helpKey="settings.llm_channel.extra_headers"
+                examples={['LLM_TUDOU_EXTRA_HEADERS={"User-Agent":"Mozilla/5.0"}']}
+              />
+              <Input
+                id={extraHeadersInputId}
+                value={channel.extraHeaders}
+                disabled={busy}
+                onChange={(event) => onUpdate(index, 'extraHeaders', event.target.value)}
+                placeholder='{"User-Agent":"Mozilla/5.0"}'
+                hint="仅接受字符串键值的 JSON 对象；连接与能力测试会使用这些请求头。"
+              />
+            </div>
+          ) : null}
 
           <div className="space-y-3 rounded-xl border border-[var(--settings-border)] bg-[var(--settings-surface-hover)] p-3">
             <div className="flex flex-wrap items-center gap-2">
@@ -925,6 +951,24 @@ function splitModels(models: string): string[] {
     .split(',')
     .map((entry) => entry.trim())
     .filter(Boolean);
+}
+
+function parseChannelExtraHeaders(value: string): Record<string, string> | null {
+  const trimmed = value.trim();
+  if (!trimmed) return {};
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null;
+    }
+    const entries = Object.entries(parsed);
+    if (entries.some(([key, headerValue]) => !key.trim() || typeof headerValue !== 'string')) {
+      return null;
+    }
+    return Object.fromEntries(entries.map(([key, headerValue]) => [key.trim(), headerValue as string]));
+  } catch {
+    return null;
+  }
 }
 
 interface ParsedModelRef {
@@ -1286,6 +1330,7 @@ function runtimeConfigsAreEqual(left: RuntimeConfig, right: RuntimeConfig): bool
   return left.primaryModel === right.primaryModel
     && left.agentPrimaryModel === right.agentPrimaryModel
     && left.visionModel === right.visionModel
+    && left.visionApiMode === right.visionApiMode
     && left.temperature === right.temperature
     && left.fallbackModels.join(',') === right.fallbackModels.join(',');
 }
@@ -1306,6 +1351,9 @@ function runtimeConfigChangedKeys(left: RuntimeConfig, right: RuntimeConfig): Se
   }
   if (left.visionModel !== right.visionModel) {
     changed.add('VISION_MODEL');
+  }
+  if (left.visionApiMode !== right.visionApiMode) {
+    changed.add('VISION_API_MODE');
   }
   return changed;
 }
@@ -1355,6 +1403,7 @@ function parseRuntimeConfigFromItems(items: Array<{ key: string; value: string }
     agentPrimaryModel: normalizeAgentPrimaryModel(itemMap.get('AGENT_LITELLM_MODEL') || ''),
     fallbackModels: splitModels(itemMap.get('LITELLM_FALLBACK_MODELS') || ''),
     visionModel: itemMap.get('VISION_MODEL') || '',
+    visionApiMode: itemMap.get('VISION_API_MODE') === 'responses' ? 'responses' : 'chat_completions',
     temperature: resolveTemperatureFromItems(itemMap),
   };
 }
@@ -1381,6 +1430,7 @@ function parseChannelsFromItems(
       protocol: inferProtocol(itemMap.get(`LLM_${upperName}_PROTOCOL`) || '', baseUrl, models),
       baseUrl,
       apiKey: resolveInitialChannelApiKeyValue(name, itemMap, itemSourceByKey),
+      extraHeaders: itemMap.get(`LLM_${upperName}_EXTRA_HEADERS`) || '',
       models: rawModels,
       enabled: parseEnabled(itemMap.get(`LLM_${upperName}_ENABLED`)),
     };
@@ -1402,6 +1452,7 @@ function channelsToUpdateItems(
     updates.push({ key: 'AGENT_LITELLM_MODEL', value: runtimeConfig.agentPrimaryModel });
     updates.push({ key: 'LITELLM_FALLBACK_MODELS', value: runtimeConfig.fallbackModels.join(',') });
     updates.push({ key: 'VISION_MODEL', value: runtimeConfig.visionModel });
+    updates.push({ key: 'VISION_API_MODE', value: runtimeConfig.visionApiMode });
     updates.push({ key: 'LLM_TEMPERATURE', value: runtimeConfig.temperature });
   }
 
@@ -1418,6 +1469,7 @@ function channelsToUpdateItems(
     } else {
       updates.push({ key: `${prefix}_API_KEY${isMultiKey ? 'S' : ''}`, value: channel.apiKey });
       updates.push({ key: `${prefix}_API_KEY${isMultiKey ? '' : 'S'}`, value: '' });
+      updates.push({ key: `${prefix}_EXTRA_HEADERS`, value: channel.extraHeaders });
     }
     updates.push({ key: `${prefix}_MODELS`, value: channel.models });
   }
@@ -1523,6 +1575,7 @@ function channelsAreEqual(left: ChannelConfig, right: ChannelConfig): boolean {
     && left.protocol === right.protocol
     && left.baseUrl === right.baseUrl
     && left.apiKey === right.apiKey
+    && left.extraHeaders === right.extraHeaders
     && left.models === right.models
     && left.enabled === right.enabled
   );
@@ -1681,6 +1734,7 @@ export const LLMChannelEditor: React.FC<LLMChannelEditorProps> = ({
       runtimeConfig.primaryModel !== initialRuntimeConfig.primaryModel
       || runtimeConfig.agentPrimaryModel !== initialRuntimeConfig.agentPrimaryModel
       || runtimeConfig.visionModel !== initialRuntimeConfig.visionModel
+      || runtimeConfig.visionApiMode !== initialRuntimeConfig.visionApiMode
       || runtimeConfig.temperature !== initialRuntimeConfig.temperature
       || runtimeConfig.fallbackModels.join(',') !== initialRuntimeConfig.fallbackModels.join(',')
     );
@@ -1848,6 +1902,7 @@ export const LLMChannelEditor: React.FC<LLMChannelEditorProps> = ({
           protocol: preset.protocol,
           baseUrl: preset.baseUrl,
           apiKey: '',
+          extraHeaders: '',
           models: preset.placeholderModels || '',
           enabled: true,
         },
@@ -1866,6 +1921,16 @@ export const LLMChannelEditor: React.FC<LLMChannelEditorProps> = ({
     const hasEmptyName = channels.some((channel) => !channel.name.trim());
     if (hasEmptyName) {
       setSaveMessage({ type: 'local-error', text: '渠道名称不能为空，且只能包含字母、数字或下划线。' });
+      return;
+    }
+    const invalidExtraHeadersChannel = channels.find(
+      (channel) => !isHermesChannel(channel) && parseChannelExtraHeaders(channel.extraHeaders) === null,
+    );
+    if (invalidExtraHeadersChannel) {
+      setSaveMessage({
+        type: 'local-error',
+        text: `渠道 ${invalidExtraHeadersChannel.name || '未命名渠道'} 的 Extra Headers 必须是字符串键值 JSON 对象。`,
+      });
       return;
     }
 
@@ -1890,6 +1955,16 @@ export const LLMChannelEditor: React.FC<LLMChannelEditorProps> = ({
       );
       if (nonCanonicalRouteAlias) {
         setSaveMessage({ type: 'local-error', text: '当前运行时模型使用非规范 route alias，请从下拉框重新选择规范模型。' });
+        return;
+      }
+      if (
+        runtimeConfig.visionApiMode === 'responses'
+        && (!runtimeConfig.visionModel || !visionSafeModels.includes(runtimeConfig.visionModel))
+      ) {
+        setSaveMessage({
+          type: 'local-error',
+          text: 'Responses 模式要求 Vision 模型精确匹配一个已启用的非 Hermes 渠道路由。',
+        });
         return;
       }
     }
@@ -1977,6 +2052,14 @@ export const LLMChannelEditor: React.FC<LLMChannelEditorProps> = ({
       }));
       return;
     }
+    const extraHeaders = parseChannelExtraHeaders(channel.extraHeaders);
+    if (extraHeaders === null) {
+      setTestStates((previous) => ({
+        ...previous,
+        [index]: { status: 'error', text: 'Extra Headers 必须是字符串键值 JSON 对象。' },
+      }));
+      return;
+    }
 
     setTestStates((previous) => ({
       ...previous,
@@ -1991,6 +2074,8 @@ export const LLMChannelEditor: React.FC<LLMChannelEditorProps> = ({
         apiKey: channel.apiKey,
         models: splitModels(channel.models),
         enabled: channel.enabled,
+        extraHeaders,
+        visionApiMode: runtimeConfig.visionApiMode,
         useSavedSecret: shouldUseSavedHermesSecret(channel, maskToken, hasPersistedHermesSecret(channel)),
       });
 
@@ -2109,6 +2194,20 @@ export const LLMChannelEditor: React.FC<LLMChannelEditorProps> = ({
       (capability) => !isHermesChannel(channel) || capability === 'json',
     );
     if (selected.length === 0) return;
+    const extraHeaders = parseChannelExtraHeaders(channel.extraHeaders);
+    if (extraHeaders === null) {
+      setCapabilityStates((previous) => ({
+        ...previous,
+        [channel.id]: {
+          selected,
+          status: 'error',
+          text: 'Extra Headers 必须是字符串键值 JSON 对象。',
+          hint: undefined,
+          results: {},
+        },
+      }));
+      return;
+    }
 
     if (hasRuntimeOnlyMaskedHermesSecret(channel, maskToken, hasPersistedHermesSecret(channel))) {
       setCapabilityStates((previous) => ({
@@ -2149,6 +2248,8 @@ export const LLMChannelEditor: React.FC<LLMChannelEditorProps> = ({
         models: splitModels(channel.models),
         enabled: channel.enabled,
         capabilityChecks: selected,
+        extraHeaders,
+        visionApiMode: runtimeConfig.visionApiMode,
         useSavedSecret: shouldUseSavedHermesSecret(channel, maskToken, hasPersistedHermesSecret(channel)),
       });
 
@@ -2434,6 +2535,39 @@ export const LLMChannelEditor: React.FC<LLMChannelEditorProps> = ({
                       disabled={busy}
                       placeholder=""
                     />
+                  </div>
+
+                  <div>
+                    <HelpLabel
+                      label="Vision API 模式"
+                      fieldKey="VISION_API_MODE"
+                      helpKey="settings.llm_channel.vision_api_mode"
+                      examples={['VISION_API_MODE=chat_completions', 'VISION_API_MODE=responses']}
+                      compact
+                    />
+                    <div className="inline-flex w-full rounded-lg border border-[var(--settings-border)] bg-[var(--settings-surface-hover)] p-1 sm:w-auto">
+                      {([
+                        { value: 'chat_completions', label: 'Chat Completions' },
+                        { value: 'responses', label: 'Responses' },
+                      ] as Array<{ value: VisionAPIMode; label: string }>).map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          disabled={busy}
+                          onClick={() => setRuntimeConfig((previous) => ({
+                            ...previous,
+                            visionApiMode: option.value,
+                          }))}
+                          className={`min-h-9 flex-1 whitespace-nowrap rounded-md px-2 text-xs transition-colors sm:flex-none sm:px-3 ${
+                            runtimeConfig.visionApiMode === option.value
+                              ? 'bg-[var(--settings-surface)] text-foreground shadow-sm'
+                              : 'text-secondary-text hover:text-foreground'
+                          }`}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
               )}

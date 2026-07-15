@@ -23,6 +23,8 @@
 - 兼容接口：`positions/parse`、`trades/parse` 保留并标记 deprecated，在线程池执行且共享全局任务槽和识别核心。
 - SSE：复用 `/api/v1/analysis/tasks/stream`，事件类型 `portfolio_image_task_updated`，载荷只含轻量摘要。
 - DB：`PortfolioTrade.trade_time` 为 nullable `TIME`；图片任务和草稿不新增数据库表。
+- 共享 Vision：`complete_vision(image_bytes, mime_type, prompt, *, max_tokens=1024, attempt_callback=None, deadline_monotonic=None) -> str`；持仓导入与自选股提取必须共用该入口。
+- 设置页渠道测试：`POST /api/v1/system/config/llm/channels/test` 的 `TestLLMChannelRequest` 包含 `extra_headers: Dict[str, str]` 与 `vision_api_mode: chat_completions | responses`，默认模式为 `chat_completions`。
 
 ## 3. Contracts
 
@@ -39,6 +41,10 @@
 ### 3.2 Vision 预算、顺序与取消
 
 - Vision 只使用显式 `VISION_MODEL`，兼容废弃别名 `OPENAI_VISION_MODEL`；不得使用 `LITELLM_MODEL` 文本主模型顶替。
+- `VISION_API_MODE` 只允许 `chat_completions`（默认）或 `responses`。不得按域名/模型推断模式，不得跨协议 fallback 或重复发送同一图片。
+- Responses deployment 由 `LLM_CHANNELS` 与 `LLM_<CHANNEL>_{PROTOCOL,BASE_URL,API_KEY,MODELS,ENABLED,EXTRA_HEADERS}` 定义；每日分析 workflow 还必须把全局 `VISION_API_MODE` 从同名 Actions Variable/Secret 映射到进程环境。私有自定义渠道名仍由部署者自行映射，不写入通用 workflow。
+- Chat Completions 精确匹配非 Hermes LLM Channel route 时通过 LiteLLM Router 复用 deployment；无匹配 route 时保留 legacy provider Key/Base URL 路径。Responses 必须精确匹配非 legacy、非 Hermes route，并复用其 wire model、Base URL、API Key 与 Extra Headers；缺 route 在发网前返回 `vision_not_configured`。
+- Router 内部 retry/fallback 必须关闭，外层仍统一拥有 300 秒单次上限、最多两次 attempt、整体 deadline 与取消迟到结果规则。Responses output 需兼容 Mapping/对象形状并归一化为纯文本，下游不得感知协议差异。
 - 单次调用 timeout 为 300 秒；每张最多 2 次，只对 timeout/connection 类瞬时错误重试一次。
 - rate limit、鉴权失败、模型不支持图片、无效图片、空响应和格式错误不重试，并使用低敏稳定错误码。
 - 1-5 张图片按上传顺序串行；整批 deadline 为 60 分钟，达到上限后不启动下一张，当前调用收敛后任务失败。
@@ -61,6 +67,7 @@
 - 成交提交接受可空 `trade_time`、非负 `fee/tax` 和稳定 `occurrence_index`；客户端 fingerprint/hash 不可信。
 - 成交插入、账本重放、超卖校验和列表查询统一按 `trade_date -> known trade_time -> null -> stable order`。
 - 日志只记录 task_id、mode、account_id、文件序号、尝试、状态和低敏错误码；不得记录原图、base64、完整 prompt、模型响应、Key、Authorization 或 provider body。
+- deployment API Key 与 Extra Header 值必须进入异常脱敏集合；设置页 Vision 探针只使用不含业务数据、宽高至少 32px 的内置图片。
 - 客户端 Axios `ECONNABORTED` 必须与服务端 Vision timeout 分开提示。
 
 ## 4. Validation & Error Matrix
@@ -73,6 +80,9 @@
 | 状态/mode/account/batch/date 不匹配 | 409 `portfolio_image_task_state_conflict` |
 | 整批超过 60 分钟 | `failed/portfolio_image_task_timeout` |
 | 未配置 Vision / 缺 provider key | `vision_not_configured` |
+| `VISION_API_MODE` 非法 | 配置归一化为默认 `chat_completions` 并产生结构化 warning |
+| Responses 缺精确非 legacy、非 Hermes route | 发网前 `vision_not_configured`，不得尝试 legacy Key/Base URL |
+| Responses output 为空或只有非文本 item | 低敏空响应错误，不重试、不返回 provider body |
 | 上游 timeout / 网络 / 限流 / 鉴权 | `vision_timeout` / `vision_network_error` / `vision_rate_limited` / `vision_auth_failed` |
 | 模型不支持图片 / 非法文件 | `vision_unsupported` / `unsupported_type` / `invalid_image` |
 | 持仓账户已有交易 | HTTP 409 `account_not_empty`，草稿保留、零写入 |
@@ -83,12 +93,15 @@
 - Good：Vision 运行超过浏览器原 30 秒阈值，Web 仍可关闭抽屉并从横幅/刷新恢复同一任务。
 - Good：两个标签页同时编辑，旧 revision 保存/提交得到 409，不覆盖新草稿。
 - Good：取消发生在第 1 张上游调用中；调用返回后不启动第 2 张，迟到结果不进入 review。
+- Good：Responses route 精确匹配并携带渠道 Extra Headers，Mapping/对象形状的 `output_text` 均归一化为纯文本。
 - Base：单图成功进入 review，确认提交后原子写入并清除 current task。
+- Base：未配置 `VISION_API_MODE` 时继续走 Chat Completions；没有匹配 route 时仍可使用既有 provider Key/Base URL。
 - Base：旧同步 parse 保持成功响应，但运行期间占用同一全局槽。
 - Bad：Web 仍调用同步 parse 或为图片请求单纯放大 Axios timeout。
 - Bad：失败/取消后迟到 worker 覆盖终态，或 `review_required` 自动 TTL 清理。
 - Bad：草稿保存并发发送相同 revision，旧响应把后续编辑误标为已保存。
 - Bad：通过不带 task_id 的旧 commit 绕过正在等待校对的异步任务。
+- Bad：根据中转站域名或模型名自动改走 Responses，或者 Chat/Responses 失败后跨协议重发同一图片。
 
 ## 6. Tests Required
 
@@ -99,6 +112,8 @@
   - `tests/test_portfolio_api.py`
   - `tests/test_analysis_api_contract.py`
 - 必须覆盖：202、全局防重、状态转移、部分/全部失败、300 秒/两次尝试、错误重试矩阵、60 分钟 deadline、取消迟到结果、draft revision、两阶段 commit、旧 API 兼容、SSE 事件隔离。
+- Vision 协议测试必须断言：默认 Chat 兼容、精确 route、Router 内部 retry/fallback 关闭、Responses 请求形状、Mapping/对象文本提取、缺 route 零网络调用、空 output 不重试，以及 Key/Extra Header/provider body 脱敏。
+- 配置与部署测试必须断言：registry/API/Web snake-camel 往返、设置页所有能力测试透传 Extra Headers、32×32 低敏探针，以及 `.github/workflows/00-daily-analysis.yml` 同时引用 `vars.VISION_API_MODE` 和 `secrets.VISION_API_MODE`。
 - Web：API snake/camel 映射、任务恢复横幅、SSE 后 REST 刷新、关闭抽屉继续执行、草稿串行防抖保存、revision 冲突、取消/放弃/commit、服务重启提示。
 - 可视：桌面和 390px 移动视口验证任务横幅、文件进度、review 行和 footer；截图只作 PR 外部证据，不入库。
 
@@ -144,3 +159,28 @@ if (editedWhileSaving) {
 ```
 
 收到 `portfolio_image_draft_conflict` 后必须停止自动保存并重新加载权威草稿，不能静默重试覆盖。
+
+### Wrong：为 Responses 增加平行 Vision-only 连接配置或协议 fallback
+
+```env
+VISION_API_BASE=https://relay.example.com/v1
+VISION_API_KEY=xxx
+VISION_API_MODE=auto
+```
+
+这会复制 LLM Channel 的连接真源，并可能在失败后重复发送用户图片。
+
+### Correct：显式选择协议并精确复用渠道 deployment
+
+```env
+LLM_CHANNELS=primary,vision_relay
+LLM_VISION_RELAY_PROTOCOL=openai
+LLM_VISION_RELAY_BASE_URL=https://relay.example.com/v1
+LLM_VISION_RELAY_API_KEY=xxx
+LLM_VISION_RELAY_MODELS=gpt-vision
+LLM_VISION_RELAY_EXTRA_HEADERS={"User-Agent":"Mozilla/5.0"}
+VISION_MODEL=openai/gpt-vision
+VISION_API_MODE=responses
+```
+
+Responses 缺少该精确 route 时必须返回 `vision_not_configured`，不得回退到 legacy `OPENAI_*` 或 Chat Completions。

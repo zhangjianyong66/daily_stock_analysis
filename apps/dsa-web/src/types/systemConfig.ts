@@ -230,10 +230,13 @@ export interface TestLLMChannelRequest {
   enabled?: boolean;
   timeoutSeconds?: number;
   capabilityChecks?: LLMCapabilityCheck[];
+  extraHeaders?: Record<string, string>;
+  visionApiMode?: VisionAPIMode;
   useSavedSecret?: boolean;
 }
 
 export type LLMCapabilityCheck = 'json' | 'tools' | 'vision' | 'stream';
+export type VisionAPIMode = 'chat_completions' | 'responses';
 
 export interface LLMCapabilityCheckResult {
   status: 'passed' | 'failed' | 'skipped';

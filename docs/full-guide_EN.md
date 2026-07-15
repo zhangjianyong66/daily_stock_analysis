@@ -1151,7 +1151,7 @@ LITELLM_FALLBACK_MODELS=anthropic/claude-sonnet-4-6,openai/gpt-5.4-mini
 
 > ⚠️ `LITELLM_MODEL` must include provider prefix (e.g. `gemini/`, `anthropic/`, `openai/`). Legacy `GEMINI_MODEL` (no prefix) is only used when `LITELLM_MODEL` is not set.
 
-**Vision model (watchlist and Portfolio image extraction)**: See [LLM Config Guide - Vision](LLM_CONFIG_GUIDE_EN.md#advanced-feature-vision-model-config). Vision calls require an explicit `VISION_MODEL`; they do not substitute the text-only `LITELLM_MODEL` or silently switch to another model.
+**Vision model (watchlist and Portfolio image extraction)**: See [LLM Config Guide - Vision](LLM_CONFIG_GUIDE_EN.md#advanced-feature-vision-model-config). Vision calls require an explicit `VISION_MODEL`; they do not substitute the text-only `LITELLM_MODEL` or silently switch to another model. `VISION_API_MODE` defaults to `chat_completions`; `responses` requires an exact non-Hermes channel route and reuses that deployment's Base URL, Key, and Extra Headers without cross-protocol fallback.
 
 ### Debug Mode
 

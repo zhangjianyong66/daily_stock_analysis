@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Unit tests for system configuration service."""
 
+import base64
 import os
 import json
 import logging
@@ -3420,6 +3421,7 @@ class SystemConfigServiceTestCase(unittest.TestCase):
             api_key="sk-test-value",
             models=["gpt-4o-mini"],
             capability_checks=["tools", "json", "tools"],
+            extra_headers={"User-Agent": "Mozilla/5.0"},
         )
 
         self.assertTrue(payload["success"])
@@ -3429,6 +3431,10 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         self.assertEqual(mock_completion.call_count, 3)
         self.assertEqual(mock_completion.call_args_list[1].kwargs["response_format"], {"type": "json_object"})
         self.assertEqual(mock_completion.call_args_list[2].kwargs["tool_choice"]["function"]["name"], "dsa_probe_echo")
+        self.assertTrue(all(
+            call.kwargs["extra_headers"] == {"User-Agent": "Mozilla/5.0"}
+            for call in mock_completion.call_args_list
+        ))
 
     @patch("litellm.completion")
     def test_test_llm_channel_reports_json_capability_failures(self, mock_completion) -> None:
@@ -3537,6 +3543,48 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         vision_content = mock_completion.call_args_list[1].kwargs["messages"][0]["content"]
         self.assertEqual(vision_content[1]["type"], "image_url")
         self.assertTrue(vision_content[1]["image_url"]["url"].startswith("data:image/png;base64,"))
+        image_bytes = base64.b64decode(vision_content[1]["image_url"]["url"].split(",", 1)[1])
+        self.assertEqual(int.from_bytes(image_bytes[16:20], "big"), 32)
+        self.assertEqual(int.from_bytes(image_bytes[20:24], "big"), 32)
+
+    @patch("litellm.responses")
+    @patch("litellm.completion")
+    def test_test_llm_channel_runs_responses_vision_with_extra_headers(
+        self,
+        mock_completion,
+        mock_responses,
+    ) -> None:
+        mock_completion.return_value = self._mock_completion_response("OK")
+        mock_responses.return_value = {
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "OK"}],
+                }
+            ],
+        }
+
+        payload = self.service.test_llm_channel(
+            name="primary",
+            protocol="openai",
+            base_url="https://relay.example/v1",
+            api_key="sk-test-value",
+            models=["gpt-5.6-sol"],
+            capability_checks=["vision"],
+            extra_headers={"User-Agent": "Mozilla/5.0"},
+            vision_api_mode="responses",
+        )
+
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["capability_results"]["vision"]["status"], "passed")
+        self.assertEqual(mock_completion.call_args.kwargs["extra_headers"], {"User-Agent": "Mozilla/5.0"})
+        response_kwargs = mock_responses.call_args.kwargs
+        self.assertEqual(response_kwargs["extra_headers"], {"User-Agent": "Mozilla/5.0"})
+        self.assertEqual(response_kwargs["input"][0]["content"][1]["type"], "input_image")
+        image_bytes = base64.b64decode(response_kwargs["input"][0]["content"][1]["image_url"].split(",", 1)[1])
+        self.assertEqual(int.from_bytes(image_bytes[16:20], "big"), 32)
+        self.assertEqual(int.from_bytes(image_bytes[20:24], "big"), 32)
 
     @patch("litellm.completion")
     def test_test_llm_channel_classifies_capability_unsupported(self, mock_completion) -> None:

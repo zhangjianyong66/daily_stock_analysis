@@ -367,6 +367,42 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
         self.assertEqual(with_jpkr.openai_api_key, baseline.openai_api_key)
         self.assertEqual(with_jpkr.openai_base_url, baseline.openai_base_url)
 
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_vision_api_mode_defaults_and_parses_responses(
+        self,
+        _mock_parse_litellm_yaml,
+        _mock_setup_env,
+    ) -> None:
+        with patch.dict(os.environ, {"STOCK_LIST": "600519"}, clear=True):
+            default_config = Config._load_from_env()
+        with patch.dict(
+            os.environ,
+            {"STOCK_LIST": "600519", "VISION_API_MODE": "responses"},
+            clear=True,
+        ):
+            responses_config = Config._load_from_env()
+
+        self.assertEqual(default_config.vision_api_mode, "chat_completions")
+        self.assertEqual(responses_config.vision_api_mode, "responses")
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_invalid_vision_api_mode_falls_back_to_compatible_default(
+        self,
+        _mock_parse_litellm_yaml,
+        _mock_setup_env,
+    ) -> None:
+        with patch.dict(
+            os.environ,
+            {"STOCK_LIST": "600519", "VISION_API_MODE": "automatic"},
+            clear=True,
+        ), self.assertLogs("src.config", level="WARNING") as captured:
+            config = Config._load_from_env()
+
+        self.assertEqual(config.vision_api_mode, "chat_completions")
+        self.assertIn("VISION_API_MODE=automatic", "\n".join(captured.output))
+
     def test_env_example_alphasift_install_spec_matches_trusted_default(self):
         env_example = Path(__file__).resolve().parents[1] / ".env.example"
 

@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 LLMCapabilityCheck = Literal["json", "tools", "vision", "stream"]
+VisionAPIMode = Literal["chat_completions", "responses"]
 GenerationBackendSmokeMode = Literal["text", "json"]
 GenerationBackendHealthStatus = Literal["not_tested", "passed", "failed", "skipped"]
 NotificationTestChannel = Literal[
@@ -262,6 +263,8 @@ class TestLLMChannelRequest(BaseModel):
     enabled: bool = True
     timeout_seconds: float = 20.0
     capability_checks: List[LLMCapabilityCheck] = Field(default_factory=list)
+    extra_headers: Dict[str, str] = Field(default_factory=dict)
+    vision_api_mode: VisionAPIMode = "chat_completions"
     use_saved_secret: bool = False
 
 

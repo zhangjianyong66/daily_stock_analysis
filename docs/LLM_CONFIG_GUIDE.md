@@ -436,13 +436,26 @@ model_list:
 系统中的图片能力必须使用具备视觉能力的模型，包括从截图提取自选股代码，以及在持仓页校对后导入持仓快照或实际成交。你需在 `.env` 或 Web 设置页单独指定 `VISION_MODEL`。
 
 ```env
-# 指定你看图专用的模型名
+# 默认兼容路径：Chat Completions
 VISION_MODEL=openai/gpt-5.5
-# 别忘了填写它对应提供商的 API KEY，如果是 OpenAI 兼容渠道就提供 OPENAI_API_KEY：
-# OPENAI_API_KEY=xxx
+VISION_API_MODE=chat_completions
+
+# 中转站要求 Responses API 时，必须把连接信息集中到精确匹配的渠道
+LLM_CHANNELS=deepseek,my_relay
+LLM_MY_RELAY_PROTOCOL=openai
+LLM_MY_RELAY_BASE_URL=https://relay.example.com/v1
+LLM_MY_RELAY_API_KEY=xxx
+LLM_MY_RELAY_MODELS=gpt-5.6-sol
+LLM_MY_RELAY_EXTRA_HEADERS={"User-Agent":"Mozilla/5.0"}
+VISION_MODEL=openai/gpt-5.6-sol
+VISION_API_MODE=responses
 ```
 
-Vision 调用只使用显式配置的 `VISION_MODEL`，兼容读取已废弃的 `OPENAI_VISION_MODEL`，不会拿 `LITELLM_MODEL` 文本主模型顶替。调用失败时会对同一模型有限重试，不会静默切换到另一个模型；未配置或缺少对应 provider API Key 时，图片导入会提示前往设置页配置。Hermes Vision 尚未验证，不可作为该配置的 route。
+Vision 调用只使用显式配置的 `VISION_MODEL`，兼容读取已废弃的 `OPENAI_VISION_MODEL`，不会拿 `LITELLM_MODEL` 文本主模型顶替。`VISION_API_MODE` 仅支持 `chat_completions`（默认）和 `responses`；系统不会按域名/模型自动猜测，也不会跨协议回退或重复发送同一图片。
+
+`responses` 模式要求 `VISION_MODEL` 精确匹配 `LLM_CHANNELS` 中的非 Hermes route，并只复用该 deployment 的 wire model、Base URL、API Key 与 `LLM_<NAME>_EXTRA_HEADERS`；缺少精确 route 时会在网络请求前返回 `vision_not_configured`。Chat Completions 在没有匹配渠道时仍保留 legacy provider Key/Base URL 兼容路径。设置页的连接测试和 JSON/Tools/Stream/Vision 能力检测会携带渠道 Extra Headers；Vision 探针使用不含业务数据的 32×32 内置空白图。
+
+升级包含此能力的 Docker 代码后，必须由运维人员执行 `./scripts/docker-up.sh restart server` 重建并重启 `stock-server`，仅修改旧容器的 `.env` 不会加载新后端与 Web 产物。命令会造成短暂中断；完成后先检查 `./scripts/docker-up.sh status server` 和 `/api/v1/health`，再在设置页执行渠道连接与 Vision 能力检测。回滚时恢复 `VISION_API_MODE=chat_completions`、原渠道/legacy OpenAI 配置并使用上一镜像重建，无需数据库回滚。
 
 持仓图片导入支持每批 1-5 张 JPEG、PNG、WebP 或 GIF，单文件最大 5MB。原图、base64 和模型原始响应只在请求期间使用，不写入数据库或普通日志；用户必须在 Web 校对页确认字段后才会写入持仓账本。
 

@@ -11,6 +11,7 @@ from src.services.vision_extraction_service import (
     MAX_SIZE_BYTES,
     VISION_API_TIMEOUT,
     complete_vision,
+    extract_vision_responses_text,
     resolve_vision_model,
     validate_image,
 )
@@ -54,6 +55,24 @@ def _image_bytes(mime_type: str) -> bytes:
         "image/webp": b"RIFF" + b"\x00" * 4 + b"WEBP" + b"\x00" * 8,
     }
     return signatures[mime_type]
+
+
+def _route_config(*, api_mode: str = "responses", extra_headers=None) -> Config:
+    return _cfg(
+        vision_model="openai/gpt-5.6-sol",
+        vision_api_mode=api_mode,
+        llm_model_list=[
+            {
+                "model_name": "openai/gpt-5.6-sol",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6-sol",
+                    "api_key": _OPENAI_KEY,
+                    "api_base": "https://relay.example/v1",
+                    "extra_headers": extra_headers or {"User-Agent": "Mozilla/5.0"},
+                },
+            }
+        ],
+    )
 
 
 @pytest.mark.parametrize("mime_type", ["image/jpeg", "image/png", "image/gif", "image/webp"])
@@ -135,6 +154,134 @@ def test_complete_vision_builds_request_with_prompt_timeout_and_api_base() -> No
     content = kwargs["messages"][0]["content"]
     assert content[0] == {"type": "text", "text": "return []"}
     assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def test_complete_vision_uses_exact_channel_route_for_chat_completions() -> None:
+    cfg = _route_config(api_mode="chat_completions")
+    router = MagicMock()
+    router.completion.return_value = {
+        "choices": [{"message": {"content": "[]"}}],
+    }
+    module = SimpleNamespace(
+        Router=MagicMock(return_value=router),
+        completion=MagicMock(),
+    )
+
+    result = complete_vision(
+        _image_bytes("image/png"),
+        "image/png",
+        "return []",
+        _config=cfg,
+        _completion_module=module,
+    )
+
+    assert result == "[]"
+    module.completion.assert_not_called()
+    router.completion.assert_called_once()
+    constructor_kwargs = module.Router.call_args.kwargs
+    assert constructor_kwargs["num_retries"] == 0
+    assert constructor_kwargs["max_fallbacks"] == 0
+    assert constructor_kwargs["disable_cooldowns"] is True
+    assert constructor_kwargs["model_list"][0]["litellm_params"]["extra_headers"] == {
+        "User-Agent": "Mozilla/5.0"
+    }
+
+
+def test_complete_vision_uses_responses_api_and_normalizes_mapping_output() -> None:
+    cfg = _route_config()
+    router = MagicMock()
+    router.responses.return_value = {
+        "status": "completed",
+        "output": [
+            {
+                "type": "message",
+                "content": [{"type": "output_text", "text": "  []  "}],
+            }
+        ],
+    }
+    module = SimpleNamespace(Router=MagicMock(return_value=router), completion=MagicMock())
+
+    result = complete_vision(
+        _image_bytes("image/jpeg"),
+        "image/jpeg",
+        "return []",
+        max_tokens=128,
+        _config=cfg,
+        _completion_module=module,
+    )
+
+    assert result == "[]"
+    module.completion.assert_not_called()
+    router.completion.assert_not_called()
+    kwargs = router.responses.call_args.kwargs
+    assert kwargs["model"] == "openai/gpt-5.6-sol"
+    assert kwargs["max_output_tokens"] == 128
+    assert kwargs["timeout"] == VISION_API_TIMEOUT
+    assert kwargs["input"][0]["content"][0] == {"type": "input_text", "text": "return []"}
+    assert kwargs["input"][0]["content"][1]["type"] == "input_image"
+    assert kwargs["input"][0]["content"][1]["image_url"].startswith("data:image/jpeg;base64,")
+
+
+def test_extract_vision_responses_text_accepts_object_output_shape() -> None:
+    response = SimpleNamespace(
+        output=[
+            SimpleNamespace(
+                content=[SimpleNamespace(type="output_text", text="OK")],
+            )
+        ]
+    )
+
+    assert extract_vision_responses_text(response) == "OK"
+
+
+def test_complete_vision_responses_requires_exact_channel_route_before_network() -> None:
+    cfg = _cfg(
+        vision_model="openai/gpt-5.6-sol",
+        vision_api_mode="responses",
+        openai_api_keys=[_OPENAI_KEY],
+        llm_model_list=[
+            {
+                "model_name": "openai/other-model",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6-sol",
+                    "api_key": _OPENAI_KEY,
+                },
+            }
+        ],
+    )
+    module = SimpleNamespace(Router=MagicMock(), completion=MagicMock())
+
+    with pytest.raises(ValueError) as exc_info:
+        complete_vision(
+            _image_bytes("image/png"),
+            "image/png",
+            "return []",
+            _config=cfg,
+            _completion_module=module,
+        )
+
+    assert getattr(exc_info.value, "code", None) == "vision_not_configured"
+    module.Router.assert_not_called()
+    module.completion.assert_not_called()
+
+
+def test_complete_vision_responses_empty_output_is_not_retried() -> None:
+    cfg = _route_config()
+    router = MagicMock()
+    router.responses.return_value = {"status": "completed", "output": []}
+    module = SimpleNamespace(Router=MagicMock(return_value=router), completion=MagicMock())
+
+    with pytest.raises(ValueError) as exc_info:
+        complete_vision(
+            _image_bytes("image/png"),
+            "image/png",
+            "return []",
+            _config=cfg,
+            _completion_module=module,
+        )
+
+    assert getattr(exc_info.value, "code", None) == "vision_failed"
+    assert router.responses.call_count == 1
 
 
 def test_complete_vision_retries_transient_error_once_then_returns() -> None:
@@ -243,4 +390,26 @@ def test_complete_vision_redacts_provider_secrets_from_errors_and_logs(caplog) -
     combined = f"{exc_info.value}\n{caplog.text}"
     assert "sk-provider-secret" not in combined
     assert "provider.example" not in combined
+    assert "[REDACTED]" in combined
+
+
+def test_complete_vision_redacts_channel_extra_header_values(caplog) -> None:
+    header_secret = "relay-header-secret-123456"
+    cfg = _route_config(extra_headers={"X-Relay-Token": header_secret})
+    router = MagicMock()
+    router.responses.side_effect = RuntimeError(f"upstream rejected {header_secret}")
+    module = SimpleNamespace(Router=MagicMock(return_value=router), completion=MagicMock())
+
+    with patch("src.services.vision_extraction_service.time.sleep"):
+        with pytest.raises(ValueError) as exc_info:
+            complete_vision(
+                _image_bytes("image/png"),
+                "image/png",
+                "return []",
+                _config=cfg,
+                _completion_module=module,
+            )
+
+    combined = f"{exc_info.value}\n{caplog.text}"
+    assert header_secret not in combined
     assert "[REDACTED]" in combined

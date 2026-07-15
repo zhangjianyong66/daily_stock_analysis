@@ -64,6 +64,27 @@ describe('systemConfigApi', () => {
     );
   });
 
+  it('sends channel extra headers and Vision API mode with snake_case fields', async () => {
+    await systemConfigApi.testLLMChannel({
+      name: 'tudou',
+      protocol: 'openai',
+      baseUrl: 'https://relay.example/v1',
+      apiKey: 'sk-test',
+      models: ['gpt-5.6-sol'],
+      capabilityChecks: ['vision'],
+      extraHeaders: { 'User-Agent': 'Mozilla/5.0' },
+      visionApiMode: 'responses',
+    });
+
+    expect(post).toHaveBeenCalledWith(
+      '/api/v1/system/config/llm/test-channel',
+      expect.objectContaining({
+        extra_headers: { 'User-Agent': 'Mozilla/5.0' },
+        vision_api_mode: 'responses',
+      }),
+    );
+  });
+
   it('sends notification channel test payloads with snake_case fields', async () => {
     post.mockResolvedValueOnce({
       data: {

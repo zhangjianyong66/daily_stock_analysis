@@ -1311,7 +1311,7 @@ LITELLM_FALLBACK_MODELS=anthropic/claude-sonnet-4-6,openai/gpt-5.4-mini
 
 **视觉模型（自选股与持仓图片识别）**：详见 [LLM 配置指南 - Vision](LLM_CONFIG_GUIDE.md#扩展功能看图模型-vision-配置)。
 
-从图片提取股票代码（如 `/api/v1/stocks/extract-from-image`）使用统一视觉模型接入，底层采用 LiteLLM Vision 与 OpenAI `image_url` 格式，支持 Gemini、Claude、OpenAI、DeepSeek 等 Vision-capable 模型。返回 `items`（code、name、confidence）及兼容的 `codes` 数组。
+从图片提取股票代码（如 `/api/v1/stocks/extract-from-image`）与持仓图片导入使用统一视觉模型接入。默认通过 LiteLLM Chat Completions 与 OpenAI `image_url` 格式调用；配置 `VISION_API_MODE=responses` 时改用 Responses API，并把结果归一化为同一纯文本契约。返回 `items`（code、name、confidence）及兼容的 `codes` 数组。
 
 > 兼容性说明：`/api/v1/stocks/extract-from-image` 响应在原 `codes` 基础上新增 `items` 字段。若下游客户端使用严格 JSON Schema 且不接受未知字段，请同步更新 schema。
 
@@ -1322,9 +1322,10 @@ LITELLM_FALLBACK_MODELS=anthropic/claude-sonnet-4-6,openai/gpt-5.4-mini
 - **常见解析失败**：文件过大（>2MB）、编码非 UTF-8/GBK、Excel 工作表为空或损坏、CSV 分隔符/列数不一致时，API 会返回具体错误提示。
 
 - **模型选择**：只使用显式 `VISION_MODEL`；`OPENAI_VISION_MODEL` 仅作为废弃兼容别名，不会使用 `LITELLM_MODEL` 文本主模型或根据 API Key 猜测模型
+- **协议选择**：`VISION_API_MODE` 默认为 `chat_completions`；`responses` 要求精确匹配非 Hermes LLM Channel route，并复用渠道 Base URL、Key 和 Extra Headers，不跨协议回退
 - **失败语义**：同一 Vision 模型最多有限重试，不会静默切换其他模型；Hermes Vision 尚未验证
 - **主模型不支持 Vision 时**：仍需单独配置 `VISION_MODEL=openai/gpt-5.5` 或 `gemini/gemini-3.1-pro-preview`
-- **配置校验**：若配置了 `VISION_MODEL` 但未配置对应 provider 的 API Key，启动时会输出 warning，图片提取功能将不可用
+- **配置校验**：渠道 deployment 的 Key 可满足 Vision 凭据校验；Responses 缺少精确 route 时会在发网前返回 `vision_not_configured`
 
 #### 持仓与成交截图导入
 

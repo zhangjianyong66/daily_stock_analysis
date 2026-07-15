@@ -101,6 +101,8 @@ function toSnakeTestChannelPayload(payload: TestLLMChannelRequest): Record<strin
     models: payload.models,
     enabled: payload.enabled ?? true,
     timeout_seconds: payload.timeoutSeconds ?? 20,
+    extra_headers: payload.extraHeaders ?? {},
+    vision_api_mode: payload.visionApiMode ?? 'chat_completions',
     use_saved_secret: payload.useSavedSecret ?? false,
   };
   if (payload.capabilityChecks && payload.capabilityChecks.length > 0) {

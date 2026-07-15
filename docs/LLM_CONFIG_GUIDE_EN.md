@@ -387,13 +387,26 @@ For example, if you set `LLM_CHANNELS=primary,deepseek` in GitHub Actions, also 
 Image features require a vision-capable model, including watchlist code extraction and reviewed position or executed-trade screenshot imports on the Portfolio page. Configure a dedicated `VISION_MODEL` in `.env` or the Web settings page.
 
 ```env
-# Specify your dedicated vision model name
+# Compatible default: Chat Completions
 VISION_MODEL=openai/gpt-5.5
-# Make sure to provide its corresponding provider API KEY (e.g., OPENAI_API_KEY):
-# OPENAI_API_KEY=xxx
+VISION_API_MODE=chat_completions
+
+# When a relay requires the Responses API, keep connection data in an exact channel route
+LLM_CHANNELS=deepseek,my_relay
+LLM_MY_RELAY_PROTOCOL=openai
+LLM_MY_RELAY_BASE_URL=https://relay.example.com/v1
+LLM_MY_RELAY_API_KEY=xxx
+LLM_MY_RELAY_MODELS=gpt-5.6-sol
+LLM_MY_RELAY_EXTRA_HEADERS={"User-Agent":"Mozilla/5.0"}
+VISION_MODEL=openai/gpt-5.6-sol
+VISION_API_MODE=responses
 ```
 
-Vision calls use only the explicitly configured `VISION_MODEL`, with the deprecated `OPENAI_VISION_MODEL` accepted as a compatibility alias. The text-only `LITELLM_MODEL` is never substituted. A failed call is retried a limited number of times against the same model and is not silently routed to another model. Missing configuration or provider credentials produce an actionable setup error. Hermes Vision is not verified and cannot be used as this route.
+Vision calls use only the explicitly configured `VISION_MODEL`, with the deprecated `OPENAI_VISION_MODEL` accepted as a compatibility alias. The text-only `LITELLM_MODEL` is never substituted. `VISION_API_MODE` accepts only `chat_completions` (default) or `responses`; DSA never infers the mode from a domain/model and never retries the same image through another protocol.
+
+Responses mode requires `VISION_MODEL` to exactly match a non-Hermes `LLM_CHANNELS` route and reuses only that deployment's wire model, Base URL, API Key, and `LLM_<NAME>_EXTRA_HEADERS`. A missing exact route fails before network I/O with `vision_not_configured`. Chat Completions keeps the legacy provider Key/Base URL path when there is no matching channel. Settings-page connection and JSON/Tools/Stream/Vision capability tests send channel Extra Headers; the Vision probe is a built-in 32x32 blank image with no business data.
+
+After upgrading Docker code that contains this capability, an operator must run `./scripts/docker-up.sh restart server` to rebuild and restart `stock-server`; changing `.env` in an old container does not install the new backend or Web bundle. Expect a brief interruption, then verify `./scripts/docker-up.sh status server` and `/api/v1/health` before running channel and Vision checks in Settings. To roll back, restore `VISION_API_MODE=chat_completions`, the previous channel/legacy OpenAI settings, and rebuild from the previous image. No database rollback is required.
 
 Portfolio screenshot import accepts 1-5 JPEG, PNG, WebP, or GIF files per batch, with a 5 MB limit per file. Original images, base64 payloads, and raw model responses exist only during the request and are not written to the database or normal logs. No ledger data is written until the user reviews and confirms the normalized fields in the Web UI.
 
