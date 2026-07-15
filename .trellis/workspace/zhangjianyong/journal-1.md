@@ -339,3 +339,37 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 11: 修复 GPT-5.6 Vision 中转站 Responses 调用
+
+**Date**: 2026-07-15
+**Task**: 修复 GPT-5.6 Vision 中转站 Responses 调用
+**Branch**: `main`
+
+### Summary
+
+新增显式 VISION_API_MODE，精确复用 LLM Channel 的 Base URL、Key 与 Extra Headers，统一 Chat Completions/Responses Vision 调用；同步设置页、工作流、配置迁移、双语文档和可执行规范，并完成后端、Web 与真实在线 smoke 验证。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d76d93a` | (see git log) |
+| `879c4a8` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
