@@ -141,6 +141,7 @@ npm run build
 - Web 持仓图片导入只支持活跃 `cn/CNY` 账户；持仓初始化要求账户没有任何交易流水，成交增量只接受实际成交记录。
 - 图片能力必须显式配置 `VISION_MODEL`，不会使用 `LITELLM_MODEL` 文本主模型兜底；`OPENAI_VISION_MODEL` 仅为废弃兼容别名，Hermes Vision 尚未验证。
 - `VISION_API_MODE` 默认为 `chat_completions`；设为 `responses` 时，`VISION_MODEL` 必须精确匹配非 legacy、非 Hermes LLM Channel route，并只复用该 deployment 的 Base URL、API Key 与 Extra Headers，不按域名/模型猜测或跨协议 fallback。
+- LiteLLM Responses 路径在干净 Docker 镜像中依赖显式安装的 `orjson`；`requirements.txt` 必须保留该依赖，`docker/Dockerfile` 构建阶段必须执行导入检查，避免 LiteLLM 小版本漂移后直到真实图片调用才暴露缺包。
 - 设置页渠道连接、JSON/Tools/Stream/Vision 能力检测均携带渠道 Extra Headers；Vision 探针使用不含业务数据的 32×32 内置空白图。
 - 每批支持 1-5 张 JPEG、PNG、WebP 或 GIF，单文件最大 5MB。原图、base64 和模型原始响应不得持久化或写入普通日志。
 - 图片识别使用进程内单 worker 和全局唯一槽，持仓/成交及所有账户共享；新 API 快速返回 HTTP 202，`review_required` 在确认导入或放弃前不自动过期，服务重启会丢失任务和草稿。

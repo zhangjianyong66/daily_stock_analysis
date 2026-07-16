@@ -37,6 +37,14 @@ def test_dockerfile_bundles_default_alphasift_adapter() -> None:
     assert "import alphasift.dsa_adapter" in dockerfile
 
 
+def test_dockerfile_installs_and_checks_orjson_for_litellm_responses() -> None:
+    dockerfile = (REPO_ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    requirements = (REPO_ROOT / "requirements.txt").read_text(encoding="utf-8")
+
+    assert re.search(r"^orjson>=3\.10\.0,<4\.0\.0\b", requirements, re.MULTILINE)
+    assert "import orjson" in dockerfile
+
+
 def test_docker_entrypoint_repairs_ownership_and_user_permissions() -> None:
     entrypoint = (REPO_ROOT / "docker" / "entrypoint.sh").read_text(encoding="utf-8")
 

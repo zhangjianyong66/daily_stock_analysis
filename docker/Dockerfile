@@ -84,8 +84,8 @@ COPY strategies/ ./strategies/
 COPY --from=web-builder /app/static ./static/
 COPY docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
-# Verify the bundled AlphaSift adapter from requirements.
-RUN python -c "import alphasift.dsa_adapter"
+# Verify runtime-only imports that must be present in clean images.
+RUN python -c "import alphasift.dsa_adapter; import orjson"
 
 # 确保数据目录存在并授权给 non-root 用户
 RUN mkdir -p /app/data /app/logs /app/reports && \

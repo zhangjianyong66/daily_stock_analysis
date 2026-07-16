@@ -42,6 +42,7 @@
 
 - Vision 只使用显式 `VISION_MODEL`，兼容废弃别名 `OPENAI_VISION_MODEL`；不得使用 `LITELLM_MODEL` 文本主模型顶替。
 - `VISION_API_MODE` 只允许 `chat_completions`（默认）或 `responses`。不得按域名/模型推断模式，不得跨协议 fallback 或重复发送同一图片。
+- LiteLLM Responses 的干净安装依赖 `requirements.txt` 显式声明 `orjson`；不得假设开发机虚拟环境或 LiteLLM 的非必选 extras 已经间接安装。`docker/Dockerfile` 必须在构建阶段执行 `import orjson`，让依赖漂移在镜像构建时失败，而不是在真实图片任务中失败。
 - Responses deployment 由 `LLM_CHANNELS` 与 `LLM_<CHANNEL>_{PROTOCOL,BASE_URL,API_KEY,MODELS,ENABLED,EXTRA_HEADERS}` 定义；每日分析 workflow 还必须把全局 `VISION_API_MODE` 从同名 Actions Variable/Secret 映射到进程环境。私有自定义渠道名仍由部署者自行映射，不写入通用 workflow。
 - Chat Completions 精确匹配非 Hermes LLM Channel route 时通过 LiteLLM Router 复用 deployment；无匹配 route 时保留 legacy provider Key/Base URL 路径。Responses 必须精确匹配非 legacy、非 Hermes route，并复用其 wire model、Base URL、API Key 与 Extra Headers；缺 route 在发网前返回 `vision_not_configured`。
 - Router 内部 retry/fallback 必须关闭，外层仍统一拥有 300 秒单次上限、最多两次 attempt、整体 deadline 与取消迟到结果规则。Responses output 需兼容 Mapping/对象形状并归一化为纯文本，下游不得感知协议差异。
@@ -81,6 +82,7 @@
 | 整批超过 60 分钟 | `failed/portfolio_image_task_timeout` |
 | 未配置 Vision / 缺 provider key | `vision_not_configured` |
 | `VISION_API_MODE` 非法 | 配置归一化为默认 `chat_completions` 并产生结构化 warning |
+| 干净 Docker 镜像缺少 `orjson` | 镜像构建在运行时依赖导入检查处失败，不得发布或等到 Vision 任务才暴露 `ModuleNotFoundError` |
 | Responses 缺精确非 legacy、非 Hermes route | 发网前 `vision_not_configured`，不得尝试 legacy Key/Base URL |
 | Responses output 为空或只有非文本 item | 低敏空响应错误，不重试、不返回 provider body |
 | 上游 timeout / 网络 / 限流 / 鉴权 | `vision_timeout` / `vision_network_error` / `vision_rate_limited` / `vision_auth_failed` |
@@ -94,6 +96,7 @@
 - Good：两个标签页同时编辑，旧 revision 保存/提交得到 409，不覆盖新草稿。
 - Good：取消发生在第 1 张上游调用中；调用返回后不启动第 2 张，迟到结果不进入 review。
 - Good：Responses route 精确匹配并携带渠道 Extra Headers，Mapping/对象形状的 `output_text` 均归一化为纯文本。
+- Good：从空缓存构建 Docker 镜像时，`requirements.txt` 安装 `orjson`，Dockerfile 导入检查通过，内置 32×32 探针可完成一次真实 Responses smoke。
 - Base：单图成功进入 review，确认提交后原子写入并清除 current task。
 - Base：未配置 `VISION_API_MODE` 时继续走 Chat Completions；没有匹配 route 时仍可使用既有 provider Key/Base URL。
 - Base：旧同步 parse 保持成功响应，但运行期间占用同一全局槽。
@@ -102,6 +105,7 @@
 - Bad：草稿保存并发发送相同 revision，旧响应把后续编辑误标为已保存。
 - Bad：通过不带 task_id 的旧 commit 绕过正在等待校对的异步任务。
 - Bad：根据中转站域名或模型名自动改走 Responses，或者 Chat/Responses 失败后跨协议重发同一图片。
+- Bad：只在已有开发虚拟环境执行在线 smoke，却没有用干净 Docker 镜像验证依赖安装与导入。
 
 ## 6. Tests Required
 
@@ -113,7 +117,7 @@
   - `tests/test_analysis_api_contract.py`
 - 必须覆盖：202、全局防重、状态转移、部分/全部失败、300 秒/两次尝试、错误重试矩阵、60 分钟 deadline、取消迟到结果、draft revision、两阶段 commit、旧 API 兼容、SSE 事件隔离。
 - Vision 协议测试必须断言：默认 Chat 兼容、精确 route、Router 内部 retry/fallback 关闭、Responses 请求形状、Mapping/对象文本提取、缺 route 零网络调用、空 output 不重试，以及 Key/Extra Header/provider body 脱敏。
-- 配置与部署测试必须断言：registry/API/Web snake-camel 往返、设置页所有能力测试透传 Extra Headers、32×32 低敏探针，以及 `.github/workflows/00-daily-analysis.yml` 同时引用 `vars.VISION_API_MODE` 和 `secrets.VISION_API_MODE`。
+- 配置与部署测试必须断言：registry/API/Web snake-camel 往返、设置页所有能力测试透传 Extra Headers、32×32 低敏探针、`requirements.txt` 显式安装 `orjson`、Dockerfile 构建阶段可导入 `orjson`，以及 `.github/workflows/00-daily-analysis.yml` 同时引用 `vars.VISION_API_MODE` 和 `secrets.VISION_API_MODE`。
 - Web：API snake/camel 映射、任务恢复横幅、SSE 后 REST 刷新、关闭抽屉继续执行、草稿串行防抖保存、revision 冲突、取消/放弃/commit、服务重启提示。
 - 可视：桌面和 390px 移动视口验证任务横幅、文件进度、review 行和 footer；截图只作 PR 外部证据，不入库。
 
@@ -184,3 +188,25 @@ VISION_API_MODE=responses
 ```
 
 Responses 缺少该精确 route 时必须返回 `vision_not_configured`，不得回退到 legacy `OPENAI_*` 或 Chat Completions。
+
+### Wrong：依赖本地环境偶然存在的 Responses 运行时包
+
+```text
+litellm>=1.80.10,<2.0.0
+# 本地 smoke 通过，因此假设 Docker 也可用
+```
+
+LiteLLM 小版本和安装 extras 可能改变导入路径；本地已有环境不能证明干净镜像具备相同依赖。
+
+### Correct：依赖真源显式声明并在镜像构建时导入
+
+```text
+litellm>=1.80.10,<2.0.0
+orjson>=3.10.0,<4.0.0
+```
+
+```dockerfile
+RUN python -c "import orjson"
+```
+
+依赖缺失会直接阻断镜像构建，不会让用户图片任务成为首次发现点。
