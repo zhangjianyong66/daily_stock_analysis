@@ -350,6 +350,7 @@ def _build_hotspot_event_routes_from_search(topic: str, config: Config) -> List[
             topic_text,
             max_results=3,
             focus_keywords=[topic_text, "A股", "题材", "催化", "涨价"],
+            call_source="alphasift",
         )
     except Exception as exc:
         logger.info("AlphaSift hotspot event search skipped for %s: %s", topic_text, exc)
@@ -3258,7 +3259,12 @@ def search_dsa_stock_news(stock_code: str, stock_name: str = "", max_results: in
             "results": [],
         }
 
-    response = service.search_stock_news(stock_code, stock_name or stock_code, max_results=max_results)
+    response = service.search_stock_news(
+        stock_code,
+        stock_name or stock_code,
+        max_results=max_results,
+        call_source="alphasift",
+    )
     results = []
     for item in getattr(response, "results", []) or []:
         results.append(

@@ -453,7 +453,7 @@ daily_stock_analysis/
 | 变量名 | 说明 | 默认值 |
 |--------|------|--------|
 | `STOCK_LIST` | 自选股代码（逗号分隔） | - |
-| `ADMIN_AUTH_ENABLED` | Web 登录：设为 `true` 启用密码保护；首次访问在网页设置初始密码，可在「系统设置 > 修改密码」修改；忘记密码执行 `python -m src.auth reset_password`。Web 的 `.env` 备份导入导出仅在开启该开关后可用（桌面端不受此限制）。 | `false` |
+| `ADMIN_AUTH_ENABLED` | Web 登录：设为 `true` 启用密码保护；首次访问在网页设置初始密码，可在「系统设置 > 修改密码」修改；忘记密码执行 `python -m src.auth reset_password`。Web 的 `.env` 备份导入导出，以及搜索调用完整出入参、复制和 CSV/JSON 导出，仅在开启该开关且管理员已登录时可用；搜索审计敏感操作没有桌面端例外。 | `false` |
 | `TRUST_X_FORWARDED_FOR` | 单层可信反向代理部署时设为 `true`，取 `X-Forwarded-For` 最右值作为真实客户端 IP（用于登录限流等）；直连公网时保持 `false` 防伪造。多级代理/CDN 场景下限流 key 可能退化为边缘代理 IP，需额外评估 | `false` |
 | `MAX_WORKERS` | 并发线程数 | `3` |
 | `MARKET_REVIEW_ENABLED` | 启用大盘复盘 | `true` |
@@ -1573,6 +1573,11 @@ FastAPI 提供 RESTful API 服务，支持配置管理和触发分析。
 | `/api/v1/decision-signals/latest/{stock_code}` | GET | 查询指定股票最新 active 决策信号 |
 | `/api/v1/usage/summary?period=today|month|all` | GET | 按调用类型与模型维度汇总 LLM 调用次数和 Token 用量 |
 | `/api/v1/usage/dashboard?period=today|month|all&limit=50` | GET | 返回 Token 用量看板数据：总量、Prompt/Completion 拆分、模型用量、调用类型分布和最近调用明细；Web 侧入口为左侧导航“用量” |
+| `/api/v1/usage/search/dashboard` | GET | 搜索调用汇总、供应商/Key/来源分布、故障、审计健康和服务端分页明细；支持 `today|7d|month|all|custom` 及供应商、来源、状态、错误、Key 筛选 |
+| `/api/v1/usage/search/faults` | GET | 返回当前搜索供应商故障、供应商正常/降级/不可用状态和审计健康，供 Web 全局提示轮询 |
+| `/api/v1/usage/search/calls/{id}` | GET | 返回单条搜索调用的脱敏完整请求/响应详情；必须启用管理员认证且管理员已登录 |
+| `/api/v1/usage/search/export.csv` | GET | 按当前筛选导出全部核账摘要，不含完整快照；必须启用管理员认证且管理员已登录 |
+| `/api/v1/usage/search/calls/{id}/export.json` | GET | 下载单条搜索调用的审计元数据和脱敏出入参；必须启用管理员认证且管理员已登录 |
 | `/api/v1/backtest/run` | POST | 触发回测 |
 | `/api/v1/backtest/results` | GET | 查询回测结果（分页） |
 | `/api/v1/backtest/performance` | GET | 获取整体回测表现 |
@@ -1610,6 +1615,9 @@ FastAPI 提供 RESTful API 服务，支持配置管理和触发分析。
 > 说明：`GET /api/v1/history/{record_id}/diagnostics` 支持历史记录主键 ID 或 `query_id`，返回 `normal/degraded/failed/unknown` 摘要、关键链路组件和可复制的脱敏 `copy_text`；旧报告缺少诊断快照时返回 `unknown`，不影响报告读取。
 > 说明：`GET /api/v1/history` 的列表摘要可按 `stock_code` 分页查询同一股票历史，并返回趋势判断、分析摘要、模型名与分析时价格/涨跌幅等可选字段；旧记录缺少快照字段时返回空值。Web 报告页的“历史趋势”抽屉复用该接口加载同股历史。
 > 说明：`GET /api/v1/usage/dashboard` 复用 `llm_usage` 审计表，不新增配置项或数据库迁移。接口仅返回已落库的调用次数、Prompt/Completion/Total Token 聚合、模型维度用量和最近调用记录，不推导模型上下文窗口或 provider 元数据。
+> 搜索调用审计说明：`search_api_calls` 按每次真实外部 HTTP 请求记一条，包括自动重试、备用 Key、供应商 fallback 和 SearXNG 多实例尝试；缓存命中、数据库读取、本地过滤、正文补抓和公共实例目录刷新不计数。新表由 SQLAlchemy 启动时自动创建，不回填旧文本日志。
+> 搜索快照安全边界：完整业务查询和供应商响应会先递归脱敏，再以明文 JSON 永久保存在本地数据库中，不做应用层加密。请求上限 256 KiB、响应上限 2 MiB；超限记录截断预览、完整脱敏内容原始大小和 SHA-256。数据库文件持有者仍可读取查询与搜索结果，应按敏感业务数据保护数据库和备份。
+> Key/查询核账指纹复用数据目录中的 `.llm_usage_hmac_secret` 做 domain-separated HMAC；原始 Key、Authorization、Cookie、Token、签名和 Webhook 不会进入数据库快照、公开汇总、导出、通知或普通日志。审计写入失败不会阻断搜索，但 Web 会显示审计缺口。
 > 说明（Issue #1520）：列表中的模型名展示字段仅来源于历史快照中的 `model_used`，仅用于历史回溯展示，不影响运行时模型模型路由（`litellm_model`、`llm_model_list`）、Provider、Base URL 与配置迁移/清理语义。回退方式为回退本次提交，现网历史查询/抽屉/接口链路兼容性保持不变。
 > 说明：历史详情、同步分析响应和 completed 任务状态会在 `report.details.analysis_context_pack_overview` 返回低敏输入数据块 overview；其中同步分析响应依赖本次已持久化的 `analysis_history.context_snapshot`，`SAVE_CONTEXT_SNAPSHOT=false` 时新记录不保证返回 overview。`details.context_snapshot` 会剥离该顶层字段，不返回完整 `AnalysisContextPack` 或 Prompt summary。
 > 说明：`POST /api/v1/agent/chat` 与 `POST /api/v1/agent/chat/stream` 会把前端传入的 `context.stock_code` 作为问股当前标的基线，但服务端会先重新判定 stock scope。前端从历史报告进入问股后会持续发送 active stock context；切回或重载已有会话时，会根据已加载的历史用户消息恢复基础 `{stock_code, stock_name: null}`。服务端会在每轮消息中重新判定 `maintain` / `switch` / `compare`：未明确切换时，带 `stock_code` 的股票工具调用只能访问当前标的；显式切换会清理旧标的历史摘要和预取数据；含比较/对比/vs/差异/相比等明确比较意图或多个非当前明确股票代码的问题允许本轮明确出现的多个代码，但不改写当前标的。若模型误把 TTM、PE、MACD、KDJ 等金融缩写、移动均线语境下的 `MA` 指标词，或 SH/SZ/BJ/HK/SS 等交易所片段当成股票代码调用工具，后端会返回不可重试的 `stock_scope_violation` 工具结果，而不会执行对应股票工具。工具名只解析注册表中的精确名称；任何 provider namespace 或 suffix 都不会路由到已有工具。

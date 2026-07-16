@@ -91,4 +91,27 @@ describe('usageApi', () => {
       params: { period: 'month', limit: 50 },
     });
   });
+
+  it('requests search usage with server-side filters and camelCases the response', async () => {
+    get.mockResolvedValueOnce({
+      data: {
+        audit_started_at: '2026-07-16T10:00:00+08:00',
+        summary: { physical_requests: 3, business_searches: 1, success_count: 2, failure_count: 1, success_rate: 0.6667 },
+        by_provider: [{ value: 'Anspire', count: 3 }],
+        by_key: [],
+        by_source: [],
+        calls: { items: [], total: 0, page: 2, page_size: 50 },
+        faults: { active_faults: [], providers: [], audit_health: { healthy: true, process_lost_count: 0, persisted_lost_count: 0 } },
+        audit_health: { healthy: true, process_lost_count: 0, persisted_lost_count: 0 },
+      },
+    });
+
+    const result = await usageApi.getSearchDashboard({ period: '7d', provider: 'Anspire', success: false, page: 2 });
+
+    expect(get).toHaveBeenCalledWith('/api/v1/usage/search/dashboard', {
+      params: expect.objectContaining({ period: '7d', provider: 'Anspire', success: false, page: 2, page_size: 50 }),
+    });
+    expect(result.summary.physicalRequests).toBe(3);
+    expect(result.auditStartedAt).toBe('2026-07-16T10:00:00+08:00');
+  });
 });

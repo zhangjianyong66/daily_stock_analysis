@@ -39,6 +39,16 @@ from src.config import (
     resolve_news_window_days,
 )
 from src.services.run_diagnostics import record_provider_run, record_provider_run_started
+from src.schemas.search_usage import (
+    SearchAuditContext,
+    current_search_audit_context,
+    search_audit_scope,
+)
+from src.services.search_request_audit_service import (
+    AuditedRequestsSession,
+    audited_request_once,
+)
+from src.utils.sanitize import sanitize_diagnostic_text, sanitize_search_snapshot_text
 
 logger = logging.getLogger(__name__)
 
@@ -57,9 +67,28 @@ _SEARCH_TRANSIENT_EXCEPTIONS = (
     retry=retry_if_exception_type(_SEARCH_TRANSIENT_EXCEPTIONS),
     before_sleep=before_sleep_log(logger, logging.WARNING),
 )
-def _post_with_retry(url: str, *, headers: Dict[str, str], json: Dict[str, Any], timeout: int) -> requests.Response:
+def _post_with_retry(
+    url: str,
+    *,
+    headers: Dict[str, str],
+    json: Dict[str, Any],
+    timeout: int,
+    provider: str = "Unknown",
+    api_key: Optional[str] = None,
+    query: Optional[str] = None,
+) -> requests.Response:
     """POST with retry on transient SSL/network errors."""
-    return requests.post(url, headers=headers, json=json, timeout=timeout)
+    return audited_request_once(
+        "POST",
+        url,
+        provider=provider,
+        api_key=api_key,
+        query=query,
+        headers=headers,
+        json_body=json,
+        timeout=timeout,
+        request_func=requests.post,
+    )
 
 
 @retry(
@@ -70,10 +99,29 @@ def _post_with_retry(url: str, *, headers: Dict[str, str], json: Dict[str, Any],
     reraise=True,
 )
 def _get_with_retry(
-    url: str, *, headers: Dict[str, str], params: Dict[str, Any], timeout: int
+    url: str,
+    *,
+    headers: Dict[str, str],
+    params: Dict[str, Any],
+    timeout: int,
+    provider: str = "Unknown",
+    api_key: Optional[str] = None,
+    query: Optional[str] = None,
+    credential_identity: Optional[str] = None,
 ) -> requests.Response:
     """GET with retry on transient SSL/network errors."""
-    return requests.get(url, headers=headers, params=params, timeout=timeout)
+    return audited_request_once(
+        "GET",
+        url,
+        provider=provider,
+        api_key=api_key,
+        query=query,
+        headers=headers,
+        params=params,
+        timeout=timeout,
+        credential_identity=credential_identity,
+        request_func=requests.get,
+    )
 
 
 def fetch_url_content(url: str, timeout: int = 5) -> str:
@@ -141,6 +189,10 @@ class SearchResponse:
     success: bool = True
     error_message: Optional[str] = None
     search_time: float = 0.0  # 搜索耗时（秒）
+
+    def __post_init__(self) -> None:
+        if self.error_message:
+            self.error_message = sanitize_search_snapshot_text(self.error_message)[:1000]
     
     def to_context(self, max_results: int = 5) -> str:
         """将搜索结果转换为可用于 AI 分析的上下文"""
@@ -216,7 +268,7 @@ class BaseSearchProvider(ABC):
         with self._state_lock:
             self._key_errors[key] = self._key_errors.get(key, 0) + 1
             error_count = self._key_errors[key]
-        logger.warning(f"[{self._name}] API Key {key[:8]}... 错误计数: {error_count}")
+        logger.warning(f"[{self._name}] API Key 错误计数: {error_count}")
     
     @abstractmethod
     def _do_search(self, query: str, api_key: str, max_results: int, days: int = 7) -> SearchResponse:
@@ -244,13 +296,16 @@ class BaseSearchProvider(ABC):
             )
 
         start_time = time.time()
+        context = current_search_audit_context()
+        scope = search_audit_scope(context or SearchAuditContext(operation="provider_search"))
         try:
-            response = self._do_search(query, api_key, max_results, days=days, **search_kwargs)
-            response.search_time = time.time() - start_time
+            with scope:
+                response = self._do_search(query, api_key, max_results, days=days, **search_kwargs)
+                response.search_time = time.time() - start_time
 
             if response.success:
                 self._record_success(api_key)
-                logger.info(f"[{self._name}] 搜索 '{query}' 成功，返回 {len(response.results)} 条结果，耗时 {response.search_time:.2f}s")
+                logger.info(f"[{self._name}] 搜索成功，返回 {len(response.results)} 条结果，耗时 {response.search_time:.2f}s")
             else:
                 self._record_error(api_key)
 
@@ -259,7 +314,7 @@ class BaseSearchProvider(ABC):
         except Exception as e:
             self._record_error(api_key)
             elapsed = time.time() - start_time
-            logger.error(f"[{self._name}] 搜索 '{query}' 失败: {e}")
+            logger.error(f"[{self._name}] 搜索失败: {sanitize_diagnostic_text(e)}")
             return SearchResponse(
                 query=query,
                 results=[],
@@ -320,7 +375,10 @@ class TavilySearchProvider(BaseSearchProvider):
             )
         
         try:
-            client = TavilyClient(api_key=api_key)
+            client = TavilyClient(
+                api_key=api_key,
+                session=AuditedRequestsSession(provider=self.name, api_key=api_key, query=query),
+            )
             
             # 执行搜索（优化：使用advanced深度、限制最近几天）
             search_kwargs: Dict[str, Any] = {
@@ -338,9 +396,8 @@ class TavilySearchProvider(BaseSearchProvider):
                 **search_kwargs,
             )
             
-            # 记录原始响应到日志
-            logger.info(f"[Tavily] 搜索完成，query='{query}', 返回 {len(response.get('results', []))} 条结果")
-            logger.debug(f"[Tavily] 原始响应: {response}")
+            # 普通日志只保留数量，不输出完整供应商响应。
+            logger.info(f"[Tavily] 搜索完成，返回 {len(response.get('results', []))} 条结果")
             
             # 解析结果
             results = []
@@ -382,44 +439,12 @@ class TavilySearchProvider(BaseSearchProvider):
         topic: Optional[str] = None,
     ) -> SearchResponse:
         """执行 Tavily 搜索，可按调用方选择是否启用新闻 topic。"""
-        if topic is None:
-            return super().search(query, max_results=max_results, days=days)
-
-        api_key = self._get_next_key()
-        if not api_key:
-            return SearchResponse(
-                query=query,
-                results=[],
-                provider=self._name,
-                success=False,
-                error_message=f"{self._name} 未配置 API Key"
-            )
-
-        start_time = time.time()
-        try:
-            response = self._do_search(query, api_key, max_results, days=days, topic=topic)
-            response.search_time = time.time() - start_time
-
-            if response.success:
-                self._record_success(api_key)
-                logger.info(f"[{self._name}] 搜索 '{query}' 成功，返回 {len(response.results)} 条结果，耗时 {response.search_time:.2f}s")
-            else:
-                self._record_error(api_key)
-
-            return response
-
-        except Exception as e:
-            self._record_error(api_key)
-            elapsed = time.time() - start_time
-            logger.error(f"[{self._name}] 搜索 '{query}' 失败: {e}")
-            return SearchResponse(
-                query=query,
-                results=[],
-                provider=self._name,
-                success=False,
-                error_message=str(e),
-                search_time=elapsed
-            )
+        return self._execute_search(
+            query,
+            max_results=max_results,
+            days=days,
+            topic=topic,
+        )
     
     @staticmethod
     def _extract_domain(url: str) -> str:
@@ -526,9 +551,24 @@ class SerpAPISearchProvider(BaseSearchProvider):
             }
             
             search = GoogleSearch(params)
-            response = search.get_dict()
+            if hasattr(search, "construct_url"):
+                search_url = search.construct_url()
+                http_response = audited_request_once(
+                    "GET",
+                    search_url,
+                    provider=self.name,
+                    api_key=api_key,
+                    query=query,
+                    timeout=10,
+                    request_func=requests.get,
+                )
+                response = http_response.json()
+            else:
+                # Compatibility for older SDKs/test doubles. Current SerpAPI SDK
+                # exposes construct_url(), which is required for physical auditing.
+                response = search.get_dict()
             
-            # 记录原始响应到日志
+            # 普通日志只保留响应字段名，不输出完整供应商响应。
             logger.debug(f"[SerpAPI] 原始响应 keys: {response.keys()}")
             
             # 解析结果
@@ -932,7 +972,15 @@ class BochaSearchProvider(BaseSearchProvider):
             }
             
             # 执行搜索（带瞬时 SSL/网络错误重试）
-            response = _post_with_retry(url, headers=headers, json=payload, timeout=10)
+            response = _post_with_retry(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=10,
+                provider=self.name,
+                api_key=api_key,
+                query=query,
+            )
             
             # 检查HTTP状态码
             if response.status_code != 200:
@@ -958,7 +1006,7 @@ class BochaSearchProvider(BaseSearchProvider):
                 else:
                     error_msg = f"HTTP {response.status_code}: {error_message}"
                 
-                logger.warning(f"[Bocha] 搜索失败: {error_msg}")
+                logger.warning(f"[Bocha] 搜索失败: {sanitize_diagnostic_text(error_msg)}")
                 
                 return SearchResponse(
                     query=query,
@@ -973,7 +1021,7 @@ class BochaSearchProvider(BaseSearchProvider):
                 data = response.json()
             except ValueError as e:
                 error_msg = f"响应JSON解析失败: {str(e)}"
-                logger.error(f"[Bocha] {error_msg}")
+                logger.error(f"[Bocha] {sanitize_diagnostic_text(error_msg)}")
                 return SearchResponse(
                     query=query,
                     results=[],
@@ -993,9 +1041,8 @@ class BochaSearchProvider(BaseSearchProvider):
                     error_message=error_msg
                 )
             
-            # 记录原始响应到日志
-            logger.info(f"[Bocha] 搜索完成，query='{query}'")
-            logger.debug(f"[Bocha] 原始响应: {data}")
+            # 完整响应只进入脱敏审计快照。
+            logger.info("[Bocha] 搜索完成")
             
             # 解析搜索结果
             results = []
@@ -1029,7 +1076,7 @@ class BochaSearchProvider(BaseSearchProvider):
             
         except requests.exceptions.Timeout:
             error_msg = "请求超时"
-            logger.error(f"[Bocha] {error_msg}")
+            logger.error(f"[Bocha] {sanitize_diagnostic_text(error_msg)}")
             return SearchResponse(
                 query=query,
                 results=[],
@@ -1039,7 +1086,7 @@ class BochaSearchProvider(BaseSearchProvider):
             )
         except requests.exceptions.RequestException as e:
             error_msg = f"网络请求失败: {str(e)}"
-            logger.error(f"[Bocha] {error_msg}")
+            logger.error(f"[Bocha] {sanitize_diagnostic_text(error_msg)}")
             return SearchResponse(
                 query=query,
                 results=[],
@@ -1049,7 +1096,7 @@ class BochaSearchProvider(BaseSearchProvider):
             )
         except Exception as e:
             error_msg = f"未知错误: {str(e)}"
-            logger.error(f"[Bocha] {error_msg}")
+            logger.error(f"[Bocha] {sanitize_diagnostic_text(error_msg)}")
             return SearchResponse(
                 query=query,
                 results=[],
@@ -1117,7 +1164,15 @@ class AnspireSearchProvider(BaseSearchProvider):
             }
             
             # 执行搜索
-            response = _get_with_retry(url, headers=headers, params=payload, timeout=10)
+            response = _get_with_retry(
+                url,
+                headers=headers,
+                params=payload,
+                timeout=10,
+                provider=self.name,
+                api_key=api_key,
+                query=query,
+            )
             
             # 检查 HTTP 状态码
             if response.status_code != 200:
@@ -1132,8 +1187,15 @@ class AnspireSearchProvider(BaseSearchProvider):
                     error_message = response.text
                 
                 # 根据错误码处理
-                if response.status_code == 403:
-                    error_msg = f"余额不足或权限不足：{error_message}"
+                semantic_error = str(error_message or "").lower()
+                quota_exhausted = any(
+                    term in semantic_error
+                    for term in ("余额不足", "余额为 0", "余额0", "额度耗尽", "免费额度 0", "充值余额 0", "quota")
+                )
+                if quota_exhausted:
+                    error_msg = f"余额不足或额度耗尽：{error_message}"
+                elif response.status_code == 403:
+                    error_msg = f"权限不足：{error_message}"
                 elif response.status_code == 401:
                     error_msg = f"API KEY 无效：{error_message}"
                 elif response.status_code == 400:
@@ -1141,7 +1203,7 @@ class AnspireSearchProvider(BaseSearchProvider):
                 else:
                     error_msg = f"HTTP {response.status_code}: {error_message}"
                 
-                logger.warning(f"[Anspire] 搜索失败：{error_msg}")
+                logger.warning(f"[Anspire] 搜索失败：{sanitize_diagnostic_text(error_msg)}")
                 
                 return SearchResponse(
                     query=query,
@@ -1156,7 +1218,7 @@ class AnspireSearchProvider(BaseSearchProvider):
                 data = response.json()
             except ValueError as e:
                 error_msg = f"响应 JSON 解析失败：{str(e)}"
-                logger.error(f"[Anspire] {error_msg}")
+                logger.error(f"[Anspire] {sanitize_diagnostic_text(error_msg)}")
                 return SearchResponse(
                     query=query,
                     results=[],
@@ -1167,7 +1229,7 @@ class AnspireSearchProvider(BaseSearchProvider):
             
             if 'code' in data and data.get('code') != 200:
                 error_msg = data.get('msg') or f"API 返回错误码：{data.get('code')}"
-                logger.warning(f"[Anspire] 搜索失败：{error_msg}")
+                logger.warning(f"[Anspire] 搜索失败：{sanitize_diagnostic_text(error_msg)}")
                 return SearchResponse(
                     query=query,
                     results=[],
@@ -1178,7 +1240,7 @@ class AnspireSearchProvider(BaseSearchProvider):
             
             if 'results' not in data:
                 error_msg = "响应中缺少 results 字段"
-                logger.error(f"[Anspire] {error_msg}，原始响应：{data}")
+                logger.error(f"[Anspire] {sanitize_diagnostic_text(error_msg)}")
                 return SearchResponse(
                     query=query,
                     results=[],
@@ -1187,9 +1249,8 @@ class AnspireSearchProvider(BaseSearchProvider):
                     error_message=error_msg
                 )
             
-            # 记录原始响应到日志
-            logger.info(f"[Anspire] 搜索完成，query='{query}'")
-            logger.debug(f"[Anspire] 原始响应：{data}")
+            # 完整响应只进入脱敏审计快照。
+            logger.info("[Anspire] 搜索完成")
             
             results = []
             value_list = data.get('results', [])
@@ -1218,7 +1279,7 @@ class AnspireSearchProvider(BaseSearchProvider):
             
         except requests.exceptions.Timeout:
             error_msg = "请求超时"
-            logger.error(f"[Anspire] {error_msg}")
+            logger.error(f"[Anspire] {sanitize_diagnostic_text(error_msg)}")
             return SearchResponse(
                 query=query,
                 results=[],
@@ -1228,7 +1289,7 @@ class AnspireSearchProvider(BaseSearchProvider):
             )
         except requests.exceptions.RequestException as e:
             error_msg = f"网络请求失败：{str(e)}"
-            logger.error(f"[Anspire] {error_msg}")
+            logger.error(f"[Anspire] {sanitize_diagnostic_text(error_msg)}")
             return SearchResponse(
                 query=query,
                 results=[],
@@ -1238,7 +1299,7 @@ class AnspireSearchProvider(BaseSearchProvider):
             )
         except Exception as e:
             error_msg = f"未知错误：{str(e)}"
-            logger.error(f"[Anspire] {error_msg}")
+            logger.error(f"[Anspire] {sanitize_diagnostic_text(error_msg)}")
             return SearchResponse(
                 query=query,
                 results=[],
@@ -1382,13 +1443,19 @@ class MiniMaxSearchProvider(BaseSearchProvider):
             payload = {"q": augmented_query}
 
             response = _post_with_retry(
-                self.API_ENDPOINT, headers=headers, json=payload, timeout=15
+                self.API_ENDPOINT,
+                headers=headers,
+                json=payload,
+                timeout=15,
+                provider=self.name,
+                api_key=api_key,
+                query=query,
             )
 
             # HTTP error handling
             if response.status_code != 200:
                 error_msg = self._parse_http_error(response)
-                logger.warning(f"[MiniMax] Search failed: {error_msg}")
+                logger.warning(f"[MiniMax] Search failed: {sanitize_diagnostic_text(error_msg)}")
                 return SearchResponse(
                     query=query,
                     results=[],
@@ -1411,7 +1478,7 @@ class MiniMaxSearchProvider(BaseSearchProvider):
                     error_message=error_msg,
                 )
 
-            logger.info(f"[MiniMax] Search done, query='{query}'")
+            logger.info("[MiniMax] Search done")
             logger.debug(f"[MiniMax] Raw response keys: {list(data.keys())}")
 
             # Parse organic results
@@ -1445,21 +1512,21 @@ class MiniMaxSearchProvider(BaseSearchProvider):
 
         except requests.exceptions.Timeout:
             error_msg = "Request timeout"
-            logger.error(f"[MiniMax] {error_msg}")
+            logger.error(f"[MiniMax] {sanitize_diagnostic_text(error_msg)}")
             return SearchResponse(
                 query=query, results=[], provider=self.name,
                 success=False, error_message=error_msg,
             )
         except requests.exceptions.RequestException as e:
             error_msg = f"Network error: {e}"
-            logger.error(f"[MiniMax] {error_msg}")
+            logger.error(f"[MiniMax] {sanitize_diagnostic_text(error_msg)}")
             return SearchResponse(
                 query=query, results=[], provider=self.name,
                 success=False, error_message=error_msg,
             )
         except Exception as e:
             error_msg = f"Unexpected error: {e}"
-            logger.error(f"[MiniMax] {error_msg}")
+            logger.error(f"[MiniMax] {sanitize_diagnostic_text(error_msg)}")
             return SearchResponse(
                 query=query, results=[], provider=self.name,
                 success=False, error_message=error_msg,
@@ -1549,17 +1616,22 @@ class BraveSearchProvider(BaseSearchProvider):
                 params["country"] = country
 
             # 执行搜索（GET 请求）
-            response = requests.get(
+            response = audited_request_once(
+                "GET",
                 self.API_ENDPOINT,
+                provider=self.name,
+                api_key=api_key,
+                query=query,
                 headers=headers,
                 params=params,
-                timeout=10
+                timeout=10,
+                request_func=requests.get,
             )
 
             # 检查HTTP状态码
             if response.status_code != 200:
                 error_msg = self._parse_error(response)
-                logger.warning(f"[Brave] 搜索失败: {error_msg}")
+                logger.warning(f"[Brave] 搜索失败: {sanitize_diagnostic_text(error_msg)}")
                 return SearchResponse(
                     query=query,
                     results=[],
@@ -1573,7 +1645,7 @@ class BraveSearchProvider(BaseSearchProvider):
                 data = response.json()
             except ValueError as e:
                 error_msg = f"响应JSON解析失败: {str(e)}"
-                logger.error(f"[Brave] {error_msg}")
+                logger.error(f"[Brave] {sanitize_diagnostic_text(error_msg)}")
                 return SearchResponse(
                     query=query,
                     results=[],
@@ -1582,8 +1654,7 @@ class BraveSearchProvider(BaseSearchProvider):
                     error_message=error_msg
                 )
 
-            logger.info(f"[Brave] 搜索完成，query='{query}'")
-            logger.debug(f"[Brave] 原始响应: {data}")
+            logger.info("[Brave] 搜索完成")
 
             # 解析搜索结果
             results = []
@@ -1621,7 +1692,7 @@ class BraveSearchProvider(BaseSearchProvider):
 
         except requests.exceptions.Timeout:
             error_msg = "请求超时"
-            logger.error(f"[Brave] {error_msg}")
+            logger.error(f"[Brave] {sanitize_diagnostic_text(error_msg)}")
             return SearchResponse(
                 query=query,
                 results=[],
@@ -1631,7 +1702,7 @@ class BraveSearchProvider(BaseSearchProvider):
             )
         except requests.exceptions.RequestException as e:
             error_msg = f"网络请求失败: {str(e)}"
-            logger.error(f"[Brave] {error_msg}")
+            logger.error(f"[Brave] {sanitize_diagnostic_text(error_msg)}")
             return SearchResponse(
                 query=query,
                 results=[],
@@ -1641,7 +1712,7 @@ class BraveSearchProvider(BaseSearchProvider):
             )
         except Exception as e:
             error_msg = f"未知错误: {str(e)}"
-            logger.error(f"[Brave] {error_msg}")
+            logger.error(f"[Brave] {sanitize_diagnostic_text(error_msg)}")
             return SearchResponse(
                 query=query,
                 results=[],
@@ -1912,8 +1983,29 @@ class SearXNGSearchProvider(BaseSearchProvider):
                 "pageno": 1,
             }
 
-            request_get = _get_with_retry if retry_enabled else requests.get
-            response = request_get(search_url, headers=headers, params=params, timeout=timeout)
+            if retry_enabled:
+                response = _get_with_retry(
+                    search_url,
+                    headers=headers,
+                    params=params,
+                    timeout=timeout,
+                    provider=self.name,
+                    query=query,
+                    credential_identity=base_url,
+                )
+            else:
+                response = audited_request_once(
+                    "GET",
+                    search_url,
+                    provider=self.name,
+                    api_key=None,
+                    query=query,
+                    headers=headers,
+                    params=params,
+                    timeout=timeout,
+                    credential_identity=base_url,
+                    request_func=requests.get,
+                )
 
             if response.status_code != 200:
                 error_msg = self._parse_http_error(response)
@@ -2023,7 +2115,7 @@ class SearXNGSearchProvider(BaseSearchProvider):
         except Exception:
             return "未知来源"
 
-    def search(self, query: str, max_results: int = 5, days: int = 7) -> SearchResponse:
+    def _search_impl(self, query: str, max_results: int = 5, days: int = 7) -> SearchResponse:
         """Execute SearXNG search with instance rotation and per-request failover."""
         start_time = time.time()
         if self._base_urls:
@@ -2093,6 +2185,11 @@ class SearXNGSearchProvider(BaseSearchProvider):
             error_message="；".join(errors[:3]) if errors else empty_error,
             search_time=elapsed,
         )
+
+    def search(self, query: str, max_results: int = 5, days: int = 7) -> SearchResponse:
+        context = current_search_audit_context() or SearchAuditContext(operation="provider_search")
+        with search_audit_scope(context):
+            return self._search_impl(query, max_results=max_results, days=days)
 
 
 class SearchService:
@@ -2517,7 +2614,7 @@ class SearchService:
         if time.time() - ts > self._cache_ttl:
             self._cache.pop(key, None)
             return None
-        logger.debug(f"Search cache hit: {key[:60]}...")
+        logger.debug("Search cache hit")
         return response
 
     def _get_cached(self, key: str) -> Optional['SearchResponse']:
@@ -3574,12 +3671,44 @@ class SearchService:
             record_count=record_count,
         )
 
+    @staticmethod
+    def _call_provider_with_audit(
+        provider: BaseSearchProvider,
+        query: str,
+        *,
+        business_search_id: str,
+        call_source: str,
+        operation: str,
+        provider_attempt: int,
+        stock_code: Optional[str] = None,
+        stock_name: Optional[str] = None,
+        dimension: Optional[str] = None,
+        lookback_days: Optional[int] = None,
+        max_results: int = 5,
+        days: int = 7,
+        **search_kwargs: Any,
+    ) -> SearchResponse:
+        context = SearchAuditContext(
+            business_search_id=business_search_id,
+            call_source=call_source or "analysis",
+            operation=operation,
+            stock_code=stock_code,
+            stock_name=stock_name,
+            dimension=dimension,
+            lookback_days=lookback_days,
+            provider_attempt=max(1, provider_attempt),
+        )
+        with search_audit_scope(context):
+            return provider.search(query, max_results=max_results, days=days, **search_kwargs)
+
     def search_stock_news(
         self,
         stock_code: str,
         stock_name: str,
         max_results: int = 5,
-        focus_keywords: Optional[List[str]] = None
+        focus_keywords: Optional[List[str]] = None,
+        *,
+        call_source: str = "analysis",
     ) -> SearchResponse:
         """
         搜索股票相关新闻
@@ -3602,6 +3731,7 @@ class SearchService:
             stock_name,
             focus_keywords=focus_keywords,
         )
+        business_search_id = SearchAuditContext(call_source=call_source).business_search_id
 
         # 构建搜索查询（优化搜索效果）
         is_foreign = self._is_foreign_stock(stock_code)
@@ -3619,12 +3749,11 @@ class SearchService:
 
         logger.info(
             (
-                "搜索股票新闻: %s(%s), query='%s', 时间范围: 近%s天 "
+                "搜索股票新闻: %s(%s), 时间范围: 近%s天 "
                 "(profile=%s, NEWS_MAX_AGE_DAYS=%s, prefer_chinese=%s), 目标条数=%s, provider请求条数=%s"
             ),
             stock_name,
             stock_code,
-            query,
             search_days,
             self.news_strategy_profile,
             self.news_max_age_days,
@@ -3688,7 +3817,7 @@ class SearchService:
             had_provider_success = False
             best_ranked_response: Optional[SearchResponse] = None
             best_ranked_stats: Optional[Dict[str, int]] = None
-            for provider in self._providers:
+            for provider_attempt, provider in enumerate(self._providers, 1):
                 if not provider.is_available:
                     continue
 
@@ -3710,7 +3839,20 @@ class SearchService:
                         provider=provider.name,
                         operation="search_stock_news",
                     )
-                    response = provider.search(query, provider_max_results, days=search_days, **search_kwargs)
+                    response = self._call_provider_with_audit(
+                        provider,
+                        query,
+                        business_search_id=business_search_id,
+                        call_source=call_source,
+                        operation="search_stock_news",
+                        provider_attempt=provider_attempt,
+                        stock_code=stock_code,
+                        stock_name=stock_name,
+                        lookback_days=search_days,
+                        max_results=provider_max_results,
+                        days=search_days,
+                        **search_kwargs,
+                    )
                 except Exception as exc:
                     self._record_news_search_run(
                         provider=provider.name,
@@ -3875,7 +4017,9 @@ class SearchService:
         self,
         stock_code: str,
         stock_name: str,
-        event_types: Optional[List[str]] = None
+        event_types: Optional[List[str]] = None,
+        *,
+        call_source: str = "analysis",
     ) -> SearchResponse:
         """
         搜索股票特定事件（年报预告、减持等）
@@ -3903,11 +4047,23 @@ class SearchService:
         logger.info(f"搜索股票事件: {stock_name}({stock_code}) - {event_types}")
         
         # 依次尝试各个搜索引擎
-        for provider in self._providers:
+        business_search_id = SearchAuditContext(call_source=call_source).business_search_id
+        for provider_attempt, provider in enumerate(self._providers, 1):
             if not provider.is_available:
                 continue
             
-            response = provider.search(query, max_results=5)
+            response = self._call_provider_with_audit(
+                provider,
+                query,
+                business_search_id=business_search_id,
+                call_source=call_source,
+                operation="search_stock_events",
+                provider_attempt=provider_attempt,
+                stock_code=stock_code,
+                stock_name=stock_name,
+                dimension="events",
+                max_results=5,
+            )
             
             if response.success:
                 return response
@@ -3924,7 +4080,9 @@ class SearchService:
         self,
         stock_code: str,
         stock_name: str,
-        max_searches: int = 3
+        max_searches: int = 3,
+        *,
+        call_source: str = "analysis",
     ) -> Dict[str, SearchResponse]:
         """
         多维度情报搜索（同时使用多个引擎、多个维度）
@@ -3944,6 +4102,7 @@ class SearchService:
         """
         results = {}
         search_count = 0
+        business_search_id = SearchAuditContext(call_source=call_source).business_search_id
 
         is_foreign = self._is_foreign_stock(stock_code)
         is_index_etf = self.is_index_or_etf(stock_code, stock_name)
@@ -4099,19 +4258,24 @@ class SearchService:
                 request_days,
             )
 
+            search_kwargs: Dict[str, Any] = {}
             if isinstance(provider, TavilySearchProvider) and dim.get('tavily_topic'):
-                response = provider.search(
+                search_kwargs["topic"] = dim['tavily_topic']
+            response = self._call_provider_with_audit(
+                    provider,
                     dim['query'],
+                    business_search_id=business_search_id,
+                    call_source=call_source,
+                    operation="search_comprehensive_intel",
+                    provider_attempt=provider_index,
+                    stock_code=stock_code,
+                    stock_name=stock_name,
+                    dimension=dim['name'],
+                    lookback_days=request_days,
                     max_results=provider_max_results,
                     days=request_days,
-                    topic=dim['tavily_topic'],
-                )
-            else:
-                response = provider.search(
-                    dim['query'],
-                    max_results=provider_max_results,
-                    days=request_days,
-                )
+                    **search_kwargs,
+            )
             if dim['strict_freshness']:
                 filtered_response = self._filter_news_response(
                     response,
@@ -4259,7 +4423,9 @@ class SearchService:
         stock_code: str,
         stock_name: str,
         max_attempts: int = 3,
-        max_results: int = 5
+        max_results: int = 5,
+        *,
+        call_source: str = "market_data_fallback",
     ) -> SearchResponse:
         """
         Enhance search when data sources fail.
@@ -4296,6 +4462,7 @@ class SearchService:
         all_results = []
         seen_urls = set()
         successful_providers = []
+        business_search_id = SearchAuditContext(call_source=call_source).business_search_id
         
         # 使用多个关键词模板搜索
         is_foreign = self._is_foreign_stock(stock_code)
@@ -4303,15 +4470,26 @@ class SearchService:
         for i, keyword_template in enumerate(keywords[:max_attempts]):
             query = keyword_template.format(name=stock_name, code=stock_code)
             
-            logger.info(f"[增强搜索] 第 {i+1}/{max_attempts} 次搜索: {query}")
+            logger.info(f"[增强搜索] 第 {i+1}/{max_attempts} 次搜索")
             
             # 依次尝试各个搜索引擎
-            for provider in self._providers:
+            for provider_attempt, provider in enumerate(self._providers, 1):
                 if not provider.is_available:
                     continue
                 
                 try:
-                    response = provider.search(query, max_results=3)
+                    response = self._call_provider_with_audit(
+                        provider,
+                        query,
+                        business_search_id=business_search_id,
+                        call_source=call_source,
+                        operation="search_stock_price_fallback",
+                        provider_attempt=provider_attempt,
+                        stock_code=stock_code,
+                        stock_name=stock_name,
+                        dimension=f"price_attempt_{i + 1}",
+                        max_results=3,
+                    )
                     
                     if response.success and response.results:
                         # 去重并添加结果

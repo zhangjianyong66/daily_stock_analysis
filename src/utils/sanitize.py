@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
-from typing import Any
-from urllib.parse import parse_qsl, urlsplit
+from typing import Any, Dict, Mapping, Tuple
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
 _REDACTED = "[REDACTED]"
@@ -73,6 +75,33 @@ _TOKEN_LIKE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_SEARCH_REQUEST_HEADER_ALLOWLIST = {
+    "accept",
+    "content-type",
+    "user-agent",
+    "x-request-id",
+    "x-trace-id",
+    "x-correlation-id",
+    "mm-api-source",
+}
+_SEARCH_RESPONSE_HEADER_ALLOWLIST = {
+    "content-type",
+    "content-length",
+    "date",
+    "retry-after",
+    "x-request-id",
+    "x-trace-id",
+    "x-correlation-id",
+    "request-id",
+    "trace-id",
+    "x-ratelimit-limit",
+    "x-ratelimit-remaining",
+    "x-ratelimit-reset",
+    "ratelimit-limit",
+    "ratelimit-remaining",
+    "ratelimit-reset",
+}
+
 
 def sanitize_diagnostic_text(text: Any, *, max_length: int = 300) -> str:
     """Redact common secrets and URLs from diagnostic text."""
@@ -124,6 +153,98 @@ def sanitize_decision_signal_payload(obj: Any) -> Any:
     """Redact decision-signal JSON payloads by sensitive keys and string values."""
     redacted = redact_sensitive_mapping(obj)
     return _sanitize_decision_signal_payload_values(redacted)
+
+
+def sanitize_search_snapshot_value(obj: Any) -> Any:
+    """Deep-redact a search request/response value while preserving business data."""
+    if isinstance(obj, Mapping):
+        result: Dict[str, Any] = {}
+        for key, value in obj.items():
+            key_text = str(key)
+            if _is_sensitive_mapping_key(key_text):
+                result[key_text] = _REDACTED
+            else:
+                result[key_text] = sanitize_search_snapshot_value(value)
+        return result
+    if isinstance(obj, (list, tuple, set)):
+        return [sanitize_search_snapshot_value(item) for item in obj]
+    if isinstance(obj, bytes):
+        return sanitize_search_snapshot_text(obj.decode("utf-8", errors="replace"))
+    if isinstance(obj, str):
+        return sanitize_search_snapshot_text(obj)
+    if obj is None or isinstance(obj, (bool, int, float)):
+        return obj
+    return sanitize_search_snapshot_text(str(obj))
+
+
+def sanitize_search_snapshot_text(text: Any) -> str:
+    """Redact credentials from persisted search payload text without truncating."""
+    sanitized = str(text or "")
+    sanitized = _URL_PATTERN.sub(_sanitize_search_url_match, sanitized)
+    sanitized = _AUTHORIZATION_HEADER_PATTERN.sub(r"\1\2[REDACTED]", sanitized)
+    sanitized = _COOKIE_HEADER_PATTERN.sub(r"\1\2[REDACTED]", sanitized)
+    sanitized = _BEARER_PATTERN.sub(r"\1[REDACTED]", sanitized)
+    sanitized = _SECRET_ASSIGNMENT_PATTERN.sub(r"\1\2[REDACTED]", sanitized)
+    return _TOKEN_LIKE_PATTERN.sub(_REDACTED, sanitized)
+
+
+def sanitize_search_url(url: Any) -> str:
+    """Keep a URL useful for auditing while redacting credential-like query values."""
+    value = str(url or "")
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return sanitize_search_snapshot_text(value)
+    if not parsed.scheme or not parsed.netloc:
+        return sanitize_search_snapshot_text(value)
+    netloc = parsed.hostname or ""
+    if parsed.port:
+        netloc = f"{netloc}:{parsed.port}"
+    query = []
+    for key, item_value in parse_qsl(parsed.query, keep_blank_values=True):
+        query.append((key, _REDACTED if _is_sensitive_mapping_key(key) else sanitize_search_snapshot_text(item_value)))
+    return urlunsplit((parsed.scheme, netloc, parsed.path, urlencode(query, doseq=True), ""))
+
+
+def sanitize_search_headers(headers: Any, *, response: bool = False) -> Dict[str, str]:
+    """Return an allowlisted and redacted header mapping for audit snapshots."""
+    if not isinstance(headers, Mapping):
+        try:
+            headers = dict(headers or {})
+        except Exception:
+            return {}
+    allowed = _SEARCH_RESPONSE_HEADER_ALLOWLIST if response else _SEARCH_REQUEST_HEADER_ALLOWLIST
+    result: Dict[str, str] = {}
+    for key, value in headers.items():
+        key_text = str(key)
+        normalized = key_text.lower()
+        if _is_sensitive_mapping_key(normalized):
+            continue
+        if normalized not in allowed and not normalized.startswith("x-ratelimit-"):
+            continue
+        result[key_text] = sanitize_search_snapshot_text(value)
+    return result
+
+
+def serialize_search_snapshot(value: Any, *, max_bytes: int) -> Tuple[str, int, bool, str]:
+    """Serialize a redacted snapshot with deterministic size/hash/truncation metadata."""
+    sanitized = sanitize_search_snapshot_value(value)
+    payload = json.dumps(sanitized, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    raw = payload.encode("utf-8")
+    digest = hashlib.sha256(raw).hexdigest()
+    if len(raw) <= max_bytes:
+        return payload, len(raw), False, digest
+    preview = raw[:max_bytes].decode("utf-8", errors="ignore")
+    truncated_payload = json.dumps(
+        {"truncated": True, "preview": preview},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return truncated_payload, len(raw), True, digest
+
+
+def _sanitize_search_url_match(match: re.Match[str]) -> str:
+    return sanitize_search_url(match.group(0))
 
 
 def _sanitize_decision_signal_payload_values(obj: Any) -> Any:

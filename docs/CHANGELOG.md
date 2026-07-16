@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [新功能] 用量分析新增搜索调用账本，逐次记录真实供应商请求、重试、fallback、脱敏完整出入参、筛选分页以及管理员 CSV/JSON 导出。
+- [新功能] 搜索供应商余额、认证、权限和持续网络故障新增用量页卡片、Web 全局提示、24 小时降噪通知与恢复通知。
+- [修复] Anspire HTTP 401 响应正文明确余额或额度耗尽时按 `quota_exhausted` 展示，不再误报为 API Key 无效。
 - [修复] Docker 镜像显式安装并校验 LiteLLM Responses 所需的 `orjson`，避免持仓与成交截图在发起 Vision 请求前因缺少运行时依赖而全部识别失败。
 - [修复] 共享 Vision 能力新增显式 Chat Completions/Responses 协议选择，精确复用 LLM Channel 的 Base URL、Key 与 Extra Headers，并让设置页连接和能力检测使用同一协议与 32×32 低敏探针。
 - [修复] 腾讯/新浪实时行情单源上限调整为 10 秒，并在腾讯等待 5 秒后并行启动新浪；按物理上游隔离调用锁、限速和迟到线程，避免慢响应被误判失败或阻断跨源兜底。

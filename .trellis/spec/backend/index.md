@@ -26,6 +26,7 @@
 | 运行、测试、构建、部署、CI 证据 | [Runtime and Deployment](./runtime-deployment.md) |
 | Python/TypeScript 风格、测试要求、文档同步 | [Quality Guidelines](./quality-guidelines.md) |
 | SQLite / SQLAlchemy / 仓储层改动 | [Database Guidelines](./database-guidelines.md) |
+| 搜索供应商调用审计、余额告警、用量 API / Web 联动 | [Search Usage Audit](./search-usage-audit.md) |
 | API 错误、异常传播、fallback 语义 | [Error Handling](./error-handling.md) |
 | 日志初始化、级别、敏感信息 | [Logging Guidelines](./logging-guidelines.md) |
 | 每日大盘上下文日期、历史复用、锁与 fail-open | [Daily Market Context](./daily-market-context.md) |

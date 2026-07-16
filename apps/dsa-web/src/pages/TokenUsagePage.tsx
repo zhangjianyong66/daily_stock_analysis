@@ -6,6 +6,7 @@ import { ApiErrorAlert, AppPage, Card, EmptyState, PageHeader, StatCard } from '
 import { useUiLanguage } from '../contexts/UiLanguageContext';
 import type { UiLanguage, UiTextKey, UiTextParams } from '../i18n/uiText';
 import { cn } from '../utils/cn';
+import { SearchUsagePanel } from '../components/usage/SearchUsagePanel';
 
 type Translate = (key: UiTextKey, params?: UiTextParams) => string;
 
@@ -101,6 +102,7 @@ const ModelUsageCard: React.FC<{ model: UsageModelBreakdown; language: UiLanguag
 
 const TokenUsagePage: React.FC = () => {
   const { language, t } = useUiLanguage();
+  const [activeTab, setActiveTab] = useState<'llm' | 'search'>('llm');
   const [period, setPeriod] = useState<UsagePeriod>('month');
   const [dashboard, setDashboard] = useState<UsageDashboard | null>(null);
   const [error, setError] = useState<ParsedApiError | null>(null);
@@ -149,7 +151,7 @@ const TokenUsagePage: React.FC = () => {
           title={t('usage.title')}
           description={t('usage.description')}
           actions={(
-            <div className="flex flex-wrap items-center gap-2">
+            activeTab === 'llm' ? <div className="flex flex-wrap items-center gap-2">
               <div className="inline-flex rounded-xl border border-border/70 bg-card/70 p-1">
                 {PERIOD_OPTIONS.map((option) => (
                   <button
@@ -176,13 +178,20 @@ const TokenUsagePage: React.FC = () => {
                 <RefreshCw className={cn('h-4 w-4', loading ? 'animate-spin' : '')} />
                 {t('usage.refresh')}
               </button>
-            </div>
+            </div> : null
           )}
         />
 
-        {error ? <ApiErrorAlert error={error} actionLabel={t('common.retry')} onAction={() => void loadDashboard()} /> : null}
+        <div className="inline-flex rounded-xl border border-border/70 bg-card/70 p-1" role="tablist" aria-label={language === 'en' ? 'Usage category' : '用量类别'}>
+          <button type="button" role="tab" aria-selected={activeTab === 'llm'} onClick={() => setActiveTab('llm')} className={cn('rounded-lg px-4 py-2 text-sm', activeTab === 'llm' ? 'bg-cyan text-background' : 'text-secondary-text hover:bg-hover')}>{language === 'en' ? 'LLM usage' : 'LLM 用量'}</button>
+          <button type="button" role="tab" aria-selected={activeTab === 'search'} onClick={() => setActiveTab('search')} className={cn('rounded-lg px-4 py-2 text-sm', activeTab === 'search' ? 'bg-cyan text-background' : 'text-secondary-text hover:bg-hover')}>{language === 'en' ? 'Search calls' : '搜索调用'}</button>
+        </div>
 
-        {loading && !dashboard ? (
+        {activeTab === 'search' ? <SearchUsagePanel /> : null}
+
+        {activeTab === 'llm' && error ? <ApiErrorAlert error={error} actionLabel={t('common.retry')} onAction={() => void loadDashboard()} /> : null}
+
+        {activeTab === 'llm' && loading && !dashboard ? (
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             {Array.from({ length: 4 }).map((_, index) => (
               <div key={index} className="h-28 animate-pulse rounded-2xl border border-border/70 bg-card/60" />
@@ -190,7 +199,7 @@ const TokenUsagePage: React.FC = () => {
           </div>
         ) : null}
 
-        {dashboard ? (
+        {activeTab === 'llm' && dashboard ? (
           <>
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               <StatCard label={t('usage.totalTokens')} value={formatNumber(dashboard.totalTokens, language)} hint={t('usage.dateRange', { from: dashboard.fromDate, to: dashboard.toDate })} icon={<Database className="h-5 w-5" />} tone="primary" />

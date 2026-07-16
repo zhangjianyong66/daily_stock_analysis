@@ -812,6 +812,96 @@ class LLMUsage(Base):
     called_at = Column(DateTime, default=datetime.now, index=True)
 
 
+class SearchApiCall(Base):
+    """One row per real outbound search-provider HTTP request."""
+
+    __tablename__ = "search_api_calls"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    business_search_id = Column(String(64), nullable=False, index=True)
+    logical_request_id = Column(String(64), nullable=False, index=True)
+    trace_id = Column(String(128), nullable=True)
+    provider = Column(String(64), nullable=False, index=True)
+    endpoint = Column(Text, nullable=False)
+    http_method = Column(String(16), nullable=False)
+    call_source = Column(String(64), nullable=False, index=True)
+    operation = Column(String(64), nullable=False)
+    stock_code = Column(String(32), nullable=True)
+    stock_name = Column(String(128), nullable=True)
+    dimension = Column(String(64), nullable=True)
+    lookback_days = Column(Integer, nullable=True)
+    provider_attempt = Column(Integer, nullable=False, default=1)
+    physical_attempt = Column(Integer, nullable=False, default=1)
+    key_fingerprint = Column(String(64), nullable=False, index=True)
+    query_hmac = Column(String(64), nullable=True)
+    success = Column(Boolean, nullable=False, default=False, index=True)
+    http_status = Column(Integer, nullable=True)
+    provider_code = Column(String(64), nullable=True)
+    provider_request_id = Column(String(128), nullable=True)
+    duration_ms = Column(Integer, nullable=False, default=0)
+    result_count = Column(Integer, nullable=True)
+    error_category = Column(String(32), nullable=True, index=True)
+    error_summary = Column(String(500), nullable=True)
+    request_snapshot_json = Column(Text, nullable=False)
+    request_size_bytes = Column(Integer, nullable=False)
+    request_truncated = Column(Boolean, nullable=False, default=False)
+    request_sha256 = Column(String(64), nullable=False)
+    response_snapshot_json = Column(Text, nullable=False)
+    response_size_bytes = Column(Integer, nullable=False)
+    response_truncated = Column(Boolean, nullable=False, default=False)
+    response_sha256 = Column(String(64), nullable=False)
+    requested_at = Column(DateTime, nullable=False, default=utc_naive_now, index=True)
+    completed_at = Column(DateTime, nullable=False, default=utc_naive_now)
+
+    __table_args__ = (
+        Index("ix_search_calls_provider_requested", "provider", "requested_at"),
+        Index("ix_search_calls_key_requested", "key_fingerprint", "requested_at"),
+        Index("ix_search_calls_source_requested", "call_source", "requested_at"),
+        Index("ix_search_calls_success_requested", "success", "requested_at"),
+    )
+
+
+class SearchProviderFault(Base):
+    """Current and historical search-provider fault lifecycle state."""
+
+    __tablename__ = "search_provider_faults"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    provider = Column(String(64), nullable=False)
+    key_fingerprint = Column(String(64), nullable=False)
+    error_category = Column(String(32), nullable=False)
+    active = Column(Boolean, nullable=False, default=True, index=True)
+    severity = Column(String(16), nullable=False, default="warning")
+    first_seen_at = Column(DateTime, nullable=False, default=utc_naive_now)
+    last_seen_at = Column(DateTime, nullable=False, default=utc_naive_now, index=True)
+    resolved_at = Column(DateTime, nullable=True)
+    window_started_at = Column(DateTime, nullable=True)
+    consecutive_count = Column(Integer, nullable=False, default=0)
+    last_notified_at = Column(DateTime, nullable=True)
+    last_notification_status = Column(String(64), nullable=True)
+    recovery_notified_at = Column(DateTime, nullable=True)
+    last_error_summary = Column(String(500), nullable=True)
+    last_call_id = Column(Integer, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("provider", "key_fingerprint", "error_category", name="uix_search_provider_fault"),
+        Index("ix_search_fault_active_provider", "active", "provider"),
+    )
+
+
+class SearchAuditGap(Base):
+    """Persisted evidence that search call audit writes were lost."""
+
+    __tablename__ = "search_audit_gaps"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    lost_count = Column(Integer, nullable=False, default=1)
+    first_failed_at = Column(DateTime, nullable=False)
+    last_failed_at = Column(DateTime, nullable=False)
+    recorded_at = Column(DateTime, nullable=False, default=utc_naive_now, index=True)
+    error_summary = Column(String(500), nullable=True)
+
+
 _LLM_USAGE_TELEMETRY_COLUMN_SQL: Dict[str, str] = {
     "provider_usage_json": "TEXT",
     "provider": "VARCHAR(64)",

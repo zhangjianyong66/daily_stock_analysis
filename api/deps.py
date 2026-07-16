@@ -19,6 +19,8 @@ from src.storage import DatabaseManager
 from src.config import get_config, Config
 from src.services.system_config_service import SystemConfigService
 from src.services.runtime_scheduler import RuntimeSchedulerService
+from src.auth import COOKIE_NAME, is_auth_enabled, verify_session
+from api.v1.errors import api_error
 
 
 def get_db() -> Generator[Session, None, None]:
@@ -79,3 +81,16 @@ def get_runtime_scheduler_service(request: Request) -> RuntimeSchedulerService:
         service = RuntimeSchedulerService()
         request.app.state.runtime_scheduler_service = service
     return service
+
+
+def require_enabled_admin_session(request: Request) -> None:
+    """Require enabled admin auth plus a valid administrator session."""
+    if not is_auth_enabled():
+        raise api_error(
+            403,
+            "admin_auth_required",
+            "启用管理员认证后才能查看搜索请求详情或导出数据",
+        )
+    cookie_value = request.cookies.get(COOKIE_NAME)
+    if not cookie_value or not verify_session(cookie_value):
+        raise api_error(401, "unauthorized", "管理员登录已失效，请重新登录")
