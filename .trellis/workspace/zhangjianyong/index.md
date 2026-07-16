@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 12
+- **Total Sessions**: 13
 - **Last Active**: 2026-07-16
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~409 | Active |
+| `journal-1.md` | ~442 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 13 | 2026-07-16 | 完成搜索调用审计与余额告警 | `80d8963` | `main` |
 | 12 | 2026-07-16 | 修复 Vision Responses 运行时依赖 | `3b82c4f`, `52be618` | `main` |
 | 11 | 2026-07-15 | 修复 GPT-5.6 Vision 中转站 Responses 调用 | `d76d93a`, `879c4a8` | `main` |
 | 10 | 2026-07-15 | 修复大盘上下文跨日重复生成 | `1d981ab`, `4fcf440` | `main` |

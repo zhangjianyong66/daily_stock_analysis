@@ -407,3 +407,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 13: 完成搜索调用审计与余额告警
+
+**Date**: 2026-07-16
+**Task**: 完成搜索调用审计与余额告警
+**Branch**: `main`
+
+### Summary
+
+实现搜索供应商物理请求审计、余额与故障告警、管理员详情导出以及用量分析页面，并完成后端与 Web 验证。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `80d8963` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
