@@ -373,3 +373,37 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 12: 修复 Vision Responses 运行时依赖
+
+**Date**: 2026-07-16
+**Task**: 修复 Vision Responses 运行时依赖
+**Branch**: `main`
+
+### Summary
+
+显式安装并在 Docker 构建阶段校验 orjson，重建 stock-server 后完成真实 Responses Vision smoke、定向回归和完整后端门禁。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3b82c4f` | (see git log) |
+| `52be618` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
