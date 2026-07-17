@@ -1,7 +1,9 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { StockBar } from '../StockBar';
 import type { StockBarItem } from '../../../types/analysis';
+import { UiLanguageProvider } from '../../../contexts/UiLanguageContext';
+import { UI_LANGUAGE_STORAGE_KEY } from '../../../utils/uiLanguage';
 
 const items: StockBarItem[] = [
   {
@@ -45,6 +47,10 @@ function renderStockBar(overrides: Partial<React.ComponentProps<typeof StockBar>
 }
 
 describe('StockBar', () => {
+  afterEach(() => {
+    window.localStorage.removeItem(UI_LANGUAGE_STORAGE_KEY);
+  });
+
   it('filters visible stocks by code or name without changing the loaded list', () => {
     renderStockBar();
 
@@ -81,5 +87,107 @@ describe('StockBar', () => {
     const viewport = screen.getByTestId('home-stock-bar-scroll');
     expect(viewport).toHaveClass('touch-pan-y');
     expect(within(viewport).getByPlaceholderText('按代码或名称过滤')).toBeInTheDocument();
+  });
+
+  it('requires confirmation before deleting one stock and uses a danger action', async () => {
+    const onDeleteStock = vi.fn().mockResolvedValue(undefined);
+    renderStockBar({ onDeleteStock });
+
+    fireEvent.click(screen.getByRole('button', { name: '删除 贵州茅台 历史记录' }));
+
+    expect(screen.getByRole('heading', { name: '确认删除历史记录' })).toBeInTheDocument();
+    expect(screen.getByText('确认删除“贵州茅台（600519）”的全部历史记录吗？删除后不可恢复。')).toBeInTheDocument();
+    expect(onDeleteStock).not.toHaveBeenCalled();
+    const confirmButton = screen.getByRole('button', { name: '确认删除' });
+    expect(confirmButton).toHaveClass('bg-red-500/80');
+
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    expect(onDeleteStock).not.toHaveBeenCalled();
+    expect(screen.queryByRole('heading', { name: '确认删除历史记录' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '删除 贵州茅台 历史记录' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认删除' }));
+
+    await waitFor(() => expect(onDeleteStock).toHaveBeenCalledTimes(1));
+    expect(onDeleteStock).toHaveBeenCalledWith('600519');
+  });
+
+  it('previews the first five batch targets, preserves selection on cancel, and deletes only after confirmation', async () => {
+    const batchItems: StockBarItem[] = [
+      ...items,
+      { id: 4, stockCode: 'MSFT', stockName: 'Microsoft', analysisCount: 1 },
+      { id: 5, stockCode: 'TSLA', stockName: 'Tesla', analysisCount: 1 },
+      { id: 6, stockCode: 'NVDA', stockName: 'NVIDIA', analysisCount: 1 },
+    ];
+    const onDeleteStock = vi.fn().mockResolvedValue(undefined);
+    renderStockBar({ items: batchItems, onDeleteStock });
+
+    fireEvent.click(screen.getByLabelText('全选当前'));
+    fireEvent.click(screen.getByRole('button', { name: '删除' }));
+
+    expect(screen.getByText('已选 6')).toBeInTheDocument();
+    expect(screen.getByText(/贵州茅台（600519）、平安银行（000001）、Apple（AAPL）、Microsoft（MSFT）、Tesla（TSLA），另有 1 项/)).toBeInTheDocument();
+    expect(onDeleteStock).not.toHaveBeenCalled();
+
+    const dialogHeading = screen.getByRole('heading', { name: '确认删除历史记录' });
+    const dialogOverlay = dialogHeading.parentElement?.parentElement;
+    expect(dialogOverlay).not.toBeNull();
+    fireEvent.click(dialogOverlay as HTMLElement);
+    expect(screen.getByText('已选 6')).toBeInTheDocument();
+    expect(onDeleteStock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: '删除' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认删除' }));
+
+    await waitFor(() => expect(onDeleteStock).toHaveBeenCalledTimes(6));
+    expect(onDeleteStock.mock.calls.map(([code]) => code)).toEqual([
+      '600519',
+      '000001',
+      'AAPL',
+      'MSFT',
+      'TSLA',
+      'NVDA',
+    ]);
+  });
+
+  it('disables confirm and cancel actions while deletion is running', async () => {
+    let resolveDelete: (() => void) | undefined;
+    const onDeleteStock = vi.fn(() => new Promise<void>((resolve) => {
+      resolveDelete = resolve;
+    }));
+    renderStockBar({ onDeleteStock });
+
+    fireEvent.click(screen.getByRole('button', { name: '删除 贵州茅台 历史记录' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认删除' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '确认删除' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: '取消' })).toBeDisabled();
+    });
+
+    resolveDelete?.();
+    await waitFor(() => {
+      expect(screen.queryByRole('heading', { name: '确认删除历史记录' })).not.toBeInTheDocument();
+    });
+  });
+
+  it('renders the delete confirmation in English', () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'en');
+    render(
+      <UiLanguageProvider>
+        <StockBar
+          items={items}
+          isLoading={false}
+          onItemClick={vi.fn()}
+          onDeleteStock={vi.fn()}
+        />
+      </UiLanguageProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete 贵州茅台 history record' }));
+
+    expect(screen.getByRole('heading', { name: 'Confirm history deletion' })).toBeInTheDocument();
+    expect(screen.getByText('Delete all history records for “贵州茅台 (600519)”? This cannot be undone.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Confirm delete' })).toBeInTheDocument();
   });
 });

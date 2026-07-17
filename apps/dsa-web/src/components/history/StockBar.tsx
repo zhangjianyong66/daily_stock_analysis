@@ -1,6 +1,6 @@
 import type React from 'react';
 import { useState, useCallback, useRef, useEffect, useId, useMemo } from 'react';
-import { Badge, Button, ScrollArea } from '../common';
+import { Badge, Button, ConfirmDialog, ScrollArea } from '../common';
 import { DashboardPanelHeader, DashboardStateBlock } from '../dashboard';
 import { StockBarItemComponent } from './StockBarItem';
 import type { StockBarItem as StockBarItemType } from '../../types/analysis';
@@ -17,6 +17,11 @@ interface StockBarProps {
   className?: string;
 }
 
+type PendingDelete = {
+  mode: 'single' | 'batch';
+  items: StockBarItemType[];
+};
+
 /**
  * 个股栏组件：以股票维度展示历史分析记录，每只股票只显示一条。
  * 大盘复盘可作为 MARKET 项参与展示，并按最近分析时间排序。
@@ -31,10 +36,12 @@ export const StockBar: React.FC<StockBarProps> = ({
   isDeleting = false,
   className = '',
 }) => {
-  const { t } = useUiLanguage();
+  const { language, t } = useUiLanguage();
   const isMarketReview = (code: string) => code === 'MARKET';
   const [filterText, setFilterText] = useState('');
   const [selectedCodes, setSelectedCodes] = useState<Set<string>>(new Set());
+  const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
+  const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
   const selectAllRef = useRef<HTMLInputElement>(null);
   const selectAllId = useId();
 
@@ -82,19 +89,66 @@ export const StockBar: React.FC<StockBarProps> = ({
     });
   }, [deletableItems]);
 
-  const handleDeleteSelected = useCallback(async () => {
+  const handleRequestDeleteSelected = useCallback(() => {
     if (!onDeleteStock || selectedCodes.size === 0) return;
-    const visibleCodes = new Set(deletableItems.map((item) => item.stockCode));
-    const codesToDelete = [...selectedCodes].filter((code) => visibleCodes.has(code));
-    for (const code of codesToDelete) {
-      await onDeleteStock(code);
-    }
-    setSelectedCodes((prev) => {
-      const next = new Set(prev);
-      codesToDelete.forEach((code) => next.delete(code));
-      return next;
-    });
+    const itemsToDelete = deletableItems.filter((item) => selectedCodes.has(item.stockCode));
+    if (itemsToDelete.length === 0) return;
+    setPendingDelete({ mode: 'batch', items: itemsToDelete });
   }, [deletableItems, onDeleteStock, selectedCodes]);
+
+  const handleRequestSingleDelete = useCallback((stockCode: string) => {
+    const item = items.find((candidate) => candidate.stockCode === stockCode);
+    if (!item) return;
+    setPendingDelete({ mode: 'single', items: [item] });
+  }, [items]);
+
+  const formatDeleteTarget = useCallback((item: StockBarItemType) => {
+    const code = item.stockCode;
+    const name = item.stockName?.trim();
+    if (!name || name === code) return code;
+    return language === 'en' ? `${name} (${code})` : `${name}（${code}）`;
+  }, [language]);
+
+  const deleteConfirmMessage = useMemo(() => {
+    if (!pendingDelete) return '';
+    if (pendingDelete.mode === 'single') {
+      return t('stockBar.deleteConfirmSingleMessage', {
+        target: formatDeleteTarget(pendingDelete.items[0]),
+      });
+    }
+
+    const previewItems = pendingDelete.items.slice(0, 5);
+    const remainingCount = pendingDelete.items.length - previewItems.length;
+    const remaining = remainingCount > 0
+      ? t('stockBar.deleteConfirmRemaining', { count: remainingCount })
+      : '';
+    return t('stockBar.deleteConfirmBatchMessage', {
+      count: pendingDelete.items.length,
+      targets: previewItems.map(formatDeleteTarget).join(language === 'en' ? ', ' : '、'),
+      remaining,
+    });
+  }, [formatDeleteTarget, language, pendingDelete, t]);
+
+  const handleConfirmDelete = useCallback(async () => {
+    if (!onDeleteStock || !pendingDelete || isConfirmingDelete) return;
+    const codesToDelete = pendingDelete.items.map((item) => item.stockCode);
+    setIsConfirmingDelete(true);
+    try {
+      for (const code of codesToDelete) {
+        await onDeleteStock(code);
+      }
+      setSelectedCodes((prev) => {
+        const next = new Set(prev);
+        codesToDelete.forEach((code) => next.delete(code));
+        return next;
+      });
+      setPendingDelete(null);
+    } finally {
+      setIsConfirmingDelete(false);
+    }
+  }, [isConfirmingDelete, onDeleteStock, pendingDelete]);
+
+  const deleteBusy = isDeleting || isConfirmingDelete;
 
   return (
     <aside className={`glass-card flex min-h-0 flex-1 flex-col overflow-hidden ${className}`}>
@@ -147,7 +201,7 @@ export const StockBar: React.FC<StockBarProps> = ({
                   type="checkbox"
                   checked={allVisibleSelected}
                   onChange={toggleSelectAll}
-                  disabled={isDeleting}
+                  disabled={deleteBusy}
                   aria-label={t('history.selectAllStockAria')}
                   className="h-3.5 w-3.5 cursor-pointer bg-transparent accent-primary focus:ring-primary/30 disabled:opacity-50"
                 />
@@ -156,12 +210,12 @@ export const StockBar: React.FC<StockBarProps> = ({
               <Button
                 variant="danger-subtle"
                 size="xsm"
-                onClick={() => void handleDeleteSelected()}
-                disabled={selectedCount === 0 || isDeleting}
-                isLoading={isDeleting}
+                onClick={handleRequestDeleteSelected}
+                disabled={selectedCount === 0 || deleteBusy}
+                isLoading={deleteBusy}
                 className="disabled:!border-transparent disabled:!bg-transparent"
               >
-                {isDeleting ? t('common.deleting') : t('common.delete')}
+                {deleteBusy ? t('common.deleting') : t('common.delete')}
               </Button>
             </div>
           )}
@@ -205,7 +259,7 @@ export const StockBar: React.FC<StockBarProps> = ({
                         type="checkbox"
                         checked={isChecked}
                         onChange={() => toggleCode(code)}
-                        disabled={isDeleting}
+                        disabled={deleteBusy}
                         className="h-3.5 w-3.5 cursor-pointer rounded border-subtle-hover bg-transparent accent-primary focus:ring-primary/30 disabled:opacity-50"
                       />
                     </div>
@@ -214,8 +268,8 @@ export const StockBar: React.FC<StockBarProps> = ({
                     item={item}
                     isViewing={isSelected}
                     onClick={onItemClick}
-                    onDelete={onDeleteStock}
-                    isDeleting={isDeleting}
+                    onDelete={onDeleteStock ? handleRequestSingleDelete : undefined}
+                    isDeleting={deleteBusy}
                     isMarketReview={isMarket}
                   />
                 </div>
@@ -224,6 +278,18 @@ export const StockBar: React.FC<StockBarProps> = ({
           </div>
         )}
       </ScrollArea>
+
+      <ConfirmDialog
+        isOpen={pendingDelete !== null}
+        title={t('stockBar.deleteConfirmTitle')}
+        message={deleteConfirmMessage}
+        confirmText={t('stockBar.confirmDelete')}
+        confirmDisabled={deleteBusy}
+        cancelDisabled={deleteBusy}
+        isDanger
+        onConfirm={() => void handleConfirmDelete()}
+        onCancel={() => setPendingDelete(null)}
+      />
     </aside>
   );
 };

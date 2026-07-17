@@ -451,6 +451,10 @@ describe('HomePage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '删除 大盘复盘 历史记录' }));
 
+    expect(screen.getByText('确认删除“大盘复盘（MARKET）”的全部历史记录吗？删除后不可恢复。')).toBeInTheDocument();
+    expect(historyApi.deleteByCode).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '确认删除' }));
+
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: /MARKET/ })).not.toBeInTheDocument();
     });
