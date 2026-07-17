@@ -3,7 +3,7 @@
   "name": "searxng-cost-routing",
   "title": "自建 SearXNG 分层搜索降本",
   "description": "为 A 股与 A 股 ETF 增加自建 SearXNG 优先、Anspire 付费兜底的分层搜索路由，并补齐私有 Docker 部署、预算上限、审计边界和验收方案。",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": null,
   "scope": "backend,docker,web-config,docs",
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "zhangjianyong",
   "assignee": "zhangjianyong",
   "createdAt": "2026-07-17",
-  "completedAt": null,
+  "completedAt": "2026-07-17",
   "branch": null,
   "base_branch": "main",
   "worktree_path": null,
@@ -38,6 +38,6 @@
     "docs/full-guide_EN.md",
     "AGENTS.md"
   ],
-  "notes": "",
+  "notes": "原自建 SearXNG 分层路由方案已被子任务 07-17-searxng-contamination-guard 的停用方案取代，不再继续原验收路径；子任务已完成在线验证并归档。用户已于 2026-07-17 确认本父任务按已替代状态归档提交。",
   "meta": {}
 }
