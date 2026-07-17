@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [改进] 大盘复盘新闻搜索由每市场 3 次合并为 1 次，非 ETF 标准 Anspire 分析由五维请求合并为两组，并通过跨实例可信缓存与 singleflight 消除 ETF/个股短期重复调用。
 - [改进] Web 用量分析的搜索调用来源、维度和操作码值在中文界面显示为可读中文标签。
 - [改进] 停用并移除仓库内置私有 SearXNG 服务、自动启动联动、专用成本路由与 Anspire 日预算，公共 SearXNG 实例改为默认关闭。
 - [改进] ETF 综合情报改为 Anspire 近 3 天事件与近 30 天分析两组查询，冷启动每只最多 2 次物理请求，并加入 15 分钟/6 小时可信结果缓存。

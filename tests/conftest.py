@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import os
+import sys
 import time
 import threading
 from collections.abc import Awaitable, Callable
@@ -27,6 +28,9 @@ T = TypeVar("T")
 @pytest.fixture(autouse=True)
 def _restore_process_state_between_tests():
     """Keep dotenv-backed runtime state from leaking across test modules."""
+    search_module = sys.modules.get("src.search_service")
+    if search_module is not None:
+        search_module.SearchService._reset_intel_group_state_for_tests()
     original_environ = os.environ.copy()
     try:
         yield
@@ -37,6 +41,9 @@ def _restore_process_state_between_tests():
 
         auth._auth_enabled = None
         auth._session_secret = None
+        search_module = sys.modules.get("src.search_service")
+        if search_module is not None:
+            search_module.SearchService._reset_intel_group_state_for_tests()
 
 _original_call_soon_threadsafe = asyncio.BaseEventLoop.call_soon_threadsafe
 

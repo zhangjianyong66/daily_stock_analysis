@@ -365,7 +365,7 @@ daily_stock_analysis/
 | `NEWS_MAX_AGE_DAYS` | 新闻最大时效（天），搜索时限制结果在近期内 | 默认 `3` |
 | `BIAS_THRESHOLD` | 乖离率阈值（%），超过提示不追高；强势趋势股自动放宽到 1.5 倍 | 默认 `5.0` |
 
-> 行为说明：搜索服务与社交舆情服务为可选增强链路，失败不会阻塞技术面主流程。ETF 综合情报在配置 Anspire 时按时间尺度合并为最多两次物理请求：近 3 天事件与近 30 天分析，各 `top_k=18`；任一组失败不 fallback 到 SearXNG。结果必须通过产品/底层身份、日期、垃圾页和确定性分流准入，全部为空时不生成报告文本、不注入 `news_context`、不写 `news_intel`。公共 SearXNG 实例默认关闭。
+> 行为说明：搜索服务与社交舆情服务为可选增强链路，失败不会阻塞技术面主流程。单市场大盘复盘把三个主题合为一次搜索（逻辑上限 6、Provider `top_k=12`）。配置 Anspire 时，ETF 仍按近 3 天事件与近 30 天分析执行最多两次物理请求；非 ETF 标准分析按市场保留原五维，并合为近期事件与 180 天分析两次请求，各 `top_k=18`（A 股保留公告维度，海外保留行业维度）。ETF 组失败不 fallback；普通股票只有物理失败的组使用既有非 Anspire Provider 降级，成功空结果不追加请求。可信结果通过进程级跨实例缓存和 singleflight 复用，事件 TTL 15 分钟、分析 TTL 6 小时；缓存命中不计物理调用。Agent 六维工具链保持原逐维行为。结果仍须通过身份、日期、垃圾页和确定性分流准入，全部为空时不生成报告文本、不注入 `news_context`、不写 `news_intel`。公共 SearXNG 实例默认关闭。
 
 ### 新闻检索可解释排序（Issue #1356）
 
@@ -1615,7 +1615,7 @@ FastAPI 提供 RESTful API 服务，支持配置管理和触发分析。
 > 说明：`GET /api/v1/history/{record_id}/diagnostics` 支持历史记录主键 ID 或 `query_id`，返回 `normal/degraded/failed/unknown` 摘要、关键链路组件和可复制的脱敏 `copy_text`；旧报告缺少诊断快照时返回 `unknown`，不影响报告读取。
 > 说明：`GET /api/v1/history` 的列表摘要可按 `stock_code` 分页查询同一股票历史，并返回趋势判断、分析摘要、模型名与分析时价格/涨跌幅等可选字段；旧记录缺少快照字段时返回空值。Web 报告页的“历史趋势”抽屉复用该接口加载同股历史。
 > 说明：`GET /api/v1/usage/dashboard` 复用 `llm_usage` 审计表，不新增配置项或数据库迁移。接口仅返回已落库的调用次数、Prompt/Completion/Total Token 聚合、模型维度用量和最近调用记录，不推导模型上下文窗口或 provider 元数据。
-> 搜索调用审计说明：`search_api_calls` 按每次真实外部 HTTP 请求记一条，包括自动重试、备用 Key、供应商 fallback 和 SearXNG 多实例尝试；缓存命中、数据库读取、本地过滤、正文补抓和公共实例目录刷新不计数。ETF Anspire 缓存命中不产生伪造调用记录。新表由 SQLAlchemy 启动时自动创建，不回填旧文本日志。
+> 搜索调用审计说明：`search_api_calls` 按每次真实外部 HTTP 请求记一条，包括自动重试、备用 Key、供应商 fallback 和 SearXNG 多实例尝试；缓存命中、singleflight 等待者、数据库读取、本地过滤、正文补抓和公共实例目录刷新不计数。大盘综合搜索健康路径为 1 条，ETF 冷启动最多 2 条，非 ETF 标准 Anspire 分析健康路径最多 2 条；失败后的真实 fallback 另行逐次记录。新表由 SQLAlchemy 启动时自动创建，不回填旧文本日志。
 > 搜索快照安全边界：完整业务查询和供应商响应会先递归脱敏，再以明文 JSON 永久保存在本地数据库中，不做应用层加密。请求上限 256 KiB、响应上限 2 MiB；超限记录截断预览、完整脱敏内容原始大小和 SHA-256。数据库文件持有者仍可读取查询与搜索结果，应按敏感业务数据保护数据库和备份。
 > Key/查询核账指纹复用数据目录中的 `.llm_usage_hmac_secret` 做 domain-separated HMAC；原始 Key、Authorization、Cookie、Token、签名和 Webhook 不会进入数据库快照、公开汇总、导出、通知或普通日志。审计写入失败不会阻断搜索，但 Web 会显示审计缺口。
 > 说明（Issue #1520）：列表中的模型名展示字段仅来源于历史快照中的 `model_used`，仅用于历史回溯展示，不影响运行时模型模型路由（`litellm_model`、`llm_model_list`）、Provider、Base URL 与配置迁移/清理语义。回退方式为回退本次提交，现网历史查询/抽屉/接口链路兼容性保持不变。

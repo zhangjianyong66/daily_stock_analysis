@@ -5,8 +5,10 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from src.core.market_profile import CN_PROFILE
 from src.core.market_strategy import get_market_strategy_blueprint
 from src.market_analyzer import MarketAnalyzer, MarketOverview
+from src.search_service import SearchResponse, SearchService
 
 
 class TestMarketStrategyBlueprint(unittest.TestCase):
@@ -197,6 +199,41 @@ class TestMarketAnalyzerStrategyPrompt(unittest.TestCase):
             purpose="market_review:hk"
         )
         self.assertEqual(overview.up_count, 3)
+
+    def test_market_news_combines_profile_queries_into_one_request(self):
+        analyzer = MarketAnalyzer.__new__(MarketAnalyzer)
+        analyzer.config = SimpleNamespace(report_language="zh")
+        analyzer.region = "cn"
+        analyzer.profile = CN_PROFILE
+        analyzer.search_service = MagicMock()
+        analyzer.search_service.search_stock_news.return_value = SearchResponse(
+            query="combined",
+            results=[],
+            provider="Anspire",
+            success=True,
+        )
+
+        self.assertEqual(analyzer.search_market_news(), [])
+
+        analyzer.search_service.search_stock_news.assert_called_once_with(
+            stock_code="market",
+            stock_name="大盘",
+            max_results=6,
+            focus_keywords=["A股", "大盘", "复盘", "股市", "行情", "分析", "市场", "热点", "板块"],
+            call_source="market_review",
+        )
+        self.assertEqual(SearchService._provider_request_size(6), 12)
+
+    def test_market_news_combined_request_failure_does_not_retry(self):
+        analyzer = MarketAnalyzer.__new__(MarketAnalyzer)
+        analyzer.config = SimpleNamespace(report_language="zh")
+        analyzer.region = "cn"
+        analyzer.profile = CN_PROFILE
+        analyzer.search_service = MagicMock()
+        analyzer.search_service.search_stock_news.side_effect = RuntimeError("provider failed")
+
+        self.assertEqual(analyzer.search_market_news(), [])
+        analyzer.search_service.search_stock_news.assert_called_once()
 
 
 if __name__ == "__main__":

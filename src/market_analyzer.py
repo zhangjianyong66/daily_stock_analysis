@@ -606,8 +606,15 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         
         all_news = []
 
-        # 按 region 使用不同的新闻搜索词
-        search_queries = self.profile.news_queries
+        # 按 profile 顺序合并意图，单次请求覆盖复盘、行情分析和热点主题。
+        focus_keywords = list(
+            dict.fromkeys(
+                keyword
+                for query in self.profile.news_queries
+                for keyword in query.split()
+                if keyword
+            )
+        )
         review_language = self._get_review_language()
         market_names = {
             "cn": "大盘" if review_language == "zh" else "A-share market",
@@ -622,21 +629,20 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             
             # 根据 region 设置搜索上下文名称，避免美股搜索被解读为 A 股语境
             market_name = market_names.get(self.region, "大盘")
-            for query in search_queries:
-                response = self.search_service.search_stock_news(
-                    stock_code="market",
-                    stock_name=market_name,
-                    max_results=3,
-                    focus_keywords=query.split(),
-                    call_source="market_review",
+            response = self.search_service.search_stock_news(
+                stock_code="market",
+                stock_name=market_name,
+                max_results=6,
+                focus_keywords=focus_keywords,
+                call_source="market_review",
+            )
+            if response and response.results:
+                all_news.extend(response.results)
+                logger.info(
+                    "[大盘] %s action=search_market_news status=query_success count=%d",
+                    self._log_context(),
+                    len(response.results),
                 )
-                if response and response.results:
-                    all_news.extend(response.results)
-                    logger.info(
-                        "[大盘] %s action=search_market_news status=query_success count=%d",
-                        self._log_context(),
-                        len(response.results),
-                    )
             
             logger.info(
                 "[大盘] %s action=search_market_news status=success count=%d",

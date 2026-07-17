@@ -52,6 +52,16 @@ from src.services.etf_search_intelligence import (
     resolve_etf_profile,
     target_dimension,
 )
+from src.services.stock_search_intelligence import (
+    ANALYSIS_GROUP as STOCK_ANALYSIS_GROUP,
+    FRESH_GROUP as STOCK_FRESH_GROUP,
+    STOCK_INTEL_TEMPLATE_VERSION,
+    StockSearchDimension,
+    build_stock_group_query,
+    classify_stock_evidence,
+    dimensions_for_group as stock_dimensions_for_group,
+    enabled_stock_dimensions,
+)
 from src.schemas.search_usage import (
     SearchAuditContext,
     current_search_audit_context,
@@ -2303,10 +2313,14 @@ class SearchService:
         "{name} {code} performance volume",
     ]
     NEWS_OVERSAMPLE_FACTOR = 2
-    NEWS_OVERSAMPLE_MAX = 10
+    NEWS_OVERSAMPLE_MAX = 12
     FUTURE_TOLERANCE_DAYS = 1
     ANALYTICAL_INTEL_LOOKBACK_DAYS = 180
     ANALYTICAL_INTEL_DIMENSIONS = {"market_analysis", "earnings"}
+    _INTEL_GROUP_CACHE_MAX = 500
+    _intel_group_cache: Dict[str, Tuple[float, Dict[str, SearchResponse]]] = {}
+    _intel_group_inflight: Dict[str, threading.Event] = {}
+    _intel_group_cache_lock = threading.RLock()
     _CHINESE_TEXT_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
     _US_STOCK_RE = re.compile(r"^[A-Za-z]{1,5}(\.[A-Za-z])?$")
     _DIRECT_NEWS_CATEGORY = "direct_company_news"
@@ -2533,9 +2547,6 @@ class SearchService:
         self._cache_inflight: Dict[str, threading.Event] = {}
         # Default cache TTL in seconds (10 minutes)
         self._cache_ttl: int = 600
-        # ETF comprehensive-intel cache stores only admitted, immutable group results.
-        self._etf_intel_cache: Dict[str, Tuple[float, Dict[str, SearchResponse]]] = {}
-        self._etf_intel_cache_lock = threading.RLock()
         logger.info(
             "新闻时效策略已启用: profile=%s, profile_days=%s, NEWS_MAX_AGE_DAYS=%s, effective_window=%s",
             self.news_strategy_profile,
@@ -4221,7 +4232,7 @@ class SearchService:
             (
                 "etf-intel",
                 ETF_PROFILE_TEMPLATE_VERSION,
-                stock_code,
+                (stock_code or "").strip().upper(),
                 profile_fingerprint,
                 group_name,
                 str(days),
@@ -4230,20 +4241,66 @@ class SearchService:
             )
         )
 
-    def _get_etf_intel_cache(self, key: str) -> Optional[Dict[str, SearchResponse]]:
+    @classmethod
+    def _reset_intel_group_state_for_tests(cls) -> None:
+        """Clear process-shared intelligence state between isolated tests."""
+        with cls._intel_group_cache_lock:
+            for event in cls._intel_group_inflight.values():
+                event.set()
+            cls._intel_group_cache.clear()
+            cls._intel_group_inflight.clear()
+
+    @classmethod
+    def _get_intel_group_cache(cls, key: str) -> Optional[Dict[str, SearchResponse]]:
         now = time.time()
-        with self._etf_intel_cache_lock:
-            cached = self._etf_intel_cache.get(key)
+        with cls._intel_group_cache_lock:
+            cached = cls._intel_group_cache.get(key)
             if cached is None:
                 return None
             expires_at, results = cached
             if expires_at <= now:
-                self._etf_intel_cache.pop(key, None)
+                cls._intel_group_cache.pop(key, None)
                 return None
             return deepcopy(results)
 
-    def _put_etf_intel_cache(
-        self,
+    @classmethod
+    def _reserve_intel_group_fill(
+        cls,
+        key: str,
+    ) -> Tuple[Optional[Dict[str, SearchResponse]], bool, Optional[threading.Event]]:
+        with cls._intel_group_cache_lock:
+            cached = cls._get_intel_group_cache(key)
+            if cached is not None:
+                return cached, False, None
+            event = cls._intel_group_inflight.get(key)
+            if event is None:
+                event = threading.Event()
+                cls._intel_group_inflight[key] = event
+                return None, True, event
+            return None, False, event
+
+    @classmethod
+    def _release_intel_group_fill(cls, key: str, event: threading.Event) -> None:
+        with cls._intel_group_cache_lock:
+            current = cls._intel_group_inflight.get(key)
+            if current is event:
+                cls._intel_group_inflight.pop(key, None)
+                event.set()
+
+    @classmethod
+    def _wait_for_intel_group(
+        cls,
+        key: str,
+        event: threading.Event,
+        *,
+        timeout_seconds: float = 30.0,
+    ) -> Optional[Dict[str, SearchResponse]]:
+        event.wait(timeout=max(0.1, float(timeout_seconds)))
+        return cls._get_intel_group_cache(key)
+
+    @classmethod
+    def _put_intel_group_cache(
+        cls,
         key: str,
         results: Dict[str, SearchResponse],
         *,
@@ -4251,11 +4308,58 @@ class SearchService:
     ) -> None:
         if not any(response.results for response in results.values()):
             return
-        with self._etf_intel_cache_lock:
-            if len(self._etf_intel_cache) >= 500:
-                oldest_key = min(self._etf_intel_cache, key=lambda item: self._etf_intel_cache[item][0])
-                self._etf_intel_cache.pop(oldest_key, None)
-            self._etf_intel_cache[key] = (time.time() + ttl_seconds, deepcopy(results))
+        with cls._intel_group_cache_lock:
+            now = time.time()
+            expired = [
+                cached_key
+                for cached_key, (expires_at, _) in cls._intel_group_cache.items()
+                if expires_at <= now
+            ]
+            for cached_key in expired:
+                cls._intel_group_cache.pop(cached_key, None)
+            if len(cls._intel_group_cache) >= cls._INTEL_GROUP_CACHE_MAX:
+                oldest_key = min(
+                    cls._intel_group_cache,
+                    key=lambda item: cls._intel_group_cache[item][0],
+                )
+                cls._intel_group_cache.pop(oldest_key, None)
+            cls._intel_group_cache[key] = (now + ttl_seconds, deepcopy(results))
+
+    @classmethod
+    def _merge_intel_group_results(
+        cls,
+        combined: Dict[str, SearchResponse],
+        incoming: Dict[str, SearchResponse],
+    ) -> None:
+        seen_urls = {
+            cls._canonical_intel_url(item.url) or (item.url or "").strip()
+            for response in combined.values()
+            for item in response.results
+            if item.url
+        }
+        for dimension, response in incoming.items():
+            unique_items: List[SearchResult] = []
+            for item in response.results:
+                url_key = cls._canonical_intel_url(item.url) or (item.url or "").strip()
+                if not url_key or url_key in seen_urls:
+                    continue
+                seen_urls.add(url_key)
+                unique_items.append(item)
+            if not unique_items:
+                continue
+
+            existing = combined.get(dimension)
+            if existing is None:
+                combined[dimension] = SearchResponse(
+                    query=response.query,
+                    results=unique_items[:3],
+                    provider=response.provider,
+                    success=response.success,
+                    error_message=response.error_message,
+                    search_time=response.search_time,
+                )
+                continue
+            existing.results = (existing.results + unique_items)[:3]
 
     def _admit_etf_group_results(
         self,
@@ -4381,9 +4485,9 @@ class SearchService:
                 dimensions=dimensions,
                 market_language=profile.market_language,
             )
-            cached = self._get_etf_intel_cache(cache_key)
+            cached, fill_owner, fill_event = self._reserve_intel_group_fill(cache_key)
             if cached is not None:
-                combined.update(cached)
+                self._merge_intel_group_results(combined, cached)
                 self._record_news_search_run(
                     provider="Anspire",
                     operation="search_comprehensive_intel_cache",
@@ -4396,61 +4500,82 @@ class SearchService:
                 )
                 continue
 
-            query = build_group_query(
-                profile,
-                group_name=group_name,
-                dimensions=dimensions,
-            )
-            started_at = time.monotonic()
-            record_provider_run_started(
-                data_type="news_search",
-                provider="Anspire",
-                operation="search_comprehensive_intel",
-                route_source="anspire_etf_batch",
-                physical_source="Anspire",
-            )
-            response = self._call_provider_with_audit(
-                provider,
-                query,
-                business_search_id=business_search_id,
-                call_source=call_source,
-                operation="search_comprehensive_intel",
-                provider_attempt=provider_attempt,
-                stock_code=stock_code,
-                stock_name=stock_name,
-                dimension=group_name,
-                lookback_days=days,
-                max_results=GROUP_TOP_K,
-                days=days,
-                timeout=10.0,
-                retry_enabled=False,
-            )
-            admitted = self._admit_etf_group_results(
-                response,
-                profile=profile,
-                group_name=group_name,
-                days=days,
-                dimensions=dimensions,
-            )
-            trusted_count = sum(len(value.results) for value in admitted.values())
-            self._record_news_search_run(
-                provider="Anspire",
-                operation="search_comprehensive_intel",
-                success=bool(admitted),
-                latency_ms=self._elapsed_ms(started_at),
-                record_count=trusted_count,
-                error_type=(
-                    None
-                    if admitted
-                    else "no_trusted_data" if response.success else "provider_failed"
-                ),
-                error_message=None if admitted else (response.error_message or "no_trusted_data"),
-                route_source="anspire_etf_batch",
-                physical_source="Anspire",
-            )
-            if admitted:
-                self._put_etf_intel_cache(cache_key, admitted, ttl_seconds=ttl_seconds)
-                combined.update(admitted)
+            if not fill_owner and fill_event is not None:
+                cached = self._wait_for_intel_group(cache_key, fill_event)
+                if cached is not None:
+                    self._merge_intel_group_results(combined, cached)
+                    self._record_news_search_run(
+                        provider="Anspire",
+                        operation="search_comprehensive_intel_cache_wait",
+                        success=True,
+                        latency_ms=0,
+                        record_count=sum(len(value.results) for value in cached.values()),
+                        cache_hit=True,
+                        route_source="anspire_etf_batch",
+                        physical_source="Anspire",
+                    )
+                continue
+
+            if fill_event is None:
+                continue
+            try:
+                query = build_group_query(
+                    profile,
+                    group_name=group_name,
+                    dimensions=dimensions,
+                )
+                started_at = time.monotonic()
+                record_provider_run_started(
+                    data_type="news_search",
+                    provider="Anspire",
+                    operation="search_comprehensive_intel",
+                    route_source="anspire_etf_batch",
+                    physical_source="Anspire",
+                )
+                response = self._call_provider_with_audit(
+                    provider,
+                    query,
+                    business_search_id=business_search_id,
+                    call_source=call_source,
+                    operation="search_comprehensive_intel",
+                    provider_attempt=provider_attempt,
+                    stock_code=stock_code,
+                    stock_name=stock_name,
+                    dimension=group_name,
+                    lookback_days=days,
+                    max_results=GROUP_TOP_K,
+                    days=days,
+                    timeout=10.0,
+                    retry_enabled=False,
+                )
+                admitted = self._admit_etf_group_results(
+                    response,
+                    profile=profile,
+                    group_name=group_name,
+                    days=days,
+                    dimensions=dimensions,
+                )
+                trusted_count = sum(len(value.results) for value in admitted.values())
+                self._record_news_search_run(
+                    provider="Anspire",
+                    operation="search_comprehensive_intel",
+                    success=bool(admitted),
+                    latency_ms=self._elapsed_ms(started_at),
+                    record_count=trusted_count,
+                    error_type=(
+                        None
+                        if admitted
+                        else "no_trusted_data" if response.success else "provider_failed"
+                    ),
+                    error_message=None if admitted else (response.error_message or "no_trusted_data"),
+                    route_source="anspire_etf_batch",
+                    physical_source="Anspire",
+                )
+                if admitted:
+                    self._put_intel_group_cache(cache_key, admitted, ttl_seconds=ttl_seconds)
+                    self._merge_intel_group_results(combined, admitted)
+            finally:
+                self._release_intel_group_fill(cache_key, fill_event)
 
         if not combined:
             logger.info(
@@ -4458,6 +4583,382 @@ class SearchService:
                 stock_code,
                 profile.kind,
             )
+        return combined
+
+    @staticmethod
+    def _stock_intel_cache_key(
+        *,
+        stock_code: str,
+        stock_name: str,
+        group_name: str,
+        days: int,
+        dimensions: Tuple[str, ...],
+        market_language: str,
+    ) -> str:
+        normalized_code = (stock_code or "").strip().upper()
+        normalized_name = " ".join((stock_name or "").split()).lower()
+        return "|".join(
+            (
+                "stock-intel",
+                STOCK_INTEL_TEMPLATE_VERSION,
+                normalized_code,
+                normalized_name,
+                group_name,
+                str(days),
+                market_language,
+                ",".join(dimensions),
+            )
+        )
+
+    def _admit_stock_group_results(
+        self,
+        response: SearchResponse,
+        *,
+        stock_code: str,
+        stock_name: str,
+        group_name: str,
+        days: int,
+        dimensions: Tuple[str, ...],
+    ) -> Dict[str, SearchResponse]:
+        if not response.success or not response.results:
+            return {}
+
+        if group_name == STOCK_FRESH_GROUP:
+            filtered = self._filter_news_response(
+                response,
+                search_days=days,
+                max_results=GROUP_TOP_K,
+                log_scope=f"{stock_code}:{response.provider}:{group_name}",
+            )
+        else:
+            filtered = self._filter_news_response(
+                response,
+                search_days=days,
+                max_results=GROUP_TOP_K,
+                keep_unknown=True,
+                log_scope=f"{stock_code}:{response.provider}:{group_name}",
+            )
+        ranked = self._rank_news_response(
+            filtered,
+            stock_code=stock_code,
+            stock_name=stock_name,
+            prefer_chinese=self._should_prefer_chinese_news(stock_code, stock_name),
+            max_results=GROUP_TOP_K,
+            log_scope=f"{stock_code}:{response.provider}:{group_name}:rank",
+        )
+        ranked = self._filter_ranked_news_for_context(
+            ranked,
+            log_scope=f"{stock_code}:{response.provider}:{group_name}:admission",
+        )
+
+        admitted: Dict[str, List[SearchResult]] = {}
+        seen_urls: set[str] = set()
+        for item in ranked.results:
+            if item.relevance_category != self._DIRECT_NEWS_CATEGORY:
+                continue
+            canonical_url = self._canonical_intel_url(item.url)
+            if not canonical_url or canonical_url in seen_urls:
+                continue
+            dimension = classify_stock_evidence(
+                group_name=group_name,
+                dimensions=dimensions,
+                title=item.title or "",
+                snippet=item.snippet or "",
+            )
+            if dimension is None:
+                continue
+            admitted.setdefault(dimension, []).append(
+                SearchResult(
+                    title=(item.title or "").strip(),
+                    snippet=(item.snippet or "").strip(),
+                    url=canonical_url,
+                    source=(item.source or "").strip(),
+                    published_date=item.published_date,
+                    relevance_score=item.relevance_score,
+                    relevance_category=item.relevance_category,
+                    relevance_reasons=list(item.relevance_reasons or []),
+                )
+            )
+            seen_urls.add(canonical_url)
+
+        results: Dict[str, SearchResponse] = {}
+        for dimension in dimensions:
+            items = admitted.get(dimension, [])[:3]
+            if items:
+                results[dimension] = SearchResponse(
+                    query=response.query,
+                    results=items,
+                    provider=response.provider,
+                    success=True,
+                    search_time=response.search_time,
+                )
+        return results
+
+    def _process_intel_dimension_response(
+        self,
+        response: SearchResponse,
+        *,
+        stock_code: str,
+        stock_name: str,
+        provider_name: str,
+        dimension_name: str,
+        strict_freshness: bool,
+        analytical: bool,
+        search_days: int,
+        provider_max_results: int,
+        target_results: int = 3,
+    ) -> SearchResponse:
+        log_scope = f"{stock_code}:{provider_name}:{dimension_name}"
+        if strict_freshness:
+            filtered = self._filter_news_response(
+                response,
+                search_days=search_days,
+                max_results=provider_max_results,
+                log_scope=log_scope,
+            )
+        elif analytical:
+            filtered = self._filter_news_response(
+                response,
+                search_days=self.ANALYTICAL_INTEL_LOOKBACK_DAYS,
+                max_results=provider_max_results,
+                keep_unknown=True,
+                log_scope=log_scope,
+            )
+        else:
+            filtered = self._normalize_and_limit_response(
+                response,
+                max_results=provider_max_results,
+            )
+        filtered = self._rank_news_response(
+            filtered,
+            stock_code=stock_code,
+            stock_name=stock_name,
+            prefer_chinese=self._should_prefer_chinese_news(stock_code, stock_name),
+            max_results=provider_max_results,
+            log_scope=f"{log_scope}:rank",
+        )
+        filtered = self._filter_ranked_news_for_context(
+            filtered,
+            log_scope=f"{log_scope}:admission",
+        )
+        return self._limit_search_response(filtered, max_results=target_results)
+
+    def _search_stock_dimensions_with_legacy_providers(
+        self,
+        *,
+        stock_code: str,
+        stock_name: str,
+        dimensions: Tuple[StockSearchDimension, ...],
+        business_search_id: str,
+        call_source: str,
+        provider_attempt_start: int,
+    ) -> Dict[str, SearchResponse]:
+        available_providers = [
+            provider
+            for provider in self._providers
+            if provider is not self._anspire_provider and provider.is_available
+        ]
+        if not available_providers:
+            return {}
+
+        results: Dict[str, SearchResponse] = {}
+        search_days = self._effective_news_window_days()
+        provider_max_results = self._provider_request_size(3)
+        for offset, dimension in enumerate(dimensions):
+            provider = available_providers[offset % len(available_providers)]
+            request_days = (
+                self.ANALYTICAL_INTEL_LOOKBACK_DAYS
+                if dimension.group_name == STOCK_ANALYSIS_GROUP
+                else search_days
+            )
+            search_kwargs: Dict[str, Any] = {}
+            if isinstance(provider, TavilySearchProvider) and dimension.tavily_topic:
+                search_kwargs["topic"] = dimension.tavily_topic
+            response = self._call_provider_with_audit(
+                provider,
+                dimension.query,
+                business_search_id=business_search_id,
+                call_source=call_source,
+                operation="search_comprehensive_intel",
+                provider_attempt=provider_attempt_start + offset,
+                stock_code=stock_code,
+                stock_name=stock_name,
+                dimension=dimension.name,
+                lookback_days=request_days,
+                max_results=provider_max_results,
+                days=request_days,
+                **search_kwargs,
+            )
+            results[dimension.name] = self._process_intel_dimension_response(
+                response,
+                stock_code=stock_code,
+                stock_name=stock_name,
+                provider_name=provider.name,
+                dimension_name=dimension.name,
+                strict_freshness=dimension.strict_freshness,
+                analytical=dimension.group_name == STOCK_ANALYSIS_GROUP,
+                search_days=search_days,
+                provider_max_results=provider_max_results,
+            )
+            time.sleep(0.5)
+        return results
+
+    def _search_stock_comprehensive_with_anspire(
+        self,
+        *,
+        stock_code: str,
+        stock_name: str,
+        max_searches: int,
+        call_source: str,
+    ) -> Dict[str, SearchResponse]:
+        provider = self._anspire_provider
+        if provider is None or not provider.is_available:
+            return {}
+
+        is_foreign = self._is_foreign_stock(stock_code)
+        enabled_dimensions = enabled_stock_dimensions(
+            stock_code,
+            stock_name,
+            foreign=is_foreign,
+            max_searches=max_searches,
+        )
+        if not enabled_dimensions:
+            return {}
+
+        business_search_id = SearchAuditContext(call_source=call_source).business_search_id
+        combined: Dict[str, SearchResponse] = {}
+        market_language = "en" if is_foreign else "zh-CN"
+        group_settings = (
+            (STOCK_FRESH_GROUP, self._effective_news_window_days(), 15 * 60),
+            (STOCK_ANALYSIS_GROUP, self.ANALYTICAL_INTEL_LOOKBACK_DAYS, 6 * 60 * 60),
+        )
+
+        for provider_attempt, (group_name, days, ttl_seconds) in enumerate(group_settings, 1):
+            group_dimensions = stock_dimensions_for_group(enabled_dimensions, group_name)
+            if not group_dimensions:
+                continue
+            dimension_names = tuple(dimension.name for dimension in group_dimensions)
+            cache_key = self._stock_intel_cache_key(
+                stock_code=stock_code,
+                stock_name=stock_name,
+                group_name=group_name,
+                days=days,
+                dimensions=dimension_names,
+                market_language=market_language,
+            )
+            cached, fill_owner, fill_event = self._reserve_intel_group_fill(cache_key)
+            if cached is not None:
+                self._merge_intel_group_results(combined, cached)
+                self._record_news_search_run(
+                    provider="Anspire",
+                    operation="search_comprehensive_intel_cache",
+                    success=True,
+                    latency_ms=0,
+                    record_count=sum(len(value.results) for value in cached.values()),
+                    cache_hit=True,
+                    route_source="anspire_stock_batch",
+                    physical_source="Anspire",
+                )
+                continue
+            if not fill_owner and fill_event is not None:
+                cached = self._wait_for_intel_group(cache_key, fill_event)
+                if cached is not None:
+                    self._merge_intel_group_results(combined, cached)
+                    self._record_news_search_run(
+                        provider="Anspire",
+                        operation="search_comprehensive_intel_cache_wait",
+                        success=True,
+                        latency_ms=0,
+                        record_count=sum(len(value.results) for value in cached.values()),
+                        cache_hit=True,
+                        route_source="anspire_stock_batch",
+                        physical_source="Anspire",
+                    )
+                continue
+            if fill_event is None:
+                continue
+
+            try:
+                query = build_stock_group_query(
+                    stock_code,
+                    stock_name,
+                    foreign=is_foreign,
+                    group_name=group_name,
+                    dimensions=group_dimensions,
+                )
+                started_at = time.monotonic()
+                record_provider_run_started(
+                    data_type="news_search",
+                    provider="Anspire",
+                    operation="search_comprehensive_intel",
+                    route_source="anspire_stock_batch",
+                    physical_source="Anspire",
+                )
+                try:
+                    response = self._call_provider_with_audit(
+                        provider,
+                        query,
+                        business_search_id=business_search_id,
+                        call_source=call_source,
+                        operation="search_comprehensive_intel",
+                        provider_attempt=provider_attempt,
+                        stock_code=stock_code,
+                        stock_name=stock_name,
+                        dimension=group_name,
+                        lookback_days=days,
+                        max_results=GROUP_TOP_K,
+                        days=days,
+                        timeout=10.0,
+                        retry_enabled=False,
+                    )
+                except Exception as exc:
+                    response = SearchResponse(
+                        query=query,
+                        results=[],
+                        provider="Anspire",
+                        success=False,
+                        error_message=str(exc),
+                    )
+                admitted = self._admit_stock_group_results(
+                    response,
+                    stock_code=stock_code,
+                    stock_name=stock_name,
+                    group_name=group_name,
+                    days=days,
+                    dimensions=dimension_names,
+                )
+                trusted_count = sum(len(value.results) for value in admitted.values())
+                self._record_news_search_run(
+                    provider="Anspire",
+                    operation="search_comprehensive_intel",
+                    success=bool(admitted),
+                    latency_ms=self._elapsed_ms(started_at),
+                    record_count=trusted_count,
+                    error_type=(
+                        None
+                        if admitted
+                        else "no_trusted_data" if response.success else "provider_failed"
+                    ),
+                    error_message=None if admitted else (response.error_message or "no_trusted_data"),
+                    route_source="anspire_stock_batch",
+                    physical_source="Anspire",
+                )
+                if admitted:
+                    self._put_intel_group_cache(cache_key, admitted, ttl_seconds=ttl_seconds)
+                    self._merge_intel_group_results(combined, admitted)
+                elif not response.success:
+                    fallback = self._search_stock_dimensions_with_legacy_providers(
+                        stock_code=stock_code,
+                        stock_name=stock_name,
+                        dimensions=group_dimensions,
+                        business_search_id=business_search_id,
+                        call_source=call_source,
+                        provider_attempt_start=provider_attempt + 1,
+                    )
+                    self._merge_intel_group_results(combined, fallback)
+            finally:
+                self._release_intel_group_fill(cache_key, fill_event)
+
         return combined
 
     def search_comprehensive_intel(
@@ -4494,6 +4995,19 @@ class SearchService:
 
         if is_etf_target and self._anspire_provider is not None:
             return self._search_etf_comprehensive_with_anspire(
+                stock_code=stock_code,
+                stock_name=stock_name,
+                max_searches=max_searches,
+                call_source=call_source,
+            )
+
+        if (
+            not is_etf_target
+            and call_source == "analysis"
+            and self._anspire_provider is not None
+            and self._anspire_provider.is_available
+        ):
+            return self._search_stock_comprehensive_with_anspire(
                 stock_code=stock_code,
                 stock_name=stock_name,
                 max_searches=max_searches,
@@ -4673,41 +5187,17 @@ class SearchService:
                     days=request_days,
                     **search_kwargs,
             )
-            if dim['strict_freshness']:
-                filtered_response = self._filter_news_response(
-                    response,
-                    search_days=search_days,
-                    max_results=provider_max_results,
-                    log_scope=f"{stock_code}:{provider.name}:{dim['name']}",
-                )
-            elif dim['name'] in self.ANALYTICAL_INTEL_DIMENSIONS:
-                filtered_response = self._filter_news_response(
-                    response,
-                    search_days=self.ANALYTICAL_INTEL_LOOKBACK_DAYS,
-                    max_results=provider_max_results,
-                    keep_unknown=True,
-                    log_scope=f"{stock_code}:{provider.name}:{dim['name']}",
-                )
-            else:
-                filtered_response = self._normalize_and_limit_response(
-                    response,
-                    max_results=provider_max_results,
-                )
-            filtered_response = self._rank_news_response(
-                filtered_response,
+            filtered_response = self._process_intel_dimension_response(
+                response,
                 stock_code=stock_code,
                 stock_name=stock_name,
-                prefer_chinese=self._should_prefer_chinese_news(stock_code, stock_name),
-                max_results=provider_max_results,
-                log_scope=f"{stock_code}:{provider.name}:{dim['name']}:rank",
-            )
-            filtered_response = self._filter_ranked_news_for_context(
-                filtered_response,
-                log_scope=f"{stock_code}:{provider.name}:{dim['name']}:admission",
-            )
-            filtered_response = self._limit_search_response(
-                filtered_response,
-                max_results=target_per_dimension,
+                provider_name=provider.name,
+                dimension_name=dim['name'],
+                strict_freshness=dim['strict_freshness'],
+                analytical=dim['name'] in self.ANALYTICAL_INTEL_DIMENSIONS,
+                search_days=search_days,
+                provider_max_results=provider_max_results,
+                target_results=target_per_dimension,
             )
             results[dim['name']] = filtered_response
             search_count += 1

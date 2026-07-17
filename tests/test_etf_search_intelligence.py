@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 
+import threading
+import time
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
@@ -167,6 +169,64 @@ def test_etf_cache_refreshes_fresh_group_only_after_fifteen_minutes() -> None:
     assert third
     assert provider.search.call_count == 3
     assert provider.search.call_args.kwargs["days"] == 3
+
+
+def test_etf_cache_is_shared_across_search_service_instances() -> None:
+    first = _service()
+    second = _service()
+    first_provider = first._anspire_provider
+    second_provider = second._anspire_provider
+    assert first_provider is not None and second_provider is not None
+    first_provider.search = MagicMock(
+        side_effect=[
+            _response("fresh", [_item("证券行业政策催化景气上行", url_suffix="shared-fresh")]),
+            _response("analysis", [_item("证券行业估值与景气机构观点", url_suffix="shared-analysis")]),
+        ]
+    )
+    second_provider.search = MagicMock()
+
+    first_results = first.search_comprehensive_intel("512880", "证券ETF国泰", max_searches=6)
+    second_results = second.search_comprehensive_intel("512880", "证券ETF国泰", max_searches=6)
+
+    assert first_results and second_results
+    assert first_provider.search.call_count == 2
+    second_provider.search.assert_not_called()
+
+
+def test_etf_concurrent_cross_instance_cold_start_uses_one_owner_per_group() -> None:
+    first = _service()
+    second = _service()
+    call_count = 0
+    call_lock = threading.Lock()
+
+    def search(_query, *, days, **_kwargs):
+        nonlocal call_count
+        with call_lock:
+            call_count += 1
+        time.sleep(0.05)
+        if days == 3:
+            return _response("fresh", [_item("证券行业政策催化景气上行", url_suffix="owner-fresh")])
+        return _response("analysis", [_item("证券行业估值与景气机构观点", url_suffix="owner-analysis")])
+
+    assert first._anspire_provider is not None and second._anspire_provider is not None
+    first._anspire_provider.search = MagicMock(side_effect=search)
+    second._anspire_provider.search = MagicMock(side_effect=search)
+    barrier = threading.Barrier(2)
+    results: list[dict[str, SearchResponse]] = []
+
+    def worker(service: SearchService) -> None:
+        barrier.wait(timeout=1)
+        results.append(service.search_comprehensive_intel("512880", "证券ETF国泰", max_searches=6))
+
+    threads = [threading.Thread(target=worker, args=(service,)) for service in (first, second)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=3)
+
+    assert len(results) == 2
+    assert all(result for result in results)
+    assert call_count == 2
 
 
 def test_etf_unknown_or_expired_dates_and_ambiguous_underlying_are_rejected() -> None:

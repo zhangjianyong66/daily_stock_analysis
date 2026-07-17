@@ -146,17 +146,19 @@ npm run build
 - 搜索汇总沿用现有可选认证边界；完整出入参、复制、CSV 和单条 JSON 下载必须 `ADMIN_AUTH_ENABLED=true` 且管理员已登录，没有桌面端例外。
 - 搜索审计目标回归：`python3 -m pytest tests/test_search_usage_storage.py tests/test_search_usage_service.py tests/test_search_usage_api.py tests/test_anspire_search.py tests/test_search_tavily_provider.py tests/test_search_serpapi_provider.py tests/test_search_searxng.py -q`。
 
-### ETF Anspire 综合搜索与防污染
+### Anspire 综合搜索、共享缓存与防污染
 
 - 仓库不再内置或自动启动私有 SearXNG：Compose 无 `searxng` 服务，`scripts/docker-up.sh` 不读取搜索路由或附加 profile。通用 SearXNG Provider 兼容入口仍保留，但公共实例默认 `SEARXNG_PUBLIC_INSTANCES_ENABLED=false`。
+- 单市场大盘复盘按 `MarketProfile.news_queries` 合并为一次综合搜索，逻辑结果上限 6、Provider 候选上限 12，继续使用 `call_source=market_review`；单次失败或空结果不追加隐式查询。
 - ETF 综合情报在 Anspire 可用时按逻辑维度合并为两组物理请求：`fresh_events` 近 3 个自然日、`analysis` 近 30 个自然日，均固定 `top_k=18` 且不启用 transport retry；Pipeline 的 5 维度和 Agent 的 6 维度最多产生 2 次物理请求。
+- 非 ETF 标准 Pipeline 在 Anspire 可用时按市场保留既有五维并合并为 `fresh_events` 与 `analysis` 两次物理请求：A 股包含最新消息、风险、公告、机构分析和业绩，海外包含最新消息、风险、机构分析、业绩和行业；均固定 `top_k=18` 且不启用 transport retry。Agent 六维工具链保持逐维请求。Anspire 成功但无可信结果时不扇出，物理失败时仅失败组使用既有非 Anspire Provider 降级并逐次审计。
 - ETF profile 使用股票索引中的可信名称/别名和确定性名称规则，覆盖行业/主题、跨境、商品、宽基、策略、债券和 `generic_etf`；无法建立唯一底层映射时关闭 `underlying_driver`。
 - 产品公告、申赎、份额、规模、折溢价和跟踪事实必须直接命中 ETF 产品身份；不含产品身份的内容只有命中已验证底层映射时才能进入独立底层驱动通道，并明确声明不代表 ETF 产品事实。
 - 未知日期、超出 3/30 天窗口、垃圾页、普通涨跌/成交额复述、泛宏观和歧义映射全部拒绝。所有维度为空时不生成空壳报告、不设置 `news_context`、不写 `news_intel`。
-- 可信结果仅使用进程内缓存：事件 TTL 15 分钟、分析 TTL 6 小时；失败、空结果、`no_trusted_data` 和原始响应不缓存，缓存命中不新增 `search_api_calls`。
+- ETF 与普通股票的可信分组结果使用进程级、跨 `SearchService` 实例共享缓存：事件 TTL 15 分钟、分析 TTL 6 小时；同键冷启动通过 singleflight 只允许一个 owner 发请求，等待者复用深拷贝。失败、空结果、`no_trusted_data` 和原始响应不缓存，缓存/等待命中不新增 `search_api_calls`。
 - `news_intel` 使用 `quarantined_at/quarantine_reason/quarantine_batch` 隔离历史污染，读取路径默认排除隔离记录；普通写入遇到已隔离 URL 时不得更新或解除隔离。批次 `searxng-retirement-20260717` 已隔离 206 条 SearXNG 记录，可用 `scripts/quarantine_searxng_news_intel.py rollback --batch searxng-retirement-20260717` 回滚，`search_api_calls` 永久保留。
 - 当前本机 `.env` 已关闭公共 SearXNG，但尚未配置 `ANSPIRE_API_KEYS`；补齐 Key 前主分析会保持 `news_context=None`，不得在聊天、日志或提交中输出真实 Key。
-- 目标回归：`.venv/bin/python -m pytest tests/test_etf_search_intelligence.py tests/test_anspire_search.py tests/test_search_news_freshness.py tests/test_search_tools_persistence.py tests/test_news_intel.py tests/test_search_usage_storage.py tests/test_search_usage_service.py -q`。
+- 目标回归：`.venv/bin/python -m pytest tests/test_market_strategy.py tests/test_market_review.py tests/test_etf_search_intelligence.py tests/test_stock_search_intelligence.py tests/test_anspire_search.py tests/test_search_news_freshness.py tests/test_search_service_concurrency.py tests/test_search_tools_persistence.py tests/test_news_intel.py tests/test_search_usage_storage.py tests/test_search_usage_service.py -q`。
 
 ### 持仓与成交截图导入
 
