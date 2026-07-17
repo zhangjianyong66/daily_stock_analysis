@@ -515,3 +515,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 16: 搜索调用来源与维度中文化
+
+**Date**: 2026-07-17
+**Task**: 搜索调用来源与维度中文化
+**Branch**: `main`
+
+### Summary
+
+为 Web 用量分析搜索调用页面增加来源、维度和操作码值的中文展示，保持筛选原始码值与英文界面不变，并补齐定向测试、Lint 和构建验证。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ed91f43` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
