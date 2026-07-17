@@ -440,3 +440,42 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 14: 首页个股删除二次确认
+
+**Date**: 2026-07-17
+**Task**: 首页个股删除二次确认
+**Branch**: `main`
+
+### Summary
+
+为首页个股栏单条、批量及大盘复盘历史删除增加不可恢复提示和二次确认；相关前端测试、Lint 与生产构建均通过。
+
+### Main Changes
+
+- 复用 ConfirmDialog，统一单条、批量和 MARKET 删除确认交互。
+- 批量确认展示前 5 个目标与剩余数量，取消时保留勾选状态。
+- 补齐中英文文案、变更日志和回归测试。
+- 验证：45 个相关 Vitest 用例通过，ESLint 通过，TypeScript/Vite 生产构建通过。
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cfaa69a` | (see git log) |
+
+### Testing
+
+- `npm run test -- src/components/history/__tests__/StockBar.test.tsx src/components/history/__tests__/StockBarItem.test.tsx src/pages/__tests__/HomePage.test.tsx`：45 项通过。
+- `npm run lint`：通过。
+- `npm run build`：通过。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
