@@ -238,13 +238,6 @@ class StockAnalysisPipeline:
                 minimax_keys=self.config.minimax_api_keys,
                 searxng_base_urls=self.config.searxng_base_urls,
                 searxng_public_instances_enabled=self.config.searxng_public_instances_enabled,
-                search_routing_mode=getattr(self.config, "search_routing_mode", "legacy"),
-                searxng_request_timeout_seconds=getattr(
-                    self.config, "searxng_request_timeout_seconds", 6.0
-                ),
-                search_intel_total_timeout_seconds=getattr(
-                    self.config, "search_intel_total_timeout_seconds", 30.0
-                ),
                 news_max_age_days=self.config.news_max_age_days,
                 news_strategy_profile=getattr(self.config, "news_strategy_profile", "short"),
             )
@@ -565,20 +558,22 @@ class StockAnalysisPipeline:
             if self.search_service is not None and self.search_service.is_available:
                 logger.info(f"{stock_name}({code}) 开始多维度情报搜索...")
 
-                # 使用多维度搜索（最多5次搜索）
+                # max_searches 表示逻辑维度上限；ETF Anspire 路径冷启动最多两次物理请求。
                 intel_results = self.search_service.search_comprehensive_intel(
                     stock_code=code,
                     stock_name=stock_name,
                     max_searches=5
                 )
 
-                # 格式化情报报告
-                if intel_results:
-                    news_context = self.search_service.format_intel_report(intel_results, stock_name)
-                    total_results = sum(
-                        len(r.results) for r in intel_results.values() if r.success
-                    )
-                    news_result_count = total_results
+                total_results = sum(
+                    len(response.results)
+                    for response in intel_results.values()
+                    if response and response.success and response.results
+                )
+                news_result_count = total_results
+                report = self.search_service.format_intel_report(intel_results, stock_name)
+                if report:
+                    news_context = report
                     logger.info(f"{stock_name}({code}) 情报搜索完成: 共 {total_results} 条结果")
                     logger.debug(f"{stock_name}({code}) 情报搜索结果:\n{news_context}")
 
@@ -597,6 +592,8 @@ class StockAnalysisPipeline:
                                 )
                     except Exception as e:
                         logger.warning(f"{stock_name}({code}) 保存新闻情报失败: {e}")
+                else:
+                    logger.info(f"{stock_name}({code}) 情报搜索无可信数据，不注入上下文或持久化")
             else:
                 logger.info(f"{stock_name}({code}) 搜索服务不可用，跳过情报搜索")
 

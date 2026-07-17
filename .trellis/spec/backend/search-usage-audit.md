@@ -31,8 +31,10 @@
 ## 3. Contracts
 
 - 计数真源是物理网络请求。自动重试、备用 Key、provider fallback 和 SearXNG 多实例尝试必须逐次记录；缓存、数据库读取、本地过滤、文章正文补抓和公共实例目录刷新不计数。
-- 自建 SearXNG 是独立基础设施审计边界：DSA → SearXNG 的一次 `/search` 记一条 `search_api_calls`；SearXNG → 百度/Bing/Bing News/DuckDuckGo 的内部扇出只进入 SearXNG 容器日志，不逐条导入 DSA 数据库。
-- `SEARCH_ROUTING_MODE=searxng_first_cn` 时，Anspire 每次物理 transport 前必须先做北京时间自然日持久化预算预留。预留成功才允许发起网络；预算阻断不写 `search_api_calls`，预留存储故障对付费请求 fail-closed，但不得拖垮 SearXNG 或整体分析流程。
+- 显式配置的 SearXNG 是独立审计边界：DSA → SearXNG 的一次 `/search` 记一条 `search_api_calls`；SearXNG 内部引擎扇出不逐条导入 DSA 数据库。仓库不内置或自动启动私有 SearXNG。
+- ETF 综合情报在 Anspire 可用时按 `fresh_events` / `analysis` 两个逻辑组调用，冷启动最多两次物理请求且禁用 transport retry；缓存命中、本地分流和可信准入不计数。任一组失败不得自动调用 SearXNG 或其他 Provider。
+- ETF 底层映射只接受股票索引中 `asset_type=etf` 的受控别名，或代码内白名单认可的无歧义名称词；不能把任意 `xxxETF` 去掉 `ETF` 后的 `xxx` 自动视为可信底层。未知名称必须降为 `generic_etf` 并关闭 `underlying_driver`。
+- `news_intel` 隔离是显式证据决策：`save_news_intel()` 遇到已隔离 URL 时不得更新内容、Provider 或解除隔离。只有 `rollback_news_intel_quarantine(batch=...)` 可以恢复该批次，避免其他 Provider 的 URL 碰撞复活旧污染标题。
 - 上层业务入口应传播 `business_search_id`、`logical_request_id`、`call_source`、股票和搜索维度；缺少上层上下文的 provider 直接调用使用 `call_source=direct`。
 - 物理请求完成后同步写入审计记录，再把供应商结果返回上层。审计写入 fail-open，不得改变搜索成功、失败或 fallback 结果，但必须记录低敏错误并暴露 audit gap。
 - 请求/响应先递归脱敏，再以明文 JSON 永久保存。请求上限 256 KiB，响应上限 2 MiB；超限保存预览、完整脱敏字节数和 SHA-256。
@@ -48,8 +50,11 @@
 | 条件 | 结果 |
 | --- | --- |
 | 缓存命中或仅执行本地过滤 | 不新增 `search_api_calls` |
-| Anspire 每日预算阻断 | 网络调用前停止，不新增 `search_api_calls`，诊断标记 `budget_blocked` |
-| 一次 DSA → 私有 SearXNG 聚合请求 | 新增 1 条 `SearXNG` 调用记录；内部引擎扇出不进入 DSA 表 |
+| ETF Anspire 冷启动综合搜索 | 最多新增 2 条调用记录，维度为 `fresh_events` / `analysis` |
+| ETF 可信缓存命中 | 不新增 `search_api_calls` |
+| 无索引元数据的 `未知ETF` / 非白名单名称 | `generic_etf`，不开放底层驱动 |
+| 新 Provider 结果与已隔离 URL 相同 | 保持原记录隔离且内容不变，不自动恢复 |
+| 一次 DSA → 显式 SearXNG 聚合请求 | 新增 1 条 `SearXNG` 调用记录；内部引擎扇出不进入 DSA 表 |
 | 一次逻辑搜索发生 3 次 transport retry | 新增 3 条物理调用记录 |
 | HTTP/API 成功但结果为 0 | 记录成功调用，不激活故障 |
 | Anspire 401 且正文余额/额度为 0 | `quota_exhausted`，首次激活故障 |
@@ -66,12 +71,14 @@
 
 - Good：同一业务搜索先用主 Key 失败、再用备用 Key 成功，两次请求分别落库，可按 business/logical ID 串联，并在成功后恢复对应瞬时故障。
 - Good：超大响应仍按原 provider 解析并返回业务结果，审计详情显示截断、原始脱敏大小和 SHA-256。
+- Good：宽基、策略或商品 ETF 没有索引元数据，但名称命中受控词时建立保守底层映射；`未知ETF` 保持 `generic_etf`。
 - Base：一次 provider 请求成功且结果非空，写一条成功记录，页面统计物理请求数和业务搜索任务数。
 - Base：供应商正常返回空结果，写成功记录但不产生余额或可用性告警。
 - Bad：只在 `SearchResponse` 返回后记一条，导致 Tenacity retry、备用 Key 和多实例请求漏计。
 - Bad：按 HTTP 401 直接显示“API Key 无效”，忽略正文中的额度耗尽业务语义。
 - Bad：只在前端禁用详情按钮，服务端在管理员认证关闭时仍允许下载快照。
 - Bad：普通日志打印完整 query、请求体或供应商响应，绕开详情 API 权限边界。
+- Bad：对所有 ETF 直接执行 `name.removesuffix("ETF")` 并开启底层驱动，或用后续 URL 碰撞自动清除历史隔离标记。
 
 ## 6. Tests Required
 
@@ -80,6 +87,8 @@
 - 脱敏测试断言：嵌套对象、列表、URL 参数、请求头、响应头和错误文本均不含测试凭据；当前 API Key 被正文回显时也会替换。
 - 截断测试断言：请求 256 KiB、响应 2 MiB 边界，以及 preview、size、SHA-256 字段。
 - 持久化测试断言：旧数据库启动自动建表；同步写入发生在业务返回前；写入失败 fail-open 且 audit gap 可见。
+- ETF 准入测试断言：索引别名和受控名称规则可建立映射；任意/未知名称降为 `generic_etf`；普通价格涨跌复述和仅 URL 命中产品代码的内容拒绝。
+- 隔离测试断言：默认读取排除隔离记录；同 URL 的其他 Provider 写入不能修改或恢复隔离记录；只有显式批次 rollback 恢复可见。
 - 故障测试断言：立即故障、10 分钟连续 3 次、24 小时通知冷却、成功恢复、配置移除恢复和一次恢复通知。
 - API 测试断言：筛选、北京时间范围、分页、CSV 一致性，以及敏感端点 403/401/200。
 - Web 测试断言：LLM/Search 双 Tab、详情权限禁用、筛选分页、下载、启动/焦点/60 秒故障轮询和 session dismissal。
@@ -94,7 +103,7 @@ python3 -m pytest \
   tests/test_search_tavily_provider.py \
   tests/test_search_serpapi_provider.py \
   tests/test_search_searxng.py \
-  tests/test_search_paid_budget.py -q
+  tests/test_etf_search_intelligence.py -q
 ```
 
 ## 7. Wrong vs Correct
@@ -123,3 +132,21 @@ return parse_provider_response(response)
 ```
 
 SDK 无法直接暴露每次网络请求时，应注入 `AuditedRequestsSession` 或复用 SDK 参数构造后通过统一审计 transport 发送；不能用逻辑层补记替代物理请求观察。
+
+### Wrong：从任意 ETF 名称猜底层并自动恢复隔离
+
+```python
+underlying_terms = (stock_name.removesuffix("ETF"),)
+existing.quarantined_at = None  # 仅因另一个 Provider 返回相同 URL
+```
+
+### Correct：受控映射与显式恢复
+
+```python
+underlying_terms = trusted_index_aliases or controlled_name_rule_terms(stock_name)
+if not underlying_terms:
+    profile = "generic_etf"
+
+if existing.quarantined_at is not None:
+    return  # 仅 rollback_news_intel_quarantine(batch=...) 可以恢复
+```

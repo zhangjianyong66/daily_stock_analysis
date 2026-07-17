@@ -10,8 +10,6 @@ TARGET="${2:-server}"
 DEFAULT_DOCKER_BUILD_PROXY="http://127.0.0.1:10808"
 DEFAULT_DEBIAN_APT_MIRROR="https://mirrors.tuna.tsinghua.edu.cn/debian"
 DEFAULT_DEBIAN_SECURITY_APT_MIRROR="https://mirrors.tuna.tsinghua.edu.cn/debian-security"
-COMPOSE_PROFILE_ARGS=()
-STARTUP_SERVICES=""
 
 usage() {
   cat <<'EOF'
@@ -52,10 +50,6 @@ usage() {
   DOCKER_BUILD_NETWORK      覆盖 Docker build 网络模式，默认 host
   DEBIAN_APT_MIRROR         覆盖 Docker build 阶段 Debian 主源，默认清华 HTTPS 镜像
   DEBIAN_SECURITY_APT_MIRROR 覆盖 Docker build 阶段 Debian security 源，默认清华 HTTPS 镜像
-
-服务联动:
-  当 ENV_FILE 中 SEARCH_ROUTING_MODE=searxng_first_cn 时，build-up、up/start、restart
-  会自动启用 searxng profile，并在目标服务之外同时启动私有 SearXNG。
 EOF
 }
 
@@ -125,75 +119,11 @@ resolve_services() {
   esac
 }
 
-read_env_value() {
-  local key="$1" value
-
-  value="$(
-    awk -v key="$key" '
-      {
-        line = $0
-        sub(/^[[:space:]]+/, "", line)
-        sub(/^export[[:space:]]+/, "", line)
-        separator = index(line, "=")
-        if (separator == 0) {
-          next
-        }
-        candidate = substr(line, 1, separator - 1)
-        sub(/[[:space:]]+$/, "", candidate)
-        if (candidate == key) {
-          value = substr(line, separator + 1)
-        }
-      }
-      END { print value }
-    ' "$ENV_FILE"
-  )"
-
-  value="${value#"${value%%[![:space:]]*}"}"
-  value="${value%"${value##*[![:space:]]}"}"
-  case "$value" in
-    \"*\")
-      value="${value#\"}"
-      value="${value%\"}"
-      ;;
-    \'*\')
-      value="${value#\'}"
-      value="${value%\'}"
-      ;;
-    *)
-      value="${value%%[[:space:]]#*}"
-      value="${value%"${value##*[![:space:]]}"}"
-      ;;
-  esac
-
-  printf '%s' "$value"
-}
-
-configure_optional_services() {
-  local services="$1"
-  local routing_mode
-
-  COMPOSE_PROFILE_ARGS=()
-  STARTUP_SERVICES="$services"
-  routing_mode="$(read_env_value SEARCH_ROUTING_MODE)"
-
-  if [[ "$routing_mode" != "searxng_first_cn" ]]; then
-    return
-  fi
-
-  COMPOSE_PROFILE_ARGS=(--profile searxng)
-  case "$ACTION" in
-    build-up|up|start|restart)
-      STARTUP_SERVICES="$services searxng"
-      info "检测到 SEARCH_ROUTING_MODE=searxng_first_cn，将同时启动私有 SearXNG"
-      ;;
-  esac
-}
-
 run_compose() {
   local compose="$1"
   shift
 
-  $compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" "${COMPOSE_PROFILE_ARGS[@]}" "$@"
+  $compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" "$@"
 }
 
 has_local_proxy() {
@@ -281,20 +211,19 @@ main() {
   docker_bin="$(docker_cmd)"
   compose="$(compose_cmd "$docker_bin")"
   services="$(resolve_services)"
-  configure_optional_services "$services"
   prepare_build_env
 
   case "$ACTION" in
     build-up)
       info "构建服务: $services"
       run_compose "$compose" build $services
-      info "启动服务: $STARTUP_SERVICES"
-      run_compose "$compose" up -d $STARTUP_SERVICES
+      info "启动服务: $services"
+      run_compose "$compose" up -d $services
       run_compose "$compose" ps
       ;;
     up|start)
-      info "启动服务: $STARTUP_SERVICES"
-      run_compose "$compose" up -d $STARTUP_SERVICES
+      info "启动服务: $services"
+      run_compose "$compose" up -d $services
       run_compose "$compose" ps
       ;;
     build)
@@ -304,8 +233,8 @@ main() {
     restart)
       info "构建服务: $services"
       run_compose "$compose" build $services
-      info "强制重建并启动服务: $STARTUP_SERVICES"
-      run_compose "$compose" up -d --force-recreate $STARTUP_SERVICES
+      info "强制重建并启动服务: $services"
+      run_compose "$compose" up -d --force-recreate $services
       run_compose "$compose" ps
       ;;
     stop)

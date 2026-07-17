@@ -399,21 +399,6 @@ const settingsHelpZhCN: SettingsHelpMap = {
     impact: ['影响无商业搜索 Key 时的新闻和网页搜索兜底能力。'],
     notes: ['公共实例稳定性不可控，生产环境建议使用自建或可信实例。'],
   },
-  'settings.data_source.search_cost_routing': {
-    title: 'SearXNG 分层搜索降本',
-    summary: '让 A 股与 A 股 ETF 优先使用私有 SearXNG，只有结果不合格时才调用 Anspire。',
-    usage: '先配置私有 SEARXNG_BASE_URLS 与 SEARXNG_SECRET，再把 SEARCH_ROUTING_MODE 设为 searxng_first_cn。',
-    valueNotes: [
-      'SEARXNG_REQUEST_TIMEOUT_SECONDS 默认 6 秒，单股情报搜索总预算默认 30 秒。',
-      'Anspire 默认 30 次预警、50 次硬上限，按北京时间自然日和真实物理请求预留。',
-      '0 可关闭对应总预算或 Anspire 阈值；预警阈值必须小于硬上限。',
-    ],
-    impact: ['仅影响 A 股与 A 股 ETF；其他市场以及 legacy 模式保持原 Provider 语义。'],
-    notes: [
-      '低成本模式只接受显式私有 SearXNG 地址，不会把公共实例当主路由。',
-      '预算阻断不会伪造搜索调用审计记录；已有 SearXNG 结果仍会保留。',
-    ],
-  },
   'settings.data_source.ENABLE_CHIP_DISTRIBUTION': {
     title: '筹码分布分析',
     summary: '控制是否启用筹码分布相关分析。',
@@ -1613,21 +1598,6 @@ const settingsHelpEnUS: SettingsHelpMap = {
     valueNotes: ['When public discovery is disabled, only these instances are used.'],
     impact: ['Affects fallback web search when commercial search keys are absent.'],
     notes: ['For production, prefer self-hosted or trusted instances over public ones.'],
-  },
-  'settings.data_source.search_cost_routing': {
-    title: 'Tiered SearXNG Cost Routing',
-    summary: 'Routes A-shares and A-share ETFs through private SearXNG first, using Anspire only when admitted results are insufficient.',
-    usage: 'Configure private SEARXNG_BASE_URLS and SEARXNG_SECRET, then set SEARCH_ROUTING_MODE=searxng_first_cn.',
-    valueNotes: [
-      'The private SearXNG request timeout defaults to 6 seconds and the per-stock intelligence budget defaults to 30 seconds.',
-      'Anspire defaults to a 30-request warning and a 50-request hard limit per Beijing calendar day, counted by physical reservations.',
-      'Set an individual threshold or total deadline to 0 to disable it; the warning threshold must stay below the hard limit.',
-    ],
-    impact: ['Only A-shares and A-share ETFs are affected; other markets and legacy mode keep existing provider semantics.'],
-    notes: [
-      'Cost routing requires explicit private SearXNG URLs and never promotes public instances to the primary tier.',
-      'Budget blocks do not create fake physical-call audit rows, and best-effort SearXNG results are retained.',
-    ],
   },
   'settings.data_source.ENABLE_CHIP_DISTRIBUTION': {
     title: 'Chip Distribution',

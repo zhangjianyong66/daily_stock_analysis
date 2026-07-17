@@ -160,12 +160,8 @@ daily_stock_analysis/
 | `BOCHA_API_KEYS` | [博查搜索](https://open.bocha.cn/) Web Search API（中文搜索优化，支持AI摘要，多个key用逗号分隔） | 可选 |
 | `BRAVE_API_KEYS` | [Brave Search](https://brave.com/search/api/) API（隐私优先，美股优化，多个key用逗号分隔） | 可选 |
 | `MINIMAX_API_KEYS` | [MiniMax](https://platform.minimax.io/) Coding Plan Web Search（结构化搜索结果） | 可选 |
-| `SEARXNG_BASE_URLS` | SearXNG 自建实例（无配额兜底，需在 settings.yml 启用 format: json）；留空时默认自动发现公共实例 | 可选 |
-| `SEARXNG_PUBLIC_INSTANCES_ENABLED` | 是否在 `SEARXNG_BASE_URLS` 为空时自动从 `searx.space` 获取公共实例（默认 `true`） | 可选 |
-| `SEARCH_ROUTING_MODE` | `legacy` 保持现有路由；`searxng_first_cn` 让 A 股/A 股 ETF 优先使用显式私有 SearXNG，再按质量回退 Anspire | 默认 `legacy` |
-| `SEARXNG_REQUEST_TIMEOUT_SECONDS` | 低成本模式单次私有 SearXNG 超时；同一实例不在 DSA 侧重试 | 默认 `6` |
-| `SEARCH_INTEL_TOTAL_TIMEOUT_SECONDS` | 单只股票低成本情报搜索总预算；`0` 关闭总 deadline | 默认 `30` |
-| `ANSPIRE_DAILY_WARNING_REQUESTS` / `ANSPIRE_DAILY_HARD_LIMIT_REQUESTS` | 北京时间自然日 Anspire 物理请求预警/硬上限；仅低成本模式启用，`0` 关闭对应阈值 | 默认 `30` / `50` |
+| `SEARXNG_BASE_URLS` | 可选的通用 SearXNG Provider 地址；需自行部署并启用 JSON 输出 | 可选 |
+| `SEARXNG_PUBLIC_INSTANCES_ENABLED` | 是否自动发现公共实例；默认 `false`，交易分析不建议启用 | 可选 |
 | `TUSHARE_TOKEN` | [Tushare Pro](https://tushare.pro/weborder/#/login?reg=834638 ) Token | 可选 |
 | `TICKFLOW_API_KEY` | [TickFlow](https://tickflow.org) API Key；可选，用于 A 股日 K、实时行情、股票列表/名称与大盘复盘增强；失败或权限不足时自动回退。 | 可选 |
 | `LONGBRIDGE_OAUTH_CLIENT_ID` | [Longbridge OpenAPI](https://open.longbridge.com/) OAuth client_id；留空且无 Legacy Access Token 时会兼容使用 `LONGBRIDGE_APP_KEY` | 可选 |
@@ -363,19 +359,13 @@ daily_stock_analysis/
 | `MINIMAX_API_KEYS` | MiniMax Coding Plan Web Search（结构化搜索结果） | 可选 |
 | `SOCIAL_SENTIMENT_API_KEY` | Stock Sentiment API Key（Reddit / X / Polymarket，可选） | 可选 |
 | `SOCIAL_SENTIMENT_API_URL` | Stock Sentiment API 地址（默认 `https://api.adanos.org`） | 可选 |
-| `SEARXNG_BASE_URLS` | SearXNG 自建实例（无配额兜底，需在 settings.yml 启用 format: json）；留空时默认自动发现公共实例 | 可选 |
-| `SEARXNG_PUBLIC_INSTANCES_ENABLED` | 是否在 `SEARXNG_BASE_URLS` 为空时自动从 `searx.space` 获取公共实例（默认 `true`） | 可选 |
-| `SEARXNG_SECRET` | 私有 Docker SearXNG 的高熵密钥；只保存于部署环境，设置页按敏感字段掩码展示 | 可选 |
-| `SEARCH_ROUTING_MODE` | `legacy` 保持现有 Provider 行为；`searxng_first_cn` 对 A 股/A 股 ETF 使用“私有 SearXNG → Anspire” | 默认 `legacy` |
-| `SEARXNG_REQUEST_TIMEOUT_SECONDS` | 单次私有 SearXNG 硬超时；低成本路由不重试同一实例 | 默认 `6` |
-| `SEARCH_INTEL_TOTAL_TIMEOUT_SECONDS` | 单只股票情报搜索总预算；超时后不再发起新请求，`0` 关闭 | 默认 `30` |
-| `ANSPIRE_DAILY_WARNING_REQUESTS` | 北京时间自然日 Anspire 物理请求预警阈值；`0` 关闭 | 默认 `30` |
-| `ANSPIRE_DAILY_HARD_LIMIT_REQUESTS` | 北京时间自然日 Anspire 物理请求硬上限；达到后在网络前阻断，`0` 关闭 | 默认 `50` |
+| `SEARXNG_BASE_URLS` | 可选的通用 SearXNG Provider 地址；需自行部署并启用 JSON 输出 | 可选 |
+| `SEARXNG_PUBLIC_INSTANCES_ENABLED` | 是否自动发现公共实例；默认 `false`，交易分析不建议启用 | 可选 |
 | `NEWS_STRATEGY_PROFILE` | 新闻策略窗口档位：`ultra_short`(1天)/`short`(3天)/`medium`(7天)/`long`(30天)；实际窗口取与 `NEWS_MAX_AGE_DAYS` 的最小值 | 默认 `short` |
 | `NEWS_MAX_AGE_DAYS` | 新闻最大时效（天），搜索时限制结果在近期内 | 默认 `3` |
 | `BIAS_THRESHOLD` | 乖离率阈值（%），超过提示不追高；强势趋势股自动放宽到 1.5 倍 | 默认 `5.0` |
 
-> 行为说明：搜索服务与社交舆情服务为可选增强链路。任一服务初始化失败时，系统会记录 warning 并降级为跳过该服务，仅影响对应环节，不会阻塞技术面主链路和主任务流。`searxng_first_cn` 只接受显式私有地址，不会把公共实例提升为主路由；关键新闻/公告/风险维度需要至少一条直接且及时的结果，机构分析/业绩预期/行业分析有一条合格结果即可，不为补数量调用 Anspire。
+> 行为说明：搜索服务与社交舆情服务为可选增强链路，失败不会阻塞技术面主流程。ETF 综合情报在配置 Anspire 时按时间尺度合并为最多两次物理请求：近 3 天事件与近 30 天分析，各 `top_k=18`；任一组失败不 fallback 到 SearXNG。结果必须通过产品/底层身份、日期、垃圾页和确定性分流准入，全部为空时不生成报告文本、不注入 `news_context`、不写 `news_intel`。公共 SearXNG 实例默认关闭。
 
 ### 新闻检索可解释排序（Issue #1356）
 
@@ -1625,7 +1615,7 @@ FastAPI 提供 RESTful API 服务，支持配置管理和触发分析。
 > 说明：`GET /api/v1/history/{record_id}/diagnostics` 支持历史记录主键 ID 或 `query_id`，返回 `normal/degraded/failed/unknown` 摘要、关键链路组件和可复制的脱敏 `copy_text`；旧报告缺少诊断快照时返回 `unknown`，不影响报告读取。
 > 说明：`GET /api/v1/history` 的列表摘要可按 `stock_code` 分页查询同一股票历史，并返回趋势判断、分析摘要、模型名与分析时价格/涨跌幅等可选字段；旧记录缺少快照字段时返回空值。Web 报告页的“历史趋势”抽屉复用该接口加载同股历史。
 > 说明：`GET /api/v1/usage/dashboard` 复用 `llm_usage` 审计表，不新增配置项或数据库迁移。接口仅返回已落库的调用次数、Prompt/Completion/Total Token 聚合、模型维度用量和最近调用记录，不推导模型上下文窗口或 provider 元数据。
-> 搜索调用审计说明：`search_api_calls` 按每次真实外部 HTTP 请求记一条，包括自动重试、备用 Key、供应商 fallback 和 SearXNG 多实例尝试；缓存命中、数据库读取、本地过滤、正文补抓、预算阻断和公共实例目录刷新不计数。DSA → 私有 SearXNG 记一条聚合服务调用，SearXNG → 百度/Bing/Bing News/DuckDuckGo 的内部扇出由容器日志观察，不逐条写入 DSA 数据库。新表由 SQLAlchemy 启动时自动创建，不回填旧文本日志。
+> 搜索调用审计说明：`search_api_calls` 按每次真实外部 HTTP 请求记一条，包括自动重试、备用 Key、供应商 fallback 和 SearXNG 多实例尝试；缓存命中、数据库读取、本地过滤、正文补抓和公共实例目录刷新不计数。ETF Anspire 缓存命中不产生伪造调用记录。新表由 SQLAlchemy 启动时自动创建，不回填旧文本日志。
 > 搜索快照安全边界：完整业务查询和供应商响应会先递归脱敏，再以明文 JSON 永久保存在本地数据库中，不做应用层加密。请求上限 256 KiB、响应上限 2 MiB；超限记录截断预览、完整脱敏内容原始大小和 SHA-256。数据库文件持有者仍可读取查询与搜索结果，应按敏感业务数据保护数据库和备份。
 > Key/查询核账指纹复用数据目录中的 `.llm_usage_hmac_secret` 做 domain-separated HMAC；原始 Key、Authorization、Cookie、Token、签名和 Webhook 不会进入数据库快照、公开汇总、导出、通知或普通日志。审计写入失败不会阻断搜索，但 Web 会显示审计缺口。
 > 说明（Issue #1520）：列表中的模型名展示字段仅来源于历史快照中的 `model_used`，仅用于历史回溯展示，不影响运行时模型模型路由（`litellm_model`、`llm_model_list`）、Provider、Base URL 与配置迁移/清理语义。回退方式为回退本次提交，现网历史查询/抽屉/接口链路兼容性保持不变。

@@ -14,7 +14,7 @@ import sqlite3
 import tempfile
 import unittest
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
 from sqlalchemy.exc import OperationalError
@@ -22,6 +22,34 @@ from sqlalchemy.exc import OperationalError
 from src.config import Config
 from src.storage import DatabaseManager, NewsIntel
 from src.search_service import SearchResponse, SearchResult
+
+
+def test_legacy_news_intel_table_gets_quarantine_columns(monkeypatch, tmp_path) -> None:
+    db_path = tmp_path / "legacy_news_intel.db"
+    connection = sqlite3.connect(db_path)
+    connection.execute(
+        "CREATE TABLE news_intel ("
+        "id INTEGER PRIMARY KEY, code VARCHAR(10) NOT NULL, "
+        "title VARCHAR(300) NOT NULL, url VARCHAR(1000) NOT NULL)"
+    )
+    connection.commit()
+    connection.close()
+
+    monkeypatch.setenv("DATABASE_PATH", str(db_path))
+    Config.reset_instance()
+    DatabaseManager.reset_instance()
+    try:
+        DatabaseManager.get_instance()
+        connection = sqlite3.connect(db_path)
+        columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(news_intel)").fetchall()
+        }
+        connection.close()
+    finally:
+        DatabaseManager.reset_instance()
+
+    assert {"quarantined_at", "quarantine_reason", "quarantine_batch"} <= columns
 
 
 class NewsIntelStorageTestCase(unittest.TestCase):
@@ -198,6 +226,103 @@ class NewsIntelStorageTestCase(unittest.TestCase):
         with self.db.get_session() as session:
             total = session.query(NewsIntel).count()
         self.assertEqual(total, 1)
+
+    def test_quarantine_hides_searxng_rows_and_can_rollback(self) -> None:
+        searxng_response = SearchResponse(
+            query="证券ETF 新闻",
+            results=[SearchResult(
+                title="旧 SearXNG 结果",
+                snippet="待隔离",
+                url="https://example.com/searxng",
+                source="example.com",
+                published_date=datetime.now().strftime("%Y-%m-%d"),
+            )],
+            provider="SearXNG",
+            success=True,
+        )
+        anspire_response = SearchResponse(
+            query="证券ETF 新闻",
+            results=[SearchResult(
+                title="可信 Anspire 结果",
+                snippet="保留",
+                url="https://example.com/anspire",
+                source="example.com",
+                published_date=datetime.now().strftime("%Y-%m-%d"),
+            )],
+            provider="Anspire",
+            success=True,
+        )
+        context = {"query_id": "task_quarantine"}
+        self.db.save_news_intel("512880", "证券ETF国泰", "latest_news", "q", searxng_response, context)
+        self.db.save_news_intel("512880", "证券ETF国泰", "latest_news", "q", anspire_response, context)
+
+        count = self.db.quarantine_news_intel(
+            provider="SearXNG",
+            before=datetime.now() + timedelta(seconds=1),
+            batch="test-batch",
+            reason="test",
+        )
+        self.assertEqual(count, 1)
+        visible = self.db.get_news_intel_by_query_id("task_quarantine")
+        self.assertEqual([item.provider for item in visible], ["Anspire"])
+        with self.db.get_session() as session:
+            self.assertEqual(session.query(NewsIntel).count(), 2)
+
+        rolled_back = self.db.rollback_news_intel_quarantine(batch="test-batch")
+        self.assertEqual(rolled_back, 1)
+        visible = self.db.get_news_intel_by_query_id("task_quarantine")
+        self.assertEqual({item.provider for item in visible}, {"Anspire", "SearXNG"})
+
+    def test_quarantined_row_cannot_be_rehabilitated_by_url_collision(self) -> None:
+        shared_url = "https://example.com/shared-result"
+        searxng_response = SearchResponse(
+            query="证券ETF 新闻",
+            results=[SearchResult(
+                title="旧污染标题",
+                snippet="旧污染摘要",
+                url=shared_url,
+                source="example.com",
+                published_date=datetime.now().strftime("%Y-%m-%d"),
+            )],
+            provider="SearXNG",
+            success=True,
+        )
+        trusted_response = SearchResponse(
+            query="证券ETF 双查询",
+            results=[SearchResult(
+                title="新可信标题",
+                snippet="新可信摘要",
+                url=shared_url,
+                source="example.com",
+                published_date=datetime.now().strftime("%Y-%m-%d"),
+            )],
+            provider="Anspire",
+            success=True,
+        )
+        self.db.save_news_intel("512880", "证券ETF国泰", "latest_news", "q", searxng_response)
+        self.db.quarantine_news_intel(
+            provider="SearXNG",
+            before=datetime.now() + timedelta(seconds=1),
+            batch="collision-batch",
+            reason="test",
+        )
+
+        self.assertEqual(
+            self.db.save_news_intel(
+                "512880",
+                "证券ETF国泰",
+                "latest_news",
+                "q2",
+                trusted_response,
+            ),
+            0,
+        )
+        self.assertEqual(self.db.get_recent_news("512880"), [])
+        with self.db.get_session() as session:
+            row = session.query(NewsIntel).filter(NewsIntel.url == shared_url).one()
+            self.assertEqual(row.provider, "SearXNG")
+            self.assertEqual(row.title, "旧污染标题")
+            self.assertEqual(row.quarantine_batch, "collision-batch")
 
 
 if __name__ == "__main__":

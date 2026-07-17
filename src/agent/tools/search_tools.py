@@ -145,7 +145,12 @@ def _handle_search_comprehensive_intel(stock_code: str, stock_name: str) -> dict
     service = _get_search_service()
 
     if not service.is_available:
-        return {"error": "No search engine available (no API keys configured)"}
+        return {
+            "status": "no_trusted_data",
+            "reason": "search_unavailable",
+            "report": None,
+            "dimensions": {},
+        }
 
     intel_results = service.search_comprehensive_intel(
         stock_code=stock_code,
@@ -154,16 +159,19 @@ def _handle_search_comprehensive_intel(stock_code: str, stock_name: str) -> dict
         call_source="agent",
     )
 
-    if not intel_results:
-        return {"error": "Comprehensive intel search returned no results"}
-
     # Format into readable report
     report = service.format_intel_report(intel_results, stock_name)
+    if not report:
+        return {
+            "status": "no_trusted_data",
+            "report": None,
+            "dimensions": {},
+        }
 
     # Also return structured data
     dimensions = {}
     for dim_name, response in intel_results.items():
-        if response and response.success:
+        if response and response.success and response.results:
             _persist_news_response(
                 stock_code=stock_code,
                 stock_name=stock_name,

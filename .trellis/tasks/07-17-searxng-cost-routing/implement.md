@@ -4,6 +4,16 @@
 
 ## 当前执行记录
 
+### 2026-07-17 SearXNG 可用性修复
+
+- [x] 修复 SearXNG 容器错误继承宿主机 `127.0.0.1` 代理的问题：运行时优先读取 `SEARXNG_OUTGOING_PROXY`，未设置时继承容器 `.env` 中的 HTTPS/HTTP 代理，并写入 SearXNG `outgoing.proxies`。
+- [x] 低成本路由不再向私有 SearXNG 强制发送 `time_range`；时效窗口继续由 DSA 现有过滤链路执行，避免不支持 time range 的 Bing 被排除。
+- [x] SearXNG HTTP 200 但空结果时保留 `unresponsive_engines` 低敏摘要，区分百度 CAPTCHA、DuckDuckGo 超时和普通空结果。
+- [x] 未配置 `ANSPIRE_API_KEYS` 时不再记录“准备 Anspire fallback”，启动和运行日志明确提示无付费兜底。
+- [x] 增加入口脚本、Compose、Provider 参数、空结果诊断和无 Anspire 路径回归测试。
+- [x] 重建 SearXNG 并完成在线验证：百度处于 `Suspended: CAPTCHA`、DuckDuckGo 处于 `Suspended: access denied`、Bing News 解析失败时，`general` 与 `news` 查询仍由 Bing 各返回 10 条结果。
+- [x] 完整后端门禁通过：`4491 passed` / `4 deselected` / `413 subtests passed`；定向搜索/预算/审计/Docker 回归 `141 passed` / `2 skipped`；Compose、AI 资产、Shell 语法和在线 smoke 通过。
+
 - [x] 完成 A 股/A 股 ETF 的私有 SearXNG → Anspire 分层路由，默认 `legacy` 保持兼容。
 - [x] 完成关键新闻/公告/风险与分析维度的差异化准入、6 秒单次超时和 30 秒单股总预算。
 - [x] 完成 Anspire 北京时间每日 30/50 预警/硬上限，并覆盖线程、进程与重启后的原子持久化预留。

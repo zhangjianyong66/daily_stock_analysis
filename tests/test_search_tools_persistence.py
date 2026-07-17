@@ -95,6 +95,23 @@ class SearchToolsPersistenceTest(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["results_count"], 1)
 
+    def test_comprehensive_no_trusted_data_returns_no_report_and_does_not_persist(self) -> None:
+        service = SimpleNamespace(
+            is_available=True,
+            search_comprehensive_intel=MagicMock(return_value={}),
+            format_intel_report=MagicMock(return_value=""),
+        )
+        db = SimpleNamespace(save_news_intel=MagicMock())
+
+        with patch("src.agent.tools.search_tools._get_search_service", return_value=service), \
+             patch("src.agent.tools.search_tools._get_db", return_value=db):
+            result = _handle_search_comprehensive_intel("512880", "证券ETF国泰")
+
+        self.assertEqual(result["status"], "no_trusted_data")
+        self.assertIsNone(result["report"])
+        self.assertEqual(result["dimensions"], {})
+        db.save_news_intel.assert_not_called()
+
     def test_unavailable_or_failed_search_does_not_persist(self) -> None:
         unavailable = SimpleNamespace(is_available=False)
         db = SimpleNamespace(save_news_intel=MagicMock())

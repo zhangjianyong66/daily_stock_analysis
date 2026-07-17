@@ -42,7 +42,7 @@ def _make_config(**kwargs) -> Config:
         brave_api_keys=[],
         serpapi_keys=[],
         searxng_base_urls=[],
-        searxng_public_instances_enabled=True,
+        searxng_public_instances_enabled=False,
         wechat_webhook_url="https://example.com/webhook",
         feishu_webhook_url=None,
         telegram_bot_token=None,
@@ -685,7 +685,7 @@ class TestValidateStructuredNotification:
         info = [i for i in issues if i.severity == "info"]
         assert any("搜索引擎" in i.message for i in info)
         search_issue = next(i for i in info if "搜索引擎" in i.message)
-        assert search_issue.field == "BOCHA_API_KEYS"
+        assert search_issue.field == "ANSPIRE_API_KEYS"
 
     def test_searxng_configured_no_search_info(self):
         """When searxng_base_urls is configured, no 'unconfigured search engine' info."""
@@ -700,35 +700,6 @@ class TestValidateStructuredNotification:
         issues = cfg.validate_structured()
         info = [i for i in issues if i.severity == "info"]
         assert not any("搜索引擎" in i.message and "未配置" in i.message for i in info)
-
-    def test_searxng_first_cn_without_private_url_warns_and_public_mode_is_not_enough(self):
-        cfg = _make_config(
-            search_routing_mode="searxng_first_cn",
-            searxng_base_urls=[],
-            searxng_public_instances_enabled=True,
-        )
-        issues = cfg.validate_structured()
-
-        assert any(
-            issue.severity == "warning"
-            and issue.field == "SEARXNG_BASE_URLS"
-            and "显式" in issue.message
-            for issue in issues
-        )
-
-    def test_anspire_warning_must_be_lower_than_hard_limit(self):
-        cfg = _make_config(
-            anspire_daily_warning_requests=50,
-            anspire_daily_hard_limit_requests=50,
-        )
-        issues = cfg.validate_structured()
-
-        assert any(
-            issue.severity == "error"
-            and issue.field == "ANSPIRE_DAILY_WARNING_REQUESTS"
-            for issue in issues
-        )
-
 
 # ---------------------------------------------------------------------------
 # Deprecated field migration hints

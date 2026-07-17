@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
 from typing import Dict, Iterable, Optional
@@ -20,8 +21,21 @@ logger = logging.getLogger(__name__)
 _STOCK_INDEX_FILENAME = "stocks.index.json"
 _STOCK_INDEX_CACHE: Dict[str, str] | None = None
 _STOCK_CODE_LOOKUP_CACHE: Dict[str, str] | None = None
+_STOCK_METADATA_CACHE: Dict[str, "StockIndexMetadata"] | None = None
 _REMOTE_INDEX_VALIDITY_CACHE: tuple[Path, float, int, bool] | None = None
 _STOCK_INDEX_CACHE_LOCK = RLock()
+
+
+@dataclass(frozen=True)
+class StockIndexMetadata:
+    """Trusted metadata projected from the generated stock index."""
+
+    canonical_code: str
+    display_code: str
+    name: str
+    aliases: tuple[str, ...]
+    market: str
+    asset_type: str
 
 
 def get_stock_index_candidate_paths() -> tuple[Path, ...]:
@@ -99,6 +113,39 @@ def _build_stock_name_map(raw_items: list) -> Dict[str, str]:
             stock_name_map[key] = str(name_zh).strip()
 
     return stock_name_map
+
+
+def _build_stock_metadata_map(raw_items: list) -> Dict[str, StockIndexMetadata]:
+    metadata_map: Dict[str, StockIndexMetadata] = {}
+    for item in raw_items:
+        if not isinstance(item, list) or len(item) < 8:
+            continue
+
+        canonical_code = str(item[0] or "").strip()
+        display_code = str(item[1] or "").strip()
+        name = str(item[2] or "").strip()
+        aliases = tuple(
+            str(value).strip()
+            for value in (item[5] if isinstance(item[5], list) else [])
+            if str(value or "").strip()
+        )
+        market = str(item[6] or "").strip()
+        asset_type = str(item[7] or "").strip().lower()
+        if not canonical_code or not display_code or not name:
+            continue
+
+        metadata = StockIndexMetadata(
+            canonical_code=canonical_code,
+            display_code=display_code,
+            name=name,
+            aliases=aliases,
+            market=market,
+            asset_type=asset_type,
+        )
+        for key in _build_lookup_keys(canonical_code, display_code):
+            metadata_map[key] = metadata
+
+    return metadata_map
 
 
 def _add_code_lookup(
@@ -281,6 +328,40 @@ def get_index_stock_name(stock_code: str) -> str | None:
     return None
 
 
+def get_stock_index_metadata(stock_code: str) -> StockIndexMetadata | None:
+    """Resolve trusted name/alias/asset metadata for one indexed symbol."""
+    global _STOCK_METADATA_CACHE
+
+    code = str(stock_code or "").strip()
+    if not code:
+        return None
+
+    if _STOCK_METADATA_CACHE is None:
+        with _STOCK_INDEX_CACHE_LOCK:
+            if _STOCK_METADATA_CACHE is None:
+                merged: Dict[str, StockIndexMetadata] = {}
+                remote_path = get_remote_stock_index_cache_path()
+                for index_path in _get_fresh_stock_index_candidates(
+                    get_stock_index_candidate_paths(),
+                    remote_path,
+                ):
+                    try:
+                        raw_items = _load_stock_index_payload(index_path)
+                        if _same_path(index_path, remote_path):
+                            validate_stock_index_payload(raw_items)
+                        for key, value in _build_stock_metadata_map(raw_items).items():
+                            merged.setdefault(key, value)
+                    except (OSError, TypeError, ValueError) as exc:
+                        logger.debug("[股票元数据] 读取股票索引失败 %s: %s", index_path, exc)
+                _STOCK_METADATA_CACHE = merged
+
+    for key in _build_lookup_keys(code, code):
+        metadata = _STOCK_METADATA_CACHE.get(key) if _STOCK_METADATA_CACHE else None
+        if metadata is not None:
+            return metadata
+    return None
+
+
 def resolve_index_stock_code(query: str) -> str | None:
     """Resolve an input code against the stock index pool.
 
@@ -344,10 +425,11 @@ def _resolve_index_stock_code_uncached(query: str) -> str | None:
 
 def clear_stock_index_cache() -> None:
     """Clear the in-process stock index lookup cache."""
-    global _REMOTE_INDEX_VALIDITY_CACHE, _STOCK_INDEX_CACHE, _STOCK_CODE_LOOKUP_CACHE
+    global _REMOTE_INDEX_VALIDITY_CACHE, _STOCK_INDEX_CACHE, _STOCK_CODE_LOOKUP_CACHE, _STOCK_METADATA_CACHE
     with _STOCK_INDEX_CACHE_LOCK:
         _STOCK_INDEX_CACHE = None
         _STOCK_CODE_LOOKUP_CACHE = None
+        _STOCK_METADATA_CACHE = None
         _REMOTE_INDEX_VALIDITY_CACHE = None
 
 

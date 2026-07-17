@@ -15,13 +15,14 @@ import logging
 import re
 import threading
 import time
+from copy import deepcopy
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import List, Dict, Any, Optional, Tuple
 from itertools import cycle
-from urllib.parse import parse_qsl, unquote, urlparse
+from urllib.parse import parse_qsl, unquote, urlencode, urlparse, urlunparse
 import requests
 from newspaper import Article, Config
 from tenacity import (
@@ -33,14 +34,24 @@ from tenacity import (
 )
 
 from data_provider.us_index_mapping import is_us_index_code
-from data_provider.base import normalize_stock_code
 from src.config import (
     NEWS_STRATEGY_WINDOWS,
     normalize_news_strategy_profile,
     resolve_news_window_days,
 )
-from src.core.trading_calendar import get_market_for_stock
 from src.services.run_diagnostics import record_provider_run, record_provider_run_started
+from src.services.etf_search_intelligence import (
+    ANALYSIS_DAYS,
+    ETF_PROFILE_TEMPLATE_VERSION,
+    FRESH_EVENTS_DAYS,
+    GROUP_TOP_K,
+    build_group_query,
+    classify_etf_evidence,
+    enabled_etf_dimensions,
+    group_dimensions,
+    resolve_etf_profile,
+    target_dimension,
+)
 from src.schemas.search_usage import (
     SearchAuditContext,
     current_search_audit_context,
@@ -2431,10 +2442,7 @@ class SearchService:
         serpapi_keys: Optional[List[str]] = None,
         minimax_keys: Optional[List[str]] = None,
         searxng_base_urls: Optional[List[str]] = None,
-        searxng_public_instances_enabled: bool = True,
-        search_routing_mode: str = "legacy",
-        searxng_request_timeout_seconds: float = 6.0,
-        search_intel_total_timeout_seconds: float = 30.0,
+        searxng_public_instances_enabled: bool = False,
         news_max_age_days: int = 3,
         news_strategy_profile: str = "short",
     ):
@@ -2450,17 +2458,10 @@ class SearchService:
             minimax_keys: MiniMax API Key 列表
             searxng_base_urls: SearXNG 实例地址列表（自建无配额兜底）
             searxng_public_instances_enabled: 未配置自建实例时，是否自动使用公共 SearXNG 实例
-            search_routing_mode: 搜索路由模式，默认 legacy
-            searxng_request_timeout_seconds: 低成本路由单次私有 SearXNG 超时
-            search_intel_total_timeout_seconds: 单只股票低成本情报搜索总预算
             news_max_age_days: 新闻最大时效（天）
             news_strategy_profile: 新闻窗口策略档位（ultra_short/short/medium/long）
         """
         self._providers: List[BaseSearchProvider] = []
-        self.search_routing_mode = (search_routing_mode or "legacy").strip().lower()
-        self.searxng_request_timeout_seconds = max(0.1, float(searxng_request_timeout_seconds or 6.0))
-        self.search_intel_total_timeout_seconds = max(0.0, float(search_intel_total_timeout_seconds or 0.0))
-        self._private_searxng_provider: Optional[SearXNGSearchProvider] = None
         self._anspire_provider: Optional[AnspireSearchProvider] = None
         self.news_max_age_days = max(1, news_max_age_days)
         raw_profile = (news_strategy_profile or "short").strip().lower()
@@ -2513,7 +2514,6 @@ class SearchService:
         if searxng_provider.is_available:
             self._providers.append(searxng_provider)
             if searxng_base_urls:
-                self._private_searxng_provider = searxng_provider
                 logger.info("已配置 SearXNG 搜索，共 %s 个自建实例", len(searxng_base_urls))
             else:
                 logger.info("已启用 SearXNG 公共实例自动发现模式")
@@ -2524,12 +2524,6 @@ class SearchService:
             self._providers.insert(0, self._anspire_provider)
             logger.info(f"已配置 Anspire Search 搜索，共 {len(anspire_keys)} 个 API Key")
 
-        if self.search_routing_mode == "searxng_first_cn" and self._private_searxng_provider is None:
-            logger.warning(
-                "SEARCH_ROUTING_MODE=searxng_first_cn 但未配置私有 SEARXNG_BASE_URLS，已回退 legacy"
-            )
-            self.search_routing_mode = "legacy"
-            
         if not self._providers:
             logger.warning("未配置任何搜索能力，新闻搜索功能将不可用")
 
@@ -2539,6 +2533,9 @@ class SearchService:
         self._cache_inflight: Dict[str, threading.Event] = {}
         # Default cache TTL in seconds (10 minutes)
         self._cache_ttl: int = 600
+        # ETF comprehensive-intel cache stores only admitted, immutable group results.
+        self._etf_intel_cache: Dict[str, Tuple[float, Dict[str, SearchResponse]]] = {}
+        self._etf_intel_cache_lock = threading.RLock()
         logger.info(
             "新闻时效策略已启用: profile=%s, profile_days=%s, NEWS_MAX_AGE_DAYS=%s, effective_window=%s",
             self.news_strategy_profile,
@@ -3800,251 +3797,6 @@ class SearchService:
         with search_audit_scope(context):
             return provider.search(query, max_results=max_results, days=days, **search_kwargs)
 
-    def _should_use_searxng_first(self, stock_code: str) -> bool:
-        if self.search_routing_mode != "searxng_first_cn" or self._private_searxng_provider is None:
-            return False
-        normalized = normalize_stock_code((stock_code or "").strip())
-        return get_market_for_stock(normalized) == "cn"
-
-    def _new_low_cost_deadline(self) -> Optional[float]:
-        if self.search_intel_total_timeout_seconds <= 0:
-            return None
-        return time.monotonic() + self.search_intel_total_timeout_seconds
-
-    @staticmethod
-    def _remaining_deadline_seconds(deadline: Optional[float]) -> Optional[float]:
-        if deadline is None:
-            return None
-        return max(0.0, deadline - time.monotonic())
-
-    def _prepare_cn_dimension_response(
-        self,
-        response: SearchResponse,
-        *,
-        stock_code: str,
-        stock_name: str,
-        dimension: str,
-        strict_freshness: bool,
-        search_days: int,
-        provider_max_results: int,
-        max_results: int,
-        prefer_chinese: bool,
-    ) -> SearchResponse:
-        if strict_freshness:
-            prepared = self._filter_news_response(
-                response,
-                search_days=search_days,
-                max_results=provider_max_results,
-                log_scope=f"{stock_code}:{response.provider}:{dimension}",
-            )
-        elif dimension in {"market_analysis", "earnings", "industry"}:
-            prepared = self._filter_news_response(
-                response,
-                search_days=self.ANALYTICAL_INTEL_LOOKBACK_DAYS,
-                max_results=provider_max_results,
-                keep_unknown=True,
-                log_scope=f"{stock_code}:{response.provider}:{dimension}",
-            )
-        else:
-            prepared = self._normalize_and_limit_response(
-                response,
-                max_results=provider_max_results,
-            )
-        prepared = self._rank_news_response(
-            prepared,
-            stock_code=stock_code,
-            stock_name=stock_name,
-            prefer_chinese=prefer_chinese,
-            max_results=provider_max_results,
-            log_scope=f"{stock_code}:{response.provider}:{dimension}:rank",
-        )
-        prepared = self._filter_ranked_news_for_context(
-            prepared,
-            log_scope=f"{stock_code}:{response.provider}:{dimension}:admission",
-        )
-        return self._limit_search_response(prepared, max_results=max_results)
-
-    def _is_cn_dimension_acceptable(
-        self,
-        response: SearchResponse,
-        *,
-        strict_freshness: bool,
-        prefer_chinese: bool,
-    ) -> bool:
-        if not response.success or not response.results:
-            return False
-        if not strict_freshness:
-            return True
-        stats = self._news_relevance_stats(response, prefer_chinese=prefer_chinese)
-        return stats["direct_count"] > 0
-
-    @staticmethod
-    def _low_cost_error_type(response: SearchResponse, accepted: bool) -> Optional[str]:
-        if accepted:
-            return None
-        error_text = str(response.error_message or "").lower()
-        if "budget_blocked" in error_text:
-            return "budget_blocked"
-        if "budget_unavailable" in error_text:
-            return "budget_unavailable"
-        if "deadline_exhausted" in error_text:
-            return "deadline_exhausted"
-        return "NoUsableNews"
-
-    def _search_cn_dimension_with_fallback(
-        self,
-        *,
-        query: str,
-        stock_code: str,
-        stock_name: str,
-        dimension: str,
-        operation: str,
-        call_source: str,
-        business_search_id: str,
-        strict_freshness: bool,
-        category: str,
-        search_days: int,
-        provider_max_results: int,
-        max_results: int,
-        deadline: Optional[float],
-    ) -> SearchResponse:
-        prefer_chinese = self._should_prefer_chinese_news(stock_code, stock_name)
-        providers: List[BaseSearchProvider] = []
-        if self._private_searxng_provider is not None:
-            providers.append(self._private_searxng_provider)
-        if self._anspire_provider is not None:
-            providers.append(self._anspire_provider)
-
-        best_response: Optional[SearchResponse] = None
-        had_provider_success = False
-        for provider_attempt, provider in enumerate(providers, 1):
-            remaining = self._remaining_deadline_seconds(deadline)
-            if remaining is not None and remaining <= 0:
-                logger.warning(
-                    "[低成本搜索] %s(%s) 维度=%s 总预算耗尽，停止发起新请求",
-                    stock_name,
-                    stock_code,
-                    dimension,
-                )
-                self._record_news_search_run(
-                    provider=provider.name,
-                    operation=operation,
-                    success=False,
-                    latency_ms=0,
-                    error_type="deadline_exhausted",
-                    error_message="deadline_exhausted: 低成本搜索总预算已耗尽",
-                )
-                break
-
-            search_kwargs: Dict[str, Any] = {}
-            if isinstance(provider, SearXNGSearchProvider):
-                timeout = self.searxng_request_timeout_seconds
-                if remaining is not None:
-                    timeout = min(timeout, remaining)
-                search_kwargs.update(
-                    categories=category,
-                    request_timeout=max(0.1, timeout),
-                    single_instance=True,
-                )
-            elif isinstance(provider, AnspireSearchProvider):
-                timeout = 10.0 if remaining is None else min(10.0, remaining)
-                search_kwargs.update(timeout=max(0.1, timeout), retry_enabled=False)
-
-            started_at = time.monotonic()
-            record_provider_run_started(
-                data_type="news_search",
-                provider=provider.name,
-                operation=operation,
-                route_source="searxng_first_cn",
-                physical_source=provider.name,
-            )
-            response = self._call_provider_with_audit(
-                provider,
-                query,
-                business_search_id=business_search_id,
-                call_source=call_source,
-                operation=operation,
-                provider_attempt=provider_attempt,
-                stock_code=stock_code,
-                stock_name=stock_name,
-                dimension=dimension,
-                lookback_days=search_days,
-                max_results=provider_max_results,
-                days=search_days,
-                **search_kwargs,
-            )
-            had_provider_success = had_provider_success or bool(response.success)
-            prepared = self._prepare_cn_dimension_response(
-                response,
-                stock_code=stock_code,
-                stock_name=stock_name,
-                dimension=dimension,
-                strict_freshness=strict_freshness,
-                search_days=search_days,
-                provider_max_results=provider_max_results,
-                max_results=max_results,
-                prefer_chinese=prefer_chinese,
-            )
-            accepted = self._is_cn_dimension_acceptable(
-                prepared,
-                strict_freshness=strict_freshness,
-                prefer_chinese=prefer_chinese,
-            )
-            self._record_news_search_run(
-                provider=provider.name,
-                operation=operation,
-                success=accepted,
-                latency_ms=self._elapsed_ms(started_at),
-                record_count=len(prepared.results or []),
-                error_type=self._low_cost_error_type(response, accepted),
-                error_message=None if accepted else (response.error_message or "过滤后无有效结果"),
-                fallback_from="SearXNG" if isinstance(provider, AnspireSearchProvider) else None,
-                fallback_to=(
-                    "Anspire"
-                    if isinstance(provider, SearXNGSearchProvider)
-                    and not accepted
-                    and self._anspire_provider is not None
-                    else None
-                ),
-                route_source="searxng_first_cn",
-                physical_source=provider.name,
-                budget_remaining_ms=(
-                    None
-                    if self._remaining_deadline_seconds(deadline) is None
-                    else int(self._remaining_deadline_seconds(deadline) * 1000)
-                ),
-            )
-            if prepared.results and (
-                best_response is None or len(prepared.results) > len(best_response.results)
-            ):
-                best_response = prepared
-            if accepted:
-                logger.info(
-                    "[低成本搜索] 维度=%s 接受 provider=%s 结果=%s",
-                    dimension,
-                    provider.name,
-                    len(prepared.results),
-                )
-                return prepared
-            if isinstance(provider, SearXNGSearchProvider):
-                logger.warning(
-                    "[低成本搜索] 维度=%s SearXNG 未通过准入，准备 Anspire fallback: %s",
-                    dimension,
-                    sanitize_diagnostic_text(response.error_message or "结果不足"),
-                )
-
-        if best_response is not None:
-            return best_response
-        if had_provider_success:
-            return SearchResponse(query=query, results=[], provider="Filtered", success=True)
-        return SearchResponse(
-            query=query,
-            results=[],
-            provider="None",
-            success=False,
-            error_message="低成本搜索链路不可用或预算已阻断",
-        )
-
     def search_stock_news(
         self,
         stock_code: str,
@@ -4157,26 +3909,6 @@ class SearchService:
                 return cached
 
         try:
-            if self._should_use_searxng_first(stock_code):
-                response = self._search_cn_dimension_with_fallback(
-                    query=query,
-                    stock_code=stock_code,
-                    stock_name=stock_name,
-                    dimension="latest_news",
-                    operation="search_stock_news",
-                    call_source=call_source,
-                    business_search_id=business_search_id,
-                    strict_freshness=True,
-                    category="news",
-                    search_days=search_days,
-                    provider_max_results=provider_max_results,
-                    max_results=max_results,
-                    deadline=self._new_low_cost_deadline(),
-                )
-                if response.results:
-                    self._put_cache(cache_key, response)
-                return response
-
             # 依次尝试各个搜索引擎（若过滤后为空，继续尝试下一引擎）
             had_provider_success = False
             best_ranked_response: Optional[SearchResponse] = None
@@ -4412,24 +4144,6 @@ class SearchService:
         
         # 依次尝试各个搜索引擎
         business_search_id = SearchAuditContext(call_source=call_source).business_search_id
-        if self._should_use_searxng_first(stock_code):
-            search_days = self._effective_news_window_days()
-            return self._search_cn_dimension_with_fallback(
-                query=query,
-                stock_code=stock_code,
-                stock_name=stock_name,
-                dimension="events",
-                operation="search_stock_events",
-                call_source=call_source,
-                business_search_id=business_search_id,
-                strict_freshness=True,
-                category="news",
-                search_days=search_days,
-                provider_max_results=self._provider_request_size(5),
-                max_results=5,
-                deadline=self._new_low_cost_deadline(),
-            )
-
         for provider_attempt, provider in enumerate(self._providers, 1):
             if not provider.is_available:
                 continue
@@ -4458,6 +4172,294 @@ class SearchService:
             error_message="事件搜索失败"
         )
     
+    @classmethod
+    def _is_etf_search_target(cls, stock_code: str, stock_name: str) -> bool:
+        code = (stock_code or "").strip().split(".")[0]
+        if code.isdigit() and len(code) == 6 and code.startswith(cls._A_ETF_PREFIXES):
+            return True
+        name_upper = (stock_name or "").upper()
+        return "ETF" in name_upper or "交易型开放式指数基金" in (stock_name or "")
+
+    @staticmethod
+    def _canonical_intel_url(raw_url: str) -> str:
+        try:
+            parsed = urlparse((raw_url or "").strip())
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                return ""
+            query = urlencode(
+                sorted(
+                    (key, value)
+                    for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+                    if not key.lower().startswith("utm_")
+                    and key.lower() not in {"spm", "from", "source", "ref"}
+                )
+            )
+            return urlunparse(
+                (
+                    parsed.scheme.lower(),
+                    parsed.netloc.lower(),
+                    parsed.path.rstrip("/") or "/",
+                    "",
+                    query,
+                    "",
+                )
+            )
+        except Exception:
+            return ""
+
+    def _etf_intel_cache_key(
+        self,
+        *,
+        stock_code: str,
+        profile_fingerprint: str,
+        group_name: str,
+        days: int,
+        dimensions: Tuple[str, ...],
+        market_language: str,
+    ) -> str:
+        return "|".join(
+            (
+                "etf-intel",
+                ETF_PROFILE_TEMPLATE_VERSION,
+                stock_code,
+                profile_fingerprint,
+                group_name,
+                str(days),
+                market_language,
+                ",".join(dimensions),
+            )
+        )
+
+    def _get_etf_intel_cache(self, key: str) -> Optional[Dict[str, SearchResponse]]:
+        now = time.time()
+        with self._etf_intel_cache_lock:
+            cached = self._etf_intel_cache.get(key)
+            if cached is None:
+                return None
+            expires_at, results = cached
+            if expires_at <= now:
+                self._etf_intel_cache.pop(key, None)
+                return None
+            return deepcopy(results)
+
+    def _put_etf_intel_cache(
+        self,
+        key: str,
+        results: Dict[str, SearchResponse],
+        *,
+        ttl_seconds: int,
+    ) -> None:
+        if not any(response.results for response in results.values()):
+            return
+        with self._etf_intel_cache_lock:
+            if len(self._etf_intel_cache) >= 500:
+                oldest_key = min(self._etf_intel_cache, key=lambda item: self._etf_intel_cache[item][0])
+                self._etf_intel_cache.pop(oldest_key, None)
+            self._etf_intel_cache[key] = (time.time() + ttl_seconds, deepcopy(results))
+
+    def _admit_etf_group_results(
+        self,
+        response: SearchResponse,
+        *,
+        profile: Any,
+        group_name: str,
+        days: int,
+        dimensions: Tuple[str, ...],
+    ) -> Dict[str, SearchResponse]:
+        if not response.success or not response.results:
+            return {}
+
+        today = datetime.now().date()
+        earliest = today - timedelta(days=max(0, days - 1))
+        admitted: Dict[str, List[Tuple[int, date, SearchResult]]] = {}
+        seen_urls: set[str] = set()
+
+        for item in response.results:
+            title = (item.title or "").strip()
+            canonical_url = self._canonical_intel_url(item.url)
+            if not title or not canonical_url or canonical_url in seen_urls:
+                continue
+            if self._has_low_quality_news_page_signal(item) or self._has_adult_service_spam_news_page_signal(item):
+                continue
+
+            published = self._normalize_news_publish_date(item.published_date)
+            if published is None or published < earliest or published > today:
+                continue
+
+            decision = classify_etf_evidence(
+                profile=profile,
+                group_name=group_name,
+                title=title,
+                snippet=item.snippet or "",
+                source=item.source or "",
+                url=canonical_url,
+            )
+            if decision is None:
+                continue
+            dimension = target_dimension(decision.category, dimensions)
+            if dimension is None:
+                continue
+
+            reasons = [decision.reason]
+            snippet = (item.snippet or "").strip()
+            relevance_category = "etf_product_fact"
+            if decision.evidence_scope == "underlying":
+                relevance_category = "etf_underlying_driver"
+                reasons.append("仅作为底层资产/主题驱动，不证明 ETF 产品自身发生公告或机制变化")
+                snippet = f"[底层驱动，不代表ETF产品事实] {snippet}".strip()
+            elif decision.category == "flow_scale":
+                reasons.append("份额/规模/资金流仅作确认信号，不单独形成方向性结论")
+
+            admitted.setdefault(dimension, []).append(
+                (
+                    decision.priority,
+                    published,
+                    SearchResult(
+                        title=title,
+                        snippet=snippet,
+                        url=canonical_url,
+                        source=(item.source or "").strip(),
+                        published_date=published.isoformat(),
+                        relevance_score=max(1, 100 - decision.priority * 10),
+                        relevance_category=relevance_category,
+                        relevance_reasons=reasons,
+                    ),
+                )
+            )
+            seen_urls.add(canonical_url)
+
+        results: Dict[str, SearchResponse] = {}
+        for dimension, values in admitted.items():
+            values.sort(key=lambda value: (value[0], -value[1].toordinal()))
+            items = [value[2] for value in values[:3]]
+            if items:
+                results[dimension] = SearchResponse(
+                    query=response.query,
+                    results=items,
+                    provider=response.provider,
+                    success=True,
+                    search_time=response.search_time,
+                )
+        return results
+
+    def _search_etf_comprehensive_with_anspire(
+        self,
+        *,
+        stock_code: str,
+        stock_name: str,
+        max_searches: int,
+        call_source: str,
+    ) -> Dict[str, SearchResponse]:
+        provider = self._anspire_provider
+        if provider is None:
+            return {}
+
+        is_foreign = self._is_foreign_stock(stock_code)
+        enabled_dimensions = enabled_etf_dimensions(foreign=is_foreign, max_searches=max_searches)
+        if not enabled_dimensions:
+            return {}
+
+        profile = resolve_etf_profile(stock_code, stock_name)
+        business_search_id = SearchAuditContext(call_source=call_source).business_search_id
+        combined: Dict[str, SearchResponse] = {}
+
+        for provider_attempt, (group_name, days, ttl_seconds) in enumerate(
+            (
+                ("fresh_events", FRESH_EVENTS_DAYS, 15 * 60),
+                ("analysis", ANALYSIS_DAYS, 6 * 60 * 60),
+            ),
+            1,
+        ):
+            dimensions = group_dimensions(enabled_dimensions, group_name)
+            if not dimensions:
+                continue
+            cache_key = self._etf_intel_cache_key(
+                stock_code=stock_code,
+                profile_fingerprint=profile.fingerprint,
+                group_name=group_name,
+                days=days,
+                dimensions=dimensions,
+                market_language=profile.market_language,
+            )
+            cached = self._get_etf_intel_cache(cache_key)
+            if cached is not None:
+                combined.update(cached)
+                self._record_news_search_run(
+                    provider="Anspire",
+                    operation="search_comprehensive_intel_cache",
+                    success=True,
+                    latency_ms=0,
+                    record_count=sum(len(value.results) for value in cached.values()),
+                    cache_hit=True,
+                    route_source="anspire_etf_batch",
+                    physical_source="Anspire",
+                )
+                continue
+
+            query = build_group_query(
+                profile,
+                group_name=group_name,
+                dimensions=dimensions,
+            )
+            started_at = time.monotonic()
+            record_provider_run_started(
+                data_type="news_search",
+                provider="Anspire",
+                operation="search_comprehensive_intel",
+                route_source="anspire_etf_batch",
+                physical_source="Anspire",
+            )
+            response = self._call_provider_with_audit(
+                provider,
+                query,
+                business_search_id=business_search_id,
+                call_source=call_source,
+                operation="search_comprehensive_intel",
+                provider_attempt=provider_attempt,
+                stock_code=stock_code,
+                stock_name=stock_name,
+                dimension=group_name,
+                lookback_days=days,
+                max_results=GROUP_TOP_K,
+                days=days,
+                timeout=10.0,
+                retry_enabled=False,
+            )
+            admitted = self._admit_etf_group_results(
+                response,
+                profile=profile,
+                group_name=group_name,
+                days=days,
+                dimensions=dimensions,
+            )
+            trusted_count = sum(len(value.results) for value in admitted.values())
+            self._record_news_search_run(
+                provider="Anspire",
+                operation="search_comprehensive_intel",
+                success=bool(admitted),
+                latency_ms=self._elapsed_ms(started_at),
+                record_count=trusted_count,
+                error_type=(
+                    None
+                    if admitted
+                    else "no_trusted_data" if response.success else "provider_failed"
+                ),
+                error_message=None if admitted else (response.error_message or "no_trusted_data"),
+                route_source="anspire_etf_batch",
+                physical_source="Anspire",
+            )
+            if admitted:
+                self._put_etf_intel_cache(cache_key, admitted, ttl_seconds=ttl_seconds)
+                combined.update(admitted)
+
+        if not combined:
+            logger.info(
+                "ETF 综合搜索无可信数据: code=%s profile=%s status=no_trusted_data",
+                stock_code,
+                profile.kind,
+            )
+        return combined
+
     def search_comprehensive_intel(
         self,
         stock_code: str,
@@ -4477,7 +4479,7 @@ class SearchService:
         Args:
             stock_code: 股票代码
             stock_name: 股票名称
-            max_searches: 最大搜索次数
+            max_searches: 启用的逻辑维度上限；ETF Anspire 路径不会按维度逐次请求
             
         Returns:
             {维度名称: SearchResponse} 字典
@@ -4488,6 +4490,15 @@ class SearchService:
 
         is_foreign = self._is_foreign_stock(stock_code)
         is_index_etf = self.is_index_or_etf(stock_code, stock_name)
+        is_etf_target = self._is_etf_search_target(stock_code, stock_name)
+
+        if is_etf_target and self._anspire_provider is not None:
+            return self._search_etf_comprehensive_with_anspire(
+                stock_code=stock_code,
+                stock_name=stock_name,
+                max_searches=max_searches,
+                call_source=call_source,
+            )
 
         if is_foreign:
             search_dimensions = [
@@ -4614,43 +4625,17 @@ class SearchService:
         
         # 轮流使用不同的搜索引擎
         provider_index = 0
-        use_low_cost_routing = self._should_use_searxng_first(stock_code)
-        low_cost_deadline = self._new_low_cost_deadline() if use_low_cost_routing else None
-        
         for dim in search_dimensions:
             if search_count >= max_searches:
                 break
 
-            if use_low_cost_routing:
-                request_days = (
-                    self.ANALYTICAL_INTEL_LOOKBACK_DAYS
-                    if dim['name'] in {"market_analysis", "earnings", "industry"}
-                    else search_days
-                )
-                strict_freshness = dim['name'] in {"latest_news", "announcements", "risk_check"}
-                response = self._search_cn_dimension_with_fallback(
-                    query=dim['query'],
-                    stock_code=stock_code,
-                    stock_name=stock_name,
-                    dimension=dim['name'],
-                    operation="search_comprehensive_intel",
-                    call_source=call_source,
-                    business_search_id=business_search_id,
-                    strict_freshness=strict_freshness,
-                    category="news" if strict_freshness else "general",
-                    search_days=request_days,
-                    provider_max_results=provider_max_results,
-                    max_results=target_per_dimension,
-                    deadline=low_cost_deadline,
-                )
-                results[dim['name']] = response
-                search_count += 1
-                if self._remaining_deadline_seconds(low_cost_deadline) == 0:
-                    break
-                continue
-            
             # 选择搜索引擎（轮流使用）
-            available_providers = [p for p in self._providers if p.is_available]
+            available_providers = [
+                provider
+                for provider in self._providers
+                if provider.is_available
+                and not (is_etf_target and isinstance(provider, SearXNGSearchProvider))
+            ]
             if not available_providers:
                 break
             
@@ -4753,6 +4738,14 @@ class SearchService:
         Returns:
             格式化的情报报告文本
         """
+        trusted_dimensions = {
+            name: response
+            for name, response in intel_results.items()
+            if response and response.success and response.results
+        }
+        if not trusted_dimensions:
+            return ""
+
         lines = [f"【{stock_name} 情报搜索结果】"]
         
         # 维度展示顺序
@@ -4766,36 +4759,45 @@ class SearchService:
             'earnings': '📊 业绩预期',
             'industry': '🏭 行业分析',
         }
+        is_etf_report = any(
+            (item.relevance_category or "").startswith("etf_")
+            for response in trusted_dimensions.values()
+            for item in response.results
+        )
+        if is_etf_report:
+            dim_labels.update({
+                'latest_news': '📰 近期驱动与确认信号',
+                'announcements': '📋 ETF 产品公告',
+                'market_analysis': '📈 底层趋势驱动',
+                'risk_check': '⚠️ 产品风险与交易限制',
+                'earnings': '🧩 核心成分影响',
+                'industry': '🏗️ 指数结构与估值',
+            })
 
         for dim_name in display_order:
-            if dim_name not in intel_results:
+            if dim_name not in trusted_dimensions:
                 continue
                 
-            resp = intel_results[dim_name]
+            resp = trusted_dimensions[dim_name]
             
             # 获取维度描述
             dim_desc = dim_labels.get(dim_name, dim_name)
             
             lines.append(f"\n{dim_desc} (来源: {resp.provider}):")
-            if resp.success and resp.results:
-                # 增加显示条数
-                for i, r in enumerate(resp.results[:4], 1):
-                    date_str = f" [{r.published_date}]" if r.published_date else ""
-                    lines.append(f"  {i}. {r.title}{date_str}")
-                    # 如果摘要太短，可能信息量不足
-                    snippet = r.snippet[:150] if len(r.snippet) > 20 else r.snippet
-                    lines.append(f"     {snippet}...")
-                    if r.relevance_category or r.relevance_reasons:
-                        relevance_parts = []
-                        if r.relevance_category:
-                            relevance_parts.append(r.relevance_category)
-                        if r.relevance_score is not None:
-                            relevance_parts.append(f"score={r.relevance_score}")
-                        if r.relevance_reasons:
-                            relevance_parts.append(f"依据: {'；'.join(r.relevance_reasons[:3])}")
-                        lines.append(f"     关联度: {'; '.join(relevance_parts)}")
-            else:
-                lines.append("  未找到相关信息")
+            for i, r in enumerate(resp.results[:4], 1):
+                date_str = f" [{r.published_date}]" if r.published_date else ""
+                lines.append(f"  {i}. {r.title}{date_str}")
+                snippet = r.snippet[:150] if len(r.snippet) > 20 else r.snippet
+                lines.append(f"     {snippet}...")
+                if r.relevance_category or r.relevance_reasons:
+                    relevance_parts = []
+                    if r.relevance_category:
+                        relevance_parts.append(r.relevance_category)
+                    if r.relevance_score is not None:
+                        relevance_parts.append(f"score={r.relevance_score}")
+                    if r.relevance_reasons:
+                        relevance_parts.append(f"依据: {'；'.join(r.relevance_reasons[:3])}")
+                    lines.append(f"     关联度: {'; '.join(relevance_parts)}")
         
         return "\n".join(lines)
     
@@ -5045,13 +5047,6 @@ def get_search_service() -> SearchService:
                     minimax_keys=config.minimax_api_keys,
                     searxng_base_urls=config.searxng_base_urls,
                     searxng_public_instances_enabled=config.searxng_public_instances_enabled,
-                    search_routing_mode=getattr(config, "search_routing_mode", "legacy"),
-                    searxng_request_timeout_seconds=getattr(
-                        config, "searxng_request_timeout_seconds", 6.0
-                    ),
-                    search_intel_total_timeout_seconds=getattr(
-                        config, "search_intel_total_timeout_seconds", 30.0
-                    ),
                     news_max_age_days=config.news_max_age_days,
                     news_strategy_profile=getattr(config, "news_strategy_profile", "short"),
                 )

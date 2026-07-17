@@ -83,9 +83,7 @@ def test_restart_rebuilds_and_recreates_selected_service(tmp_path: Path) -> None
     )
 
 
-def test_restart_starts_private_searxng_when_tiered_routing_is_enabled(
-    tmp_path: Path,
-) -> None:
+def test_restart_ignores_removed_searxng_routing_settings(tmp_path: Path) -> None:
     lines = _run_script(
         tmp_path,
         "restart",
@@ -95,27 +93,9 @@ def test_restart_starts_private_searxng_when_tiered_routing_is_enabled(
         ),
     )
 
-    assert any(
-        "--profile searxng" in line
-        and "build server" in line
-        and "build server searxng" not in line
-        for line in lines
-    )
-    assert any(
-        "--profile searxng up -d --force-recreate server searxng" in line
-        for line in lines
-    )
-
-
-def test_restart_keeps_legacy_server_only_behavior(tmp_path: Path) -> None:
-    lines = _run_script(
-        tmp_path,
-        "restart",
-        env_content="SEARCH_ROUTING_MODE=legacy\n",
-    )
-
     assert any("up -d --force-recreate server" in line for line in lines)
     assert all("--profile searxng" not in line for line in lines)
+    assert all(" searxng" not in line for line in lines)
 
 
 def test_down_without_service_stops_compose_stack(tmp_path: Path) -> None:

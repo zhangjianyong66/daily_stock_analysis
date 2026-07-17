@@ -62,13 +62,6 @@ def audited_request_once(
     **kwargs: Any,
 ) -> requests.Response:
     """Send exactly one HTTP attempt and synchronously persist its audit row."""
-    if str(provider or "").strip().lower() == "anspire":
-        # Reserve outside the audit try/finally: a blocked request is not a
-        # physical network attempt and must not create a fake search_api_calls row.
-        from src.services.search_paid_budget_service import SearchPaidBudgetService
-
-        SearchPaidBudgetService().reserve_before_request(provider)
-
     context = current_search_audit_context() or SearchAuditContext()
     physical_attempt = context.next_physical_attempt()
     requested_at = datetime.now(timezone.utc).replace(tzinfo=None)

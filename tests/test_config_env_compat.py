@@ -16,53 +16,38 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
 
     @patch("src.config.setup_env")
     @patch.object(Config, "_parse_litellm_yaml", return_value=[])
-    def test_load_from_env_reads_search_cost_routing_contract(
+    def test_load_from_env_reads_generic_searxng_provider_contract(
         self, _mock_parse_litellm_yaml, _mock_setup_env
     ):
         with patch.dict(
             os.environ,
             {
                 "STOCK_LIST": "600519",
-                "SEARCH_ROUTING_MODE": "searxng_first_cn",
-                "SEARXNG_BASE_URLS": "http://searxng:8080",
-                "SEARXNG_SECRET": "test-secret",
-                "SEARXNG_REQUEST_TIMEOUT_SECONDS": "5.5",
-                "SEARCH_INTEL_TOTAL_TIMEOUT_SECONDS": "25",
-                "ANSPIRE_DAILY_WARNING_REQUESTS": "20",
-                "ANSPIRE_DAILY_HARD_LIMIT_REQUESTS": "40",
+                "SEARXNG_BASE_URLS": "https://search.example.org",
+                "SEARXNG_PUBLIC_INSTANCES_ENABLED": "true",
             },
             clear=True,
         ):
             config = Config._load_from_env()
 
-        self.assertEqual(config.search_routing_mode, "searxng_first_cn")
-        self.assertEqual(config.searxng_base_urls, ["http://searxng:8080"])
-        self.assertEqual(config.searxng_secret, "test-secret")
-        self.assertEqual(config.searxng_request_timeout_seconds, 5.5)
-        self.assertEqual(config.search_intel_total_timeout_seconds, 25.0)
-        self.assertEqual(config.anspire_daily_warning_requests, 20)
-        self.assertEqual(config.anspire_daily_hard_limit_requests, 40)
+        self.assertEqual(config.searxng_base_urls, ["https://search.example.org"])
+        self.assertTrue(config.searxng_public_instances_enabled)
 
     @patch("src.config.setup_env")
     @patch.object(Config, "_parse_litellm_yaml", return_value=[])
-    def test_invalid_search_routing_mode_and_budget_pair_fall_back_safely(
+    def test_public_searxng_discovery_is_disabled_by_default(
         self, _mock_parse_litellm_yaml, _mock_setup_env
     ):
         with patch.dict(
             os.environ,
             {
                 "STOCK_LIST": "600519",
-                "SEARCH_ROUTING_MODE": "unknown",
-                "ANSPIRE_DAILY_WARNING_REQUESTS": "50",
-                "ANSPIRE_DAILY_HARD_LIMIT_REQUESTS": "30",
             },
             clear=True,
         ):
             config = Config._load_from_env()
 
-        self.assertEqual(config.search_routing_mode, "legacy")
-        self.assertEqual(config.anspire_daily_warning_requests, 30)
-        self.assertEqual(config.anspire_daily_hard_limit_requests, 50)
+        self.assertFalse(config.searxng_public_instances_enabled)
 
     @patch("src.config.setup_env")
     @patch.object(Config, "_parse_litellm_yaml", return_value=[])

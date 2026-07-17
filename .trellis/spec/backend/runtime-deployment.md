@@ -143,68 +143,16 @@ docker-compose -f ./docker/docker-compose.yml exec -u dsa stock-analyzer bash
 docker-compose -f ./docker/docker-compose.yml exec -u dsa stock-analyzer python main.py --no-notify
 ```
 
+校验 Compose 配置时使用 `docker compose -f docker/docker-compose.yml config --quiet`。不要在包含真实 `.env` 的环境中输出完整 `config`，因为 Compose 会展开并打印密钥等配置值。
+
 不要把 `../.env` 作为单文件 volume 挂载到 `/app/.env`，否则会破坏配置保存时的原子替换。Compose 使用 `env_file` 加载 `.env`。
 
-## 场景：一键脚本联动私有 SearXNG
+## 场景：Docker 启动与搜索基础设施解耦
 
-### 1. Scope / Trigger
-
-- 修改 `scripts/docker-up.sh`、Compose profile 或 `SEARCH_ROUTING_MODE` 的部署联动时适用。
-- 目标是让低成本路由配置与实际基础设施同步启动，同时保持默认 `legacy` 部署不增加容器。
-
-### 2. Signatures
-
-```bash
-./scripts/docker-up.sh [build-up|up|start|restart] [server|analyzer|all]
-ENV_FILE=/path/to/.env ./scripts/docker-up.sh restart
-```
-
-### 3. Contracts
-
-- 脚本安全读取 `ENV_FILE`（默认根目录 `.env`）中的 `SEARCH_ROUTING_MODE`，不得 `source` 或执行配置文件内容。
-- `SEARCH_ROUTING_MODE=searxng_first_cn` 时，启动类操作必须附加 `--profile searxng`，并在显式目标服务后加入 `searxng`。
-- 构建阶段仍只构建 `server` / `analyzer`；`searxng` 使用固定官方镜像，不加入本地 `compose build` 服务列表。
-- `SEARCH_ROUTING_MODE=legacy`、缺失或其他值时保持原目标服务行为，不自动启动 SearXNG。
-- `stop` 只停止显式目标；需要移除整个 stack 时使用 `down`。
-
-### 4. Validation & Error Matrix
-
-| 条件 | 预期行为 |
-| --- | --- |
-| `searxng_first_cn` + `restart server` | 构建 `server`，随后以 profile 启动 `server searxng` |
-| `searxng_first_cn` + `restart analyzer` | 构建 `analyzer`，随后启动 `analyzer searxng` |
-| `legacy` + `restart server` | 只构建并重建 `server` |
-| `ENV_FILE` 不存在 | 从 `.env.example` 创建后按默认 `legacy` 处理 |
-| 未知 action / target | 在执行 Compose 变更前报错退出 |
-
-### 5. Good / Base / Bad Cases
-
-- Good：`.env` 启用低成本路由后直接运行 `./scripts/docker-up.sh restart`，`server` 与 `searxng` 同时进入目标状态。
-- Base：默认 `legacy` 用户运行同一命令，只重建 `server`，不下载或启动额外镜像。
-- Bad：无条件把 `searxng` 加入所有目标，导致 legacy 部署产生额外资源占用；或把 `.env` 直接 `source`，允许配置内容被当作 shell 执行。
-
-### 6. Tests Required
-
-- `tests/test_docker_up_script.py` 必须断言低成本模式包含 `--profile searxng` 和 `up ... server searxng`。
-- 必须断言构建命令仍为 `build server`，不能变为 `build server searxng`。
-- 必须保留 legacy 回归，断言命令中不存在 `--profile searxng`。
-- 交付前运行 `bash -n scripts/docker-up.sh` 与 `docker compose ... --profile searxng config --quiet`。
-
-### 7. Wrong vs Correct
-
-错误做法：
-
-```bash
-docker compose up -d --force-recreate server
-```
-
-该命令即使启用了低成本路由，也不会启动无硬依赖的可选 SearXNG 服务。
-
-正确做法由脚本按配置生成等价行为：
-
-```bash
-docker compose --profile searxng up -d --force-recreate server searxng
-```
+- `scripts/docker-up.sh` 只操作显式的 `server` / `analyzer` 目标，不读取 `SEARCH_ROUTING_MODE`，不附加 SearXNG profile，也不隐式启动搜索容器。
+- `docker/docker-compose.yml` 不内置私有 SearXNG 服务。通用 SearXNG Provider 只能通过外部 `SEARXNG_BASE_URLS` 显式配置，公共实例发现默认关闭。
+- 旧环境残留 `SEARCH_ROUTING_MODE=searxng_first_cn` 时，启动脚本必须忽略该废弃变量并保持原目标服务行为。
+- 验证：`bash -n scripts/docker-up.sh`、`docker compose -f docker/docker-compose.yml config --quiet`，以及 `tests/test_docker_up_script.py` 中“残留路由配置不启动 SearXNG”的回归。
 
 ## GitHub Actions 与发布
 

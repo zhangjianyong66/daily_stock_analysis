@@ -150,12 +150,8 @@ Go to your forked repo → `Settings` → `Secrets and variables` → `Actions` 
 | `BOCHA_API_KEYS` | [Bocha Search](https://open.bocha.cn/) Web Search API (Chinese search optimized, supports AI summaries, multiple keys comma-separated) | Optional |
 | `BRAVE_API_KEYS` | [Brave Search](https://brave.com/search/api/) API (privacy-first, US-stock news enrichment, comma-separated for multiple keys) | Optional |
 | `MINIMAX_API_KEYS` | [MiniMax](https://platform.minimax.io/) Coding Plan Web Search (structured search results) | Optional |
-| `SEARXNG_BASE_URLS` | SearXNG self-hosted instances (quota-free fallback, enable format: json in settings.yml); when empty the app auto-discovers public instances | Optional |
-| `SEARXNG_PUBLIC_INSTANCES_ENABLED` | Auto-discover public SearXNG instances from `searx.space` when `SEARXNG_BASE_URLS` is empty (default `true`) | Optional |
-| `SEARCH_ROUTING_MODE` | `legacy` preserves current routing; `searxng_first_cn` routes A-shares/A-share ETFs through explicit private SearXNG before quality-based Anspire fallback | Default `legacy` |
-| `SEARXNG_REQUEST_TIMEOUT_SECONDS` | Per-request private SearXNG timeout in cost-routing mode; DSA does not retry the same instance | Default `6` |
-| `SEARCH_INTEL_TOTAL_TIMEOUT_SECONDS` | Per-stock low-cost intelligence-search budget; `0` disables the total deadline | Default `30` |
-| `ANSPIRE_DAILY_WARNING_REQUESTS` / `ANSPIRE_DAILY_HARD_LIMIT_REQUESTS` | Beijing-day Anspire physical-request warning/hard limit, enforced only in cost-routing mode; `0` disables each threshold | Default `30` / `50` |
+| `SEARXNG_BASE_URLS` | Optional generic SearXNG Provider URLs; deploy and enable JSON output yourself | Optional |
+| `SEARXNG_PUBLIC_INSTANCES_ENABLED` | Auto-discover public instances; default `false` and not recommended for trading context | Optional |
 | `TUSHARE_TOKEN` | [Tushare Pro](https://tushare.pro/weborder/#/login?reg=834638) Token | Optional |
 | `TICKFLOW_API_KEY` | [TickFlow](https://tickflow.org) API key for optional A-share daily K-lines, realtime quotes, stock list/name lookup, and CN market review enhancement; permission or entitlement failures fall back to existing providers | Optional |
 
@@ -319,16 +315,10 @@ For the notification baseline, diagnostics, and deployment notes, see [Notificat
 | `MINIMAX_API_KEYS` | MiniMax Coding Plan Web Search (structured results) | Optional |
 | `SOCIAL_SENTIMENT_API_KEY` | Stock Sentiment API Key (Reddit / X / Polymarket, US stocks optional) | Optional |
 | `SOCIAL_SENTIMENT_API_URL` | Stock Sentiment API endpoint (default `https://api.adanos.org`) | Optional |
-| `SEARXNG_BASE_URLS` | SearXNG self-hosted instances (quota-free fallback, enable format: json in settings.yml); when empty the app auto-discovers public instances | Optional |
-| `SEARXNG_PUBLIC_INSTANCES_ENABLED` | Auto-discover public SearXNG instances from `searx.space` when `SEARXNG_BASE_URLS` is empty (default `true`) | Optional |
-| `SEARXNG_SECRET` | High-entropy secret for the private Docker SearXNG service; stored only in deployment configuration and masked in Web settings | Optional |
-| `SEARCH_ROUTING_MODE` | `legacy` preserves provider behavior; `searxng_first_cn` uses private SearXNG → Anspire for A-shares/A-share ETFs | Default `legacy` |
-| `SEARXNG_REQUEST_TIMEOUT_SECONDS` | Hard timeout for one private SearXNG call; the low-cost path does not retry the same instance | Default `6` |
-| `SEARCH_INTEL_TOTAL_TIMEOUT_SECONDS` | Total per-stock intelligence-search budget; no new calls start after exhaustion, and `0` disables it | Default `30` |
-| `ANSPIRE_DAILY_WARNING_REQUESTS` | Beijing-day Anspire physical-request warning threshold; `0` disables it | Default `30` |
-| `ANSPIRE_DAILY_HARD_LIMIT_REQUESTS` | Beijing-day Anspire physical-request hard limit; later calls are blocked before network I/O, and `0` disables it | Default `50` |
+| `SEARXNG_BASE_URLS` | Optional generic SearXNG Provider URLs; deploy and enable JSON output yourself | Optional |
+| `SEARXNG_PUBLIC_INSTANCES_ENABLED` | Auto-discover public instances; default `false` and not recommended for trading context | Optional |
 
-> Behavior note: Search and social sentiment are optional enhancement services. If either service fails to initialize, the system logs a warning and degrades gracefully by skipping that stage without blocking the core analysis flow. `searxng_first_cn` requires explicit private URLs and never promotes public instances to the primary tier. Critical news/announcement/risk dimensions require at least one direct and timely result; analytical dimensions accept one admitted result and do not pay merely to increase result count.
+> Behavior note: Search and social sentiment are optional enhancements and failures do not block the technical-analysis flow. With Anspire configured, ETF comprehensive intelligence is merged into at most two physical requests: 3-day events and 30-day analysis, each with `top_k=18`; group failures never fall back to SearXNG. Results must pass product/underlying identity, date, junk-page, and deterministic-routing admission. If every dimension is empty, no report text, `news_context`, or `news_intel` row is produced. Public SearXNG discovery is disabled by default.
 
 ### Data Source Configuration
 
@@ -1424,7 +1414,7 @@ For this feature, the product behavior is:
 > Note: `GET /api/v1/history/{record_id}/diagnostics` accepts either the history primary key ID or `query_id`, and returns a `normal/degraded/failed/unknown` summary, key pipeline components, and sanitized `copy_text`. Older reports without `context_snapshot.diagnostics` return `unknown` without affecting normal report reads.
 > Note: `GET /api/v1/history` list summaries can be paginated by `stock_code` for same-stock history and now include optional trend, summary, model, and analysis-time price/change fields. Older rows without persisted snapshots return empty values. The Web report page's "History Trend" drawer reuses this endpoint.
 > Note: `GET /api/v1/usage/dashboard` reuses the existing `llm_usage` audit table and adds no configuration key or database migration. It returns only persisted call counts, prompt/completion/total token aggregates, model-level usage, and recent call records; it does not infer model context windows or provider metadata.
-> Search-call accounting: `search_api_calls` writes one row for every real outbound HTTP request, including automatic retries, alternate keys, provider fallbacks, and SearXNG instance attempts. Cache hits, database reads, local filtering, article-body fetching, and public-instance directory refreshes are not counted. SQLAlchemy creates the new tables at startup; old text logs are not backfilled.
+> Search-call accounting: `search_api_calls` writes one row for every real outbound HTTP request, including automatic retries, alternate keys, provider fallbacks, and SearXNG instance attempts. Cache hits, database reads, local filtering, article-body fetching, and public-instance directory refreshes are not counted. ETF Anspire cache hits never create synthetic call rows. SQLAlchemy creates the tables at startup; old text logs are not backfilled.
 > Snapshot boundary: complete business queries and provider responses are recursively redacted and then stored permanently as plaintext JSON in the local database; there is no application-layer encryption. Request snapshots are capped at 256 KiB and responses at 2 MiB. Oversized snapshots keep a preview plus the original redacted size and SHA-256. Anyone holding the database file can still read query and result content, so protect database files and backups as sensitive business data.
 > Key/query reconciliation fingerprints reuse the data-directory `.llm_usage_hmac_secret` with domain-separated HMACs. Raw keys, Authorization/Cookie/Token/signature/Webhook values are excluded from snapshots, public summaries, exports, notifications, and ordinary logs. Audit-write failures remain fail-open for search but appear as visible audit gaps in Web.
 > Issue #1520 compatibility note: The `model`/`model_used` returned here is read-only historical snapshot metadata from each record, used only for trend drawer/history display. It does not alter runtime model/model-provider/base URL resolution, config migration, or cleanup semantics in the analysis path. Rollback is by reverting this commit; history query, API response shapes, and UI drawer consumption remain compatible.

@@ -290,12 +290,6 @@ jobs:
           BRAVE_API_KEYS: ${{ secrets.BRAVE_API_KEYS }}
           SEARXNG_BASE_URLS: ${{ vars.SEARXNG_BASE_URLS || secrets.SEARXNG_BASE_URLS }}
           SEARXNG_PUBLIC_INSTANCES_ENABLED: ${{ vars.SEARXNG_PUBLIC_INSTANCES_ENABLED || secrets.SEARXNG_PUBLIC_INSTANCES_ENABLED }}
-          SEARXNG_SECRET: ${{ secrets.SEARXNG_SECRET }}
-          SEARCH_ROUTING_MODE: ${{ vars.SEARCH_ROUTING_MODE || secrets.SEARCH_ROUTING_MODE }}
-          SEARXNG_REQUEST_TIMEOUT_SECONDS: ${{ vars.SEARXNG_REQUEST_TIMEOUT_SECONDS || secrets.SEARXNG_REQUEST_TIMEOUT_SECONDS }}
-          SEARCH_INTEL_TOTAL_TIMEOUT_SECONDS: ${{ vars.SEARCH_INTEL_TOTAL_TIMEOUT_SECONDS || secrets.SEARCH_INTEL_TOTAL_TIMEOUT_SECONDS }}
-          ANSPIRE_DAILY_WARNING_REQUESTS: ${{ vars.ANSPIRE_DAILY_WARNING_REQUESTS || secrets.ANSPIRE_DAILY_WARNING_REQUESTS }}
-          ANSPIRE_DAILY_HARD_LIMIT_REQUESTS: ${{ vars.ANSPIRE_DAILY_HARD_LIMIT_REQUESTS || secrets.ANSPIRE_DAILY_HARD_LIMIT_REQUESTS }}
           
           # ==========================================
           # 通知渠道（可同时配置多个，全部推送）
@@ -479,16 +473,12 @@ jobs:
           echo "  MiniMax API Keys: $([ -n "$MINIMAX_API_KEYS" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
           echo "  Brave API Keys: $([ -n "$BRAVE_API_KEYS" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
           echo "  SearXNG Base URLs: $([ -n "$SEARXNG_BASE_URLS" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
-          echo "  Search Routing Mode: ${SEARCH_ROUTING_MODE:-legacy}"
-          echo "  SearXNG Request Timeout: ${SEARXNG_REQUEST_TIMEOUT_SECONDS:-6}s"
-          echo "  Search Intel Total Timeout: ${SEARCH_INTEL_TOTAL_TIMEOUT_SECONDS:-30}s"
-          echo "  Anspire Daily Budget: warning=${ANSPIRE_DAILY_WARNING_REQUESTS:-30}, hard=${ANSPIRE_DAILY_HARD_LIMIT_REQUESTS:-50}"
           case "${SEARXNG_PUBLIC_INSTANCES_ENABLED,,}" in
             0|false|no|off)
               echo "  SearXNG Public Instances: ❌ 已禁用"
               ;;
             "")
-              echo "  SearXNG Public Instances: ✅ 默认开启"
+              echo "  SearXNG Public Instances: ❌ 默认关闭"
               ;;
             *)
               echo "  SearXNG Public Instances: ✅ 已启用"

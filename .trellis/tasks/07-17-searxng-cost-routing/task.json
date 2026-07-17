@@ -18,7 +18,9 @@
   "commit": null,
   "pr_url": null,
   "subtasks": [],
-  "children": [],
+  "children": [
+    "07-17-searxng-contamination-guard"
+  ],
   "parent": null,
   "relatedFiles": [
     "src/search_service.py",

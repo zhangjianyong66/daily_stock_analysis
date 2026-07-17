@@ -146,15 +146,17 @@ npm run build
 - 搜索汇总沿用现有可选认证边界；完整出入参、复制、CSV 和单条 JSON 下载必须 `ADMIN_AUTH_ENABLED=true` 且管理员已登录，没有桌面端例外。
 - 搜索审计目标回归：`python3 -m pytest tests/test_search_usage_storage.py tests/test_search_usage_service.py tests/test_search_usage_api.py tests/test_anspire_search.py tests/test_search_tavily_provider.py tests/test_search_serpapi_provider.py tests/test_search_searxng.py -q`。
 
-### 私有 SearXNG 分层搜索降本
+### ETF Anspire 综合搜索与防污染
 
-- `docker/docker-compose.yml` 提供可选 `searxng` profile，使用固定官方镜像 tag + digest；服务不发布宿主机端口、不依赖 Valkey/Redis，也不是 `server` / `analyzer` 启动硬依赖。`.env` 配置 `SEARCH_ROUTING_MODE=searxng_first_cn` 后，`./scripts/docker-up.sh restart` 会自动激活该 profile、重建目标服务并同时启动 SearXNG；手动等价命令为 `docker compose -f docker/docker-compose.yml --profile searxng up -d server searxng`。
-- 私有实例配置位于 `docker/searxng/settings.yml`，只启用百度、Bing、Bing News、DuckDuckGo，开启 JSON，默认中文，关闭 public instance、limiter 与 Granian access log；容器内部地址为 `http://searxng:8080`。
-- `SEARCH_ROUTING_MODE=legacy` 保持现有搜索语义；`searxng_first_cn` 只覆盖 A 股与 A 股 ETF，并要求显式 `SEARXNG_BASE_URLS`。公共实例不会成为低成本主路由，其他市场继续 legacy。
-- 低成本链路每个维度先查私有 SearXNG；最新消息、公告、风险要求直接且及时结果，机构分析、业绩预期、行业分析有 1 条合格结果即可。单次 SearXNG 默认 6 秒且不在 DSA 侧重试同一实例，单股总预算默认 30 秒。
-- Anspire 每日预算只在 `searxng_first_cn` 启用，按北京时间自然日和物理请求持久化预留：默认 30 次预警、50 次硬上限。预算阻断不写伪造 `search_api_calls`；预留失败对付费请求 fail-closed，已有 SearXNG 结果继续 best-effort 返回。
-- 审计边界为：DSA → SearXNG 每次请求写一条 `search_api_calls`；SearXNG → 内部四个引擎的扇出由容器日志观察。回滚只需设 `SEARCH_ROUTING_MODE=legacy` 并停止 `searxng` profile，无需删除审计或预算历史。
-- 目标回归：`.venv/bin/python -m pytest tests/test_search_paid_budget.py tests/test_search_searxng.py tests/test_search_news_freshness.py tests/test_search_usage_storage.py tests/test_search_usage_service.py tests/test_anspire_search.py -q`。
+- 仓库不再内置或自动启动私有 SearXNG：Compose 无 `searxng` 服务，`scripts/docker-up.sh` 不读取搜索路由或附加 profile。通用 SearXNG Provider 兼容入口仍保留，但公共实例默认 `SEARXNG_PUBLIC_INSTANCES_ENABLED=false`。
+- ETF 综合情报在 Anspire 可用时按逻辑维度合并为两组物理请求：`fresh_events` 近 3 个自然日、`analysis` 近 30 个自然日，均固定 `top_k=18` 且不启用 transport retry；Pipeline 的 5 维度和 Agent 的 6 维度最多产生 2 次物理请求。
+- ETF profile 使用股票索引中的可信名称/别名和确定性名称规则，覆盖行业/主题、跨境、商品、宽基、策略、债券和 `generic_etf`；无法建立唯一底层映射时关闭 `underlying_driver`。
+- 产品公告、申赎、份额、规模、折溢价和跟踪事实必须直接命中 ETF 产品身份；不含产品身份的内容只有命中已验证底层映射时才能进入独立底层驱动通道，并明确声明不代表 ETF 产品事实。
+- 未知日期、超出 3/30 天窗口、垃圾页、普通涨跌/成交额复述、泛宏观和歧义映射全部拒绝。所有维度为空时不生成空壳报告、不设置 `news_context`、不写 `news_intel`。
+- 可信结果仅使用进程内缓存：事件 TTL 15 分钟、分析 TTL 6 小时；失败、空结果、`no_trusted_data` 和原始响应不缓存，缓存命中不新增 `search_api_calls`。
+- `news_intel` 使用 `quarantined_at/quarantine_reason/quarantine_batch` 隔离历史污染，读取路径默认排除隔离记录；普通写入遇到已隔离 URL 时不得更新或解除隔离。批次 `searxng-retirement-20260717` 已隔离 206 条 SearXNG 记录，可用 `scripts/quarantine_searxng_news_intel.py rollback --batch searxng-retirement-20260717` 回滚，`search_api_calls` 永久保留。
+- 当前本机 `.env` 已关闭公共 SearXNG，但尚未配置 `ANSPIRE_API_KEYS`；补齐 Key 前主分析会保持 `news_context=None`，不得在聊天、日志或提交中输出真实 Key。
+- 目标回归：`.venv/bin/python -m pytest tests/test_etf_search_intelligence.py tests/test_anspire_search.py tests/test_search_news_freshness.py tests/test_search_tools_persistence.py tests/test_news_intel.py tests/test_search_usage_storage.py tests/test_search_usage_service.py -q`。
 
 ### 持仓与成交截图导入
 
@@ -173,8 +175,8 @@ npm run build
 ### Docker 构建代理
 
 - Docker Compose 的 `server` 端口优先使用 `.env` 中的 `WEBUI_PORT`；旧部署仍可通过 `API_PORT` 兼容覆盖。排查 8000 端口冲突时，先确认 `WEBUI_PORT`、`API_PORT` 与 `docker-compose config` 渲染结果是否一致。
+- 使用真实 `.env` 校验 Compose 时只运行 `docker compose -f docker/docker-compose.yml config --quiet`；完整 `config` 会展开并输出密钥，不得作为普通验收命令。
 - `scripts/docker-up.sh` 默认设置 `DOCKER_BUILD_NETWORK=host`、`DOCKER_BUILD_HTTPS_PROXY=http://127.0.0.1:10808`、空 `DOCKER_BUILD_HTTP_PROXY` / `DOCKER_BUILD_http_proxy`，并把 Debian apt 源切到清华 HTTPS 镜像，确保构建阶段可通过宿主机 10808 代理访问 npm、PyPI/GitHub 与 apt 源。
-- `scripts/docker-up.sh` 会从 `ENV_FILE`（默认根目录 `.env`）读取 `SEARCH_ROUTING_MODE`；值为 `searxng_first_cn` 时，`build-up`、`up/start`、`restart` 自动附加 Compose `searxng` profile 并启动 SearXNG，`legacy` 模式仍只操作显式目标服务。
 - `scripts/docker-up.sh` 仍会补齐宿主机 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 及小写同名变量，构建代理以脚本默认值为准；显式导出的 `DOCKER_BUILD_*`、`DEBIAN_APT_MIRROR`、`DEBIAN_SECURITY_APT_MIRROR` 优先级高于脚本默认值。
 - 如需覆盖构建网络，可显式执行：`DOCKER_BUILD_NETWORK=default ./scripts/docker-up.sh restart` 或 `DOCKER_BUILD_NETWORK=host ./scripts/docker-up.sh restart`。
 - 运行中的 Docker 容器不会自动继承宿主机系统代理；Linux bridge 网络下访问宿主机本地代理通常使用 `172.17.0.1:<端口>`，例如在 `.env` 中配置 `HTTP_PROXY=http://172.17.0.1:10808` / `HTTPS_PROXY=http://172.17.0.1:10808`，重启容器后生效。

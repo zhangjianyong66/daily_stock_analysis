@@ -64,6 +64,11 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 CURRENT_SCHEMA_VERSION = "2026-06-05-create-all-baseline"
 INTELLIGENCE_ITEM_NULL_SCOPE_VALUE = "__dsa_null_scope__"
+_NEWS_INTEL_QUARANTINE_COLUMN_SQL: Dict[str, str] = {
+    "quarantined_at": "DATETIME",
+    "quarantine_reason": "VARCHAR(255)",
+    "quarantine_batch": "VARCHAR(64)",
+}
 
 # SQLAlchemy ORM 基类
 Base = declarative_base()
@@ -205,6 +210,9 @@ class NewsIntel(Base):
     requester_chat_id = Column(String(64))
     requester_message_id = Column(String(64))
     requester_query = Column(String(255))
+    quarantined_at = Column(DateTime, nullable=True, index=True)
+    quarantine_reason = Column(String(255), nullable=True)
+    quarantine_batch = Column(String(64), nullable=True, index=True)
 
     __table_args__ = (
         UniqueConstraint('url', name='uix_news_url'),
@@ -902,26 +910,6 @@ class SearchAuditGap(Base):
     error_summary = Column(String(500), nullable=True)
 
 
-class SearchProviderDailyBudget(Base):
-    """Persistent paid-search request reservations for one Beijing calendar day."""
-
-    __tablename__ = "search_provider_daily_budgets"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    provider = Column(String(64), nullable=False)
-    budget_date = Column(Date, nullable=False)
-    reserved_requests = Column(Integer, nullable=False, default=0)
-    warning_notified_at = Column(DateTime, nullable=True)
-    hard_limit_notified_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=utc_naive_now)
-    updated_at = Column(DateTime, nullable=False, default=utc_naive_now, onupdate=utc_naive_now)
-
-    __table_args__ = (
-        UniqueConstraint("provider", "budget_date", name="uix_search_provider_daily_budget"),
-        Index("ix_search_daily_budget_provider_date", "provider", "budget_date"),
-    )
-
-
 _LLM_USAGE_TELEMETRY_COLUMN_SQL: Dict[str, str] = {
     "provider_usage_json": "TEXT",
     "provider": "VARCHAR(64)",
@@ -1292,6 +1280,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
 
             # 创建所有表
             Base.metadata.create_all(self._engine)
+            self._ensure_news_intel_quarantine_columns()
             self._ensure_portfolio_trade_time_column()
             self._ensure_llm_usage_telemetry_columns()
             self._ensure_intelligence_item_scope_values()
@@ -1490,6 +1479,41 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                             max_retries,
                             delay,
                         )
+                        if delay > 0:
+                            time.sleep(delay)
+                        continue
+                    raise
+
+    def _ensure_news_intel_quarantine_columns(self) -> None:
+        """Idempotently add quarantine fields to legacy ``news_intel`` tables."""
+        if not self._is_sqlite_engine:
+            return
+        try:
+            existing = {
+                column["name"]
+                for column in inspect(self._engine).get_columns(NewsIntel.__tablename__)
+            }
+        except Exception as exc:
+            logger.warning("[News intel] 隔离字段检查失败，已跳过: %s", exc)
+            return
+
+        for column, column_type in _NEWS_INTEL_QUARANTINE_COLUMN_SQL.items():
+            if column in existing:
+                continue
+            for attempt in range(self._sqlite_write_retry_max + 1):
+                try:
+                    with self._engine.begin() as connection:
+                        connection.exec_driver_sql(
+                            f"ALTER TABLE {NewsIntel.__tablename__} ADD COLUMN {column} {column_type}"
+                        )
+                    existing.add(column)
+                    break
+                except OperationalError as exc:
+                    if self._is_sqlite_duplicate_column_error(exc, column):
+                        existing.add(column)
+                        break
+                    if self._is_sqlite_locked_error(exc) and attempt < self._sqlite_write_retry_max:
+                        delay = self._sqlite_write_retry_base_delay * (2 ** attempt)
                         if delay > 0:
                             time.sleep(delay)
                         continue
@@ -1830,6 +1854,10 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                 ).scalar_one_or_none()
 
                 if existing:
+                    # Quarantine is an explicit evidence decision. A later URL
+                    # collision must not silently rehabilitate or mutate the row.
+                    if existing.quarantined_at is not None:
+                        continue
                     existing.name = name or existing.name
                     existing.dimension = dimension or existing.dimension
                     existing.query = query or existing.query
@@ -1838,7 +1866,6 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                     existing.source = source or existing.source
                     existing.published_date = published_date or existing.published_date
                     existing.fetched_at = datetime.now()
-
                     if query_context:
                         if not existing.query_id and current_query_id:
                             existing.query_id = current_query_id
@@ -2002,7 +2029,8 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                 .where(
                     and_(
                         NewsIntel.code == code,
-                        NewsIntel.fetched_at >= cutoff_date
+                        NewsIntel.fetched_at >= cutoff_date,
+                        NewsIntel.quarantined_at.is_(None),
                     )
                 )
                 .order_by(desc(NewsIntel.fetched_at))
@@ -2027,7 +2055,10 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
         with self.get_session() as session:
             results = session.execute(
                 select(NewsIntel)
-                .where(NewsIntel.query_id == query_id)
+                .where(
+                    NewsIntel.query_id == query_id,
+                    NewsIntel.quarantined_at.is_(None),
+                )
                 .order_by(
                     desc(func.coalesce(NewsIntel.published_date, NewsIntel.fetched_at)),
                     desc(NewsIntel.fetched_at)
@@ -2036,6 +2067,61 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             ).scalars().all()
 
             return list(results)
+
+    def quarantine_news_intel(
+        self,
+        *,
+        provider: str,
+        before: datetime,
+        batch: str,
+        reason: str,
+        dry_run: bool = False,
+    ) -> int:
+        """Quarantine historical provider rows without deleting audit evidence."""
+        provider_name = (provider or "").strip()
+        batch_name = (batch or "").strip()
+        reason_text = (reason or "").strip()
+        if not provider_name or not batch_name or not reason_text:
+            raise ValueError("provider、batch 和 reason 不能为空")
+
+        with self.get_session() as session:
+            rows = session.execute(
+                select(NewsIntel).where(
+                    func.lower(NewsIntel.provider) == provider_name.lower(),
+                    NewsIntel.fetched_at < before,
+                    NewsIntel.quarantined_at.is_(None),
+                )
+            ).scalars().all()
+            count = len(rows)
+            if dry_run or not rows:
+                return count
+            quarantined_at = datetime.now()
+            for row in rows:
+                row.quarantined_at = quarantined_at
+                row.quarantine_reason = reason_text
+                row.quarantine_batch = batch_name
+            session.commit()
+            return count
+
+    def rollback_news_intel_quarantine(self, *, batch: str, dry_run: bool = False) -> int:
+        """Rollback one quarantine batch while preserving original news rows."""
+        batch_name = (batch or "").strip()
+        if not batch_name:
+            raise ValueError("batch 不能为空")
+
+        with self.get_session() as session:
+            rows = session.execute(
+                select(NewsIntel).where(NewsIntel.quarantine_batch == batch_name)
+            ).scalars().all()
+            count = len(rows)
+            if dry_run or not rows:
+                return count
+            for row in rows:
+                row.quarantined_at = None
+                row.quarantine_reason = None
+                row.quarantine_batch = None
+            session.commit()
+            return count
 
     def save_analysis_history(
         self,
