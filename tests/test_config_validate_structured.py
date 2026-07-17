@@ -701,6 +701,34 @@ class TestValidateStructuredNotification:
         info = [i for i in issues if i.severity == "info"]
         assert not any("搜索引擎" in i.message and "未配置" in i.message for i in info)
 
+    def test_searxng_first_cn_without_private_url_warns_and_public_mode_is_not_enough(self):
+        cfg = _make_config(
+            search_routing_mode="searxng_first_cn",
+            searxng_base_urls=[],
+            searxng_public_instances_enabled=True,
+        )
+        issues = cfg.validate_structured()
+
+        assert any(
+            issue.severity == "warning"
+            and issue.field == "SEARXNG_BASE_URLS"
+            and "显式" in issue.message
+            for issue in issues
+        )
+
+    def test_anspire_warning_must_be_lower_than_hard_limit(self):
+        cfg = _make_config(
+            anspire_daily_warning_requests=50,
+            anspire_daily_hard_limit_requests=50,
+        )
+        issues = cfg.validate_structured()
+
+        assert any(
+            issue.severity == "error"
+            and issue.field == "ANSPIRE_DAILY_WARNING_REQUESTS"
+            for issue in issues
+        )
+
 
 # ---------------------------------------------------------------------------
 # Deprecated field migration hints

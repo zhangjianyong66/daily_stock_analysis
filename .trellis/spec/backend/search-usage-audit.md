@@ -31,6 +31,8 @@
 ## 3. Contracts
 
 - 计数真源是物理网络请求。自动重试、备用 Key、provider fallback 和 SearXNG 多实例尝试必须逐次记录；缓存、数据库读取、本地过滤、文章正文补抓和公共实例目录刷新不计数。
+- 自建 SearXNG 是独立基础设施审计边界：DSA → SearXNG 的一次 `/search` 记一条 `search_api_calls`；SearXNG → 百度/Bing/Bing News/DuckDuckGo 的内部扇出只进入 SearXNG 容器日志，不逐条导入 DSA 数据库。
+- `SEARCH_ROUTING_MODE=searxng_first_cn` 时，Anspire 每次物理 transport 前必须先做北京时间自然日持久化预算预留。预留成功才允许发起网络；预算阻断不写 `search_api_calls`，预留存储故障对付费请求 fail-closed，但不得拖垮 SearXNG 或整体分析流程。
 - 上层业务入口应传播 `business_search_id`、`logical_request_id`、`call_source`、股票和搜索维度；缺少上层上下文的 provider 直接调用使用 `call_source=direct`。
 - 物理请求完成后同步写入审计记录，再把供应商结果返回上层。审计写入 fail-open，不得改变搜索成功、失败或 fallback 结果，但必须记录低敏错误并暴露 audit gap。
 - 请求/响应先递归脱敏，再以明文 JSON 永久保存。请求上限 256 KiB，响应上限 2 MiB；超限保存预览、完整脱敏字节数和 SHA-256。
@@ -46,6 +48,8 @@
 | 条件 | 结果 |
 | --- | --- |
 | 缓存命中或仅执行本地过滤 | 不新增 `search_api_calls` |
+| Anspire 每日预算阻断 | 网络调用前停止，不新增 `search_api_calls`，诊断标记 `budget_blocked` |
+| 一次 DSA → 私有 SearXNG 聚合请求 | 新增 1 条 `SearXNG` 调用记录；内部引擎扇出不进入 DSA 表 |
 | 一次逻辑搜索发生 3 次 transport retry | 新增 3 条物理调用记录 |
 | HTTP/API 成功但结果为 0 | 记录成功调用，不激活故障 |
 | Anspire 401 且正文余额/额度为 0 | `quota_exhausted`，首次激活故障 |
@@ -89,7 +93,8 @@ python3 -m pytest \
   tests/test_anspire_search.py \
   tests/test_search_tavily_provider.py \
   tests/test_search_serpapi_provider.py \
-  tests/test_search_searxng.py -q
+  tests/test_search_searxng.py \
+  tests/test_search_paid_budget.py -q
 ```
 
 ## 7. Wrong vs Correct

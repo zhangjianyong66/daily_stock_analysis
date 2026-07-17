@@ -146,6 +146,16 @@ npm run build
 - 搜索汇总沿用现有可选认证边界；完整出入参、复制、CSV 和单条 JSON 下载必须 `ADMIN_AUTH_ENABLED=true` 且管理员已登录，没有桌面端例外。
 - 搜索审计目标回归：`python3 -m pytest tests/test_search_usage_storage.py tests/test_search_usage_service.py tests/test_search_usage_api.py tests/test_anspire_search.py tests/test_search_tavily_provider.py tests/test_search_serpapi_provider.py tests/test_search_searxng.py -q`。
 
+### 私有 SearXNG 分层搜索降本
+
+- `docker/docker-compose.yml` 提供可选 `searxng` profile，使用固定官方镜像 tag + digest；服务不发布宿主机端口、不依赖 Valkey/Redis，也不是 `server` / `analyzer` 启动硬依赖。启动示例：`docker compose -f docker/docker-compose.yml --profile searxng up -d server searxng`。
+- 私有实例配置位于 `docker/searxng/settings.yml`，只启用百度、Bing、Bing News、DuckDuckGo，开启 JSON，默认中文，关闭 public instance、limiter 与 Granian access log；容器内部地址为 `http://searxng:8080`。
+- `SEARCH_ROUTING_MODE=legacy` 保持现有搜索语义；`searxng_first_cn` 只覆盖 A 股与 A 股 ETF，并要求显式 `SEARXNG_BASE_URLS`。公共实例不会成为低成本主路由，其他市场继续 legacy。
+- 低成本链路每个维度先查私有 SearXNG；最新消息、公告、风险要求直接且及时结果，机构分析、业绩预期、行业分析有 1 条合格结果即可。单次 SearXNG 默认 6 秒且不在 DSA 侧重试同一实例，单股总预算默认 30 秒。
+- Anspire 每日预算只在 `searxng_first_cn` 启用，按北京时间自然日和物理请求持久化预留：默认 30 次预警、50 次硬上限。预算阻断不写伪造 `search_api_calls`；预留失败对付费请求 fail-closed，已有 SearXNG 结果继续 best-effort 返回。
+- 审计边界为：DSA → SearXNG 每次请求写一条 `search_api_calls`；SearXNG → 内部四个引擎的扇出由容器日志观察。回滚只需设 `SEARCH_ROUTING_MODE=legacy` 并停止 `searxng` profile，无需删除审计或预算历史。
+- 目标回归：`.venv/bin/python -m pytest tests/test_search_paid_budget.py tests/test_search_searxng.py tests/test_search_news_freshness.py tests/test_search_usage_storage.py tests/test_search_usage_service.py tests/test_anspire_search.py -q`。
+
 ### 持仓与成交截图导入
 
 - Web 持仓图片导入只支持活跃 `cn/CNY` 账户；持仓初始化要求账户没有任何交易流水，成交增量只接受实际成交记录。

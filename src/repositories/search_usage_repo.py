@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 from sqlalchemy import and_, desc, distinct, func, or_, select
@@ -12,6 +12,7 @@ from src.storage import (
     DatabaseManager,
     SearchApiCall,
     SearchAuditGap,
+    SearchProviderDailyBudget,
     SearchProviderFault,
 )
 
@@ -44,6 +45,76 @@ class SearchUsageRepository:
                     error_summary=error_summary,
                 )
             )
+
+    def reserve_paid_request(
+        self,
+        *,
+        provider: str,
+        budget_date: date,
+        warning_limit: int,
+        hard_limit: int,
+        reserved_at: datetime,
+    ) -> Dict[str, Any]:
+        """Atomically reserve one paid request before the physical network call."""
+        session = self.db.get_session()
+        try:
+            if getattr(self.db, "_is_sqlite_engine", False):
+                session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+
+            statement = select(SearchProviderDailyBudget).where(
+                SearchProviderDailyBudget.provider == provider,
+                SearchProviderDailyBudget.budget_date == budget_date,
+            )
+            if not getattr(self.db, "_is_sqlite_engine", False):
+                statement = statement.with_for_update()
+            row = session.execute(statement).scalar_one_or_none()
+            if row is None:
+                row = SearchProviderDailyBudget(
+                    provider=provider,
+                    budget_date=budget_date,
+                    reserved_requests=0,
+                )
+                session.add(row)
+                session.flush()
+
+            current = max(0, int(row.reserved_requests or 0))
+            warning_claimed = False
+            hard_limit_claimed = False
+
+            if hard_limit > 0 and current >= hard_limit:
+                if row.hard_limit_notified_at is None:
+                    row.hard_limit_notified_at = reserved_at
+                    hard_limit_claimed = True
+                row.updated_at = reserved_at
+                session.commit()
+                return {
+                    "allowed": False,
+                    "reserved_requests": current,
+                    "warning_claimed": False,
+                    "hard_limit_claimed": hard_limit_claimed,
+                }
+
+            current += 1
+            row.reserved_requests = current
+            row.updated_at = reserved_at
+            if warning_limit > 0 and current >= warning_limit and row.warning_notified_at is None:
+                row.warning_notified_at = reserved_at
+                warning_claimed = True
+            if hard_limit > 0 and current >= hard_limit and row.hard_limit_notified_at is None:
+                row.hard_limit_notified_at = reserved_at
+                hard_limit_claimed = True
+            session.commit()
+            return {
+                "allowed": True,
+                "reserved_requests": current,
+                "warning_claimed": warning_claimed,
+                "hard_limit_claimed": hard_limit_claimed,
+            }
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
 
     @staticmethod
     def _filters(

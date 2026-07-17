@@ -80,7 +80,41 @@ DOCKER_BUILD_HTTPS_PROXY=http://127.0.0.1:10808 ./scripts/docker-up.sh restart
 DEBIAN_APT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian ./scripts/docker-up.sh restart
 ```
 
-### 3.1 资源建议
+### 3.1 私有 SearXNG 分层搜索
+
+Compose 内置一个可选的 `searxng` profile。该服务固定官方镜像版本与 digest，只加入 Compose 内部网络，不发布宿主机端口，也不是 `server`/`analyzer` 的启动依赖。
+
+先在 `.env` 配置：
+
+```env
+SEARXNG_SECRET=请替换为高熵随机值
+SEARXNG_BASE_URLS=http://searxng:8080
+SEARXNG_PUBLIC_INSTANCES_ENABLED=false
+SEARCH_ROUTING_MODE=searxng_first_cn
+SEARXNG_REQUEST_TIMEOUT_SECONDS=6
+SEARCH_INTEL_TOTAL_TIMEOUT_SECONDS=30
+ANSPIRE_DAILY_WARNING_REQUESTS=30
+ANSPIRE_DAILY_HARD_LIMIT_REQUESTS=50
+```
+
+再显式启动 profile：
+
+```bash
+docker compose -f docker/docker-compose.yml --profile searxng up -d server searxng
+docker compose -f docker/docker-compose.yml ps
+docker compose -f docker/docker-compose.yml logs -f searxng
+```
+
+一次性上游 smoke（会产生真实搜索请求，不应放入 healthcheck）：
+
+```bash
+docker compose -f docker/docker-compose.yml exec server \
+  python -c "import requests; r=requests.get('http://searxng:8080/search', params={'q':'贵州茅台','format':'json','categories':'news'}, timeout=10); print(r.status_code, len(r.json().get('results', [])))"
+```
+
+SearXNG 只启用百度、Bing、Bing News、DuckDuckGo，关闭 public instance、limiter、Valkey 和 access log。回滚时把 `SEARCH_ROUTING_MODE=legacy` 并停止 `searxng` profile；历史搜索审计与预算表无需删除。
+
+### 3.2 资源建议
 
 默认 `docker/docker-compose.yml` 为每个服务设置 `limits.memory: 1G`、`reservations.memory: 512M`，这是完整分析场景的推荐起点。
 
@@ -249,6 +283,12 @@ journalctl -u stock-analyzer -f
 | `SERPAPI_API_KEYS` | - | SerpAPI 实时金融新闻搜索（推荐） |
 | `TAVILY_API_KEYS` | - | Tavily 新闻搜索（可选） |
 | `MINIMAX_API_KEYS` | - | MiniMax 搜索（可选） |
+| `SEARXNG_BASE_URLS` | - | 私有 SearXNG 地址；Compose 内部服务使用 `http://searxng:8080` |
+| `SEARXNG_SECRET` | - | 私有 SearXNG 高熵密钥，真实值不得提交 |
+| `SEARCH_ROUTING_MODE` | `legacy` | 设为 `searxng_first_cn` 后仅对 A 股/A 股 ETF 启用分层路由 |
+| `SEARXNG_REQUEST_TIMEOUT_SECONDS` | `6` | 单次私有 SearXNG 硬超时 |
+| `SEARCH_INTEL_TOTAL_TIMEOUT_SECONDS` | `30` | 单只股票搜索总预算，`0` 关闭 |
+| `ANSPIRE_DAILY_WARNING_REQUESTS` / `ANSPIRE_DAILY_HARD_LIMIT_REQUESTS` | `30` / `50` | 北京时间每日物理请求预警与硬上限，仅低成本模式启用 |
 
 ---
 
@@ -465,6 +505,10 @@ git push -u origin main
 | `MINIMAX_API_KEYS` | MiniMax Coding Plan Web Search | 可选 |
 | `SEARXNG_BASE_URLS` | SearXNG 自建实例（无配额兜底，需在 settings.yml 启用 format: json）；留空时默认自动发现公共实例 | 可选 |
 | `SEARXNG_PUBLIC_INSTANCES_ENABLED` | 是否在 `SEARXNG_BASE_URLS` 为空时自动从 `searx.space` 获取公共实例（默认 `true`） | 可选 |
+| `SEARXNG_SECRET` | 私有 Docker SearXNG 高熵密钥，真实值不得入库 | 私有部署必填 |
+| `SEARCH_ROUTING_MODE` | `legacy` 或仅覆盖 A 股/A 股 ETF 的 `searxng_first_cn` | 默认 `legacy` |
+| `SEARXNG_REQUEST_TIMEOUT_SECONDS` / `SEARCH_INTEL_TOTAL_TIMEOUT_SECONDS` | 私有 SearXNG 单次超时与单股搜索总预算 | 默认 `6` / `30` |
+| `ANSPIRE_DAILY_WARNING_REQUESTS` / `ANSPIRE_DAILY_HARD_LIMIT_REQUESTS` | 北京时间每日付费请求预警与硬上限；仅低成本模式启用 | 默认 `30` / `50` |
 | `TUSHARE_TOKEN` | Tushare Token | 可选 |
 | `GEMINI_MODEL` | 模型名称（默认 gemini-2.0-flash） | 可选 |
 

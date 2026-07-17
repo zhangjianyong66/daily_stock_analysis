@@ -15,7 +15,13 @@ if "newspaper" not in sys.modules:
     mock_np.Config = MagicMock()
     sys.modules["newspaper"] = mock_np
 
-from src.search_service import SearchService, SearXNGSearchProvider
+from src.search_service import (
+    AnspireSearchProvider,
+    SearchResponse,
+    SearchResult,
+    SearchService,
+    SearXNGSearchProvider,
+)
 
 
 class TestSearXNGSearchProvider(unittest.TestCase):
@@ -180,6 +186,248 @@ class TestSearXNGSearchProvider(unittest.TestCase):
             with self.subTest(days=days):
                 provider.search("query", max_results=5, days=days)
                 self.assertEqual(mock_get.call_args[1]["params"]["time_range"], expected)
+
+    @patch("src.search_service.audited_request_once")
+    def test_private_single_instance_uses_category_timeout_and_no_retry(self, mock_request):
+        mock_request.return_value = self._response(json_payload={"results": []})
+        provider = self._create_provider(
+            ["https://searx-a.example.org", "https://searx-b.example.org"]
+        )
+
+        response = provider.search(
+            "贵州茅台",
+            max_results=5,
+            days=7,
+            categories="news",
+            request_timeout=6.0,
+            single_instance=True,
+        )
+
+        self.assertTrue(response.success)
+        self.assertEqual(mock_request.call_count, 1)
+        kwargs = mock_request.call_args.kwargs
+        self.assertEqual(kwargs["params"]["categories"], "news")
+        self.assertEqual(kwargs["timeout"], 6.0)
+
+    @patch("src.search_service.audited_request_once")
+    def test_private_search_success_log_does_not_include_full_query(self, mock_request):
+        query = "600519 贵州茅台 未公开业务查询"
+        mock_request.return_value = self._response(json_payload={"results": []})
+        provider = self._create_provider(["https://searx.example.org"])
+
+        with self.assertLogs("src.search_service", level="INFO") as captured:
+            response = provider.search(
+                query,
+                max_results=5,
+                days=7,
+                categories="news",
+                request_timeout=6.0,
+                single_instance=True,
+            )
+
+        self.assertTrue(response.success)
+        self.assertNotIn(query, "\n".join(captured.output))
+
+
+class TestSearXNGCostRouting(unittest.TestCase):
+    @staticmethod
+    def _result(title: str, *, published_date: str | None = None) -> SearchResult:
+        return SearchResult(
+            title=title,
+            snippet=title,
+            url="https://example.com/news",
+            source="example.com",
+            published_date=published_date or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        )
+
+    def _service(self) -> SearchService:
+        return SearchService(
+            anspire_keys=["anspire-key"],
+            searxng_base_urls=["http://searxng:8080"],
+            searxng_public_instances_enabled=False,
+            search_routing_mode="searxng_first_cn",
+            searxng_request_timeout_seconds=6,
+            search_intel_total_timeout_seconds=30,
+        )
+
+    def test_cn_critical_dimension_accepts_direct_searxng_result_without_anspire(self):
+        service = self._service()
+        searxng = service._private_searxng_provider
+        anspire = service._anspire_provider
+        assert searxng is not None and anspire is not None
+        searxng.search = MagicMock(return_value=SearchResponse(
+            query="q",
+            results=[self._result("贵州茅台 600519 发布最新公告")],
+            provider="SearXNG",
+            success=True,
+        ))
+        anspire.search = MagicMock()
+
+        result = service.search_comprehensive_intel("600519", "贵州茅台", max_searches=1)
+
+        self.assertEqual(result["latest_news"].provider, "SearXNG")
+        anspire.search.assert_not_called()
+        self.assertEqual(searxng.search.call_args.kwargs["categories"], "news")
+        self.assertTrue(searxng.search.call_args.kwargs["single_instance"])
+
+    def test_cn_empty_searxng_falls_back_to_anspire(self):
+        service = self._service()
+        searxng = service._private_searxng_provider
+        anspire = service._anspire_provider
+        assert searxng is not None and anspire is not None
+        searxng.search = MagicMock(return_value=SearchResponse(
+            query="q", results=[], provider="SearXNG", success=True
+        ))
+        anspire.search = MagicMock(return_value=SearchResponse(
+            query="q",
+            results=[self._result("贵州茅台 600519 重大事件")],
+            provider="Anspire",
+            success=True,
+        ))
+
+        result = service.search_comprehensive_intel("600519", "贵州茅台", max_searches=1)
+
+        self.assertEqual(result["latest_news"].provider, "Anspire")
+        self.assertEqual(anspire.search.call_args.kwargs["retry_enabled"], False)
+
+    def test_cn_analytical_dimension_accepts_one_non_direct_result(self):
+        service = self._service()
+        searxng = service._private_searxng_provider
+        anspire = service._anspire_provider
+        assert searxng is not None and anspire is not None
+        searxng.search = MagicMock(side_effect=[
+            SearchResponse(query="q", results=[], provider="SearXNG", success=True),
+            SearchResponse(
+                query="q",
+                results=[self._result("白酒行业估值与机构观点", published_date=None)],
+                provider="SearXNG",
+                success=True,
+            ),
+        ])
+        anspire.search = MagicMock(side_effect=[SearchResponse(
+            query="q",
+            results=[self._result("贵州茅台 600519 最新消息")],
+            provider="Anspire",
+            success=True,
+        )])
+
+        result = service.search_comprehensive_intel("600519", "贵州茅台", max_searches=2)
+
+        self.assertEqual(result["market_analysis"].provider, "SearXNG")
+        self.assertEqual(searxng.search.call_args.kwargs["categories"], "general")
+        self.assertEqual(anspire.search.call_count, 1)
+
+    def test_non_cn_stock_keeps_legacy_provider_order(self):
+        service = self._service()
+        searxng = service._private_searxng_provider
+        anspire = service._anspire_provider
+        assert searxng is not None and anspire is not None
+        anspire.search = MagicMock(return_value=SearchResponse(
+            query="q", results=[self._result("Apple AAPL latest news")], provider="Anspire", success=True
+        ))
+        searxng.search = MagicMock()
+
+        result = service.search_comprehensive_intel("AAPL", "Apple", max_searches=1)
+
+        self.assertEqual(result["latest_news"].provider, "Anspire")
+        searxng.search.assert_not_called()
+
+    def test_low_cost_market_scope_includes_cn_etf_and_excludes_other_markets(self):
+        service = self._service()
+
+        self.assertTrue(service._should_use_searxng_first("510300"))
+        self.assertTrue(service._should_use_searxng_first("159915"))
+        self.assertFalse(service._should_use_searxng_first("hk00700"))
+        self.assertFalse(service._should_use_searxng_first("AAPL"))
+        self.assertFalse(service._should_use_searxng_first("unknown-topic"))
+
+    def test_budget_block_preserves_searxng_best_effort_result(self):
+        service = self._service()
+        searxng = service._private_searxng_provider
+        anspire = service._anspire_provider
+        assert searxng is not None and anspire is not None
+        searxng.search = MagicMock(return_value=SearchResponse(
+            query="q",
+            results=[self._result("白酒行业估值与资金动向")],
+            provider="SearXNG",
+            success=True,
+        ))
+        anspire.search = MagicMock(return_value=SearchResponse(
+            query="q",
+            results=[],
+            provider="Anspire",
+            success=False,
+            error_message="budget_blocked: Anspire 当日预算已用尽",
+        ))
+
+        result = service.search_comprehensive_intel("600519", "贵州茅台", max_searches=1)
+
+        self.assertEqual(result["latest_news"].provider, "SearXNG")
+        self.assertEqual(len(result["latest_news"].results), 1)
+        anspire.search.assert_called_once()
+
+    def test_exhausted_total_deadline_starts_no_provider_request(self):
+        service = self._service()
+        searxng = service._private_searxng_provider
+        anspire = service._anspire_provider
+        assert searxng is not None and anspire is not None
+        searxng.search = MagicMock()
+        anspire.search = MagicMock()
+        service._new_low_cost_deadline = MagicMock(return_value=0.0)
+
+        result = service.search_comprehensive_intel("600519", "贵州茅台", max_searches=1)
+
+        self.assertFalse(result["latest_news"].success)
+        searxng.search.assert_not_called()
+        anspire.search.assert_not_called()
+
+    def test_cn_stock_news_uses_shared_low_cost_route(self):
+        service = self._service()
+        searxng = service._private_searxng_provider
+        anspire = service._anspire_provider
+        assert searxng is not None and anspire is not None
+        searxng.search = MagicMock(return_value=SearchResponse(
+            query="q",
+            results=[self._result("贵州茅台 600519 最新消息")],
+            provider="SearXNG",
+            success=True,
+        ))
+        anspire.search = MagicMock()
+
+        response = service.search_stock_news("600519", "贵州茅台", max_results=3)
+
+        self.assertEqual(response.provider, "SearXNG")
+        anspire.search.assert_not_called()
+        self.assertEqual(searxng.search.call_args.kwargs["categories"], "news")
+
+    def test_cn_stock_events_uses_shared_low_cost_fallback(self):
+        service = self._service()
+        searxng = service._private_searxng_provider
+        anspire = service._anspire_provider
+        assert searxng is not None and anspire is not None
+        searxng.search = MagicMock(return_value=SearchResponse(
+            query="q", results=[], provider="SearXNG", success=True
+        ))
+        anspire.search = MagicMock(return_value=SearchResponse(
+            query="q",
+            results=[self._result("贵州茅台 600519 发布减持公告")],
+            provider="Anspire",
+            success=True,
+        ))
+
+        response = service.search_stock_events("600519", "贵州茅台")
+
+        self.assertEqual(response.provider, "Anspire")
+        self.assertEqual(searxng.search.call_args.kwargs["categories"], "news")
+
+
+class TestSearXNGSearchProviderResilience(unittest.TestCase):
+    """Remaining provider failover and public-instance behavior tests."""
+
+    setUp = TestSearXNGSearchProvider.setUp
+    _create_provider = TestSearXNGSearchProvider._create_provider
+    _response = staticmethod(TestSearXNGSearchProvider._response)
+    _public_feed = staticmethod(TestSearXNGSearchProvider._public_feed)
 
     @patch("src.search_service._get_with_retry")
     def test_non_json_response_returns_failure(self, mock_get):

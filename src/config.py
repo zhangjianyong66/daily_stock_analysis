@@ -174,6 +174,24 @@ NEWS_STRATEGY_WINDOWS: Dict[str, int] = {
     "medium": 7,
     "long": 30,
 }
+SEARCH_ROUTING_LEGACY = "legacy"
+SEARCH_ROUTING_SEARXNG_FIRST_CN = "searxng_first_cn"
+SUPPORTED_SEARCH_ROUTING_MODES = {
+    SEARCH_ROUTING_LEGACY,
+    SEARCH_ROUTING_SEARXNG_FIRST_CN,
+}
+
+
+def normalize_search_routing_mode(value: Optional[str]) -> str:
+    """Normalize search cost-routing mode while preserving legacy defaults."""
+    normalized = (value or SEARCH_ROUTING_LEGACY).strip().lower()
+    if normalized in SUPPORTED_SEARCH_ROUTING_MODES:
+        return normalized
+    logger.warning(
+        "SEARCH_ROUTING_MODE=%r 无效，已回退为 legacy；可选值: legacy, searxng_first_cn",
+        value,
+    )
+    return SEARCH_ROUTING_LEGACY
 
 
 @dataclass(frozen=True)
@@ -860,6 +878,12 @@ class Config:
     serpapi_keys: List[str] = field(default_factory=list)  # SerpAPI Keys
     searxng_base_urls: List[str] = field(default_factory=list)  # SearXNG instance URLs (self-hosted, no quota)
     searxng_public_instances_enabled: bool = True  # Auto-discover public SearXNG instances when base URLs are absent
+    searxng_secret: Optional[str] = None  # Private Docker SearXNG secret; never log or expose in plain text
+    search_routing_mode: str = SEARCH_ROUTING_LEGACY
+    searxng_request_timeout_seconds: float = 6.0
+    search_intel_total_timeout_seconds: float = 30.0
+    anspire_daily_warning_requests: int = 30
+    anspire_daily_hard_limit_requests: int = 50
 
     # === Social Sentiment (US stocks only, api.adanos.org) ===
     social_sentiment_api_key: Optional[str] = None
@@ -1586,6 +1610,42 @@ class Config:
             os.getenv('SEARXNG_PUBLIC_INSTANCES_ENABLED'),
             default=True,
         )
+        search_routing_mode = normalize_search_routing_mode(os.getenv('SEARCH_ROUTING_MODE'))
+        searxng_request_timeout_seconds = parse_env_float(
+            os.getenv('SEARXNG_REQUEST_TIMEOUT_SECONDS'),
+            6.0,
+            field_name='SEARXNG_REQUEST_TIMEOUT_SECONDS',
+            minimum=0.1,
+        )
+        search_intel_total_timeout_seconds = parse_env_float(
+            os.getenv('SEARCH_INTEL_TOTAL_TIMEOUT_SECONDS'),
+            30.0,
+            field_name='SEARCH_INTEL_TOTAL_TIMEOUT_SECONDS',
+            minimum=0.0,
+        )
+        anspire_daily_warning_requests = parse_env_int(
+            os.getenv('ANSPIRE_DAILY_WARNING_REQUESTS'),
+            30,
+            field_name='ANSPIRE_DAILY_WARNING_REQUESTS',
+            minimum=0,
+        )
+        anspire_daily_hard_limit_requests = parse_env_int(
+            os.getenv('ANSPIRE_DAILY_HARD_LIMIT_REQUESTS'),
+            50,
+            field_name='ANSPIRE_DAILY_HARD_LIMIT_REQUESTS',
+            minimum=0,
+        )
+        if (
+            anspire_daily_warning_requests > 0
+            and anspire_daily_hard_limit_requests > 0
+            and anspire_daily_warning_requests >= anspire_daily_hard_limit_requests
+        ):
+            logger.warning(
+                "ANSPIRE_DAILY_WARNING_REQUESTS 必须小于 ANSPIRE_DAILY_HARD_LIMIT_REQUESTS，"
+                "已回退为 30/50"
+            )
+            anspire_daily_warning_requests = 30
+            anspire_daily_hard_limit_requests = 50
 
         # 企微消息类型与最大字节数逻辑
         wechat_msg_type = os.getenv('WECHAT_MSG_TYPE', 'markdown')
@@ -1745,6 +1805,12 @@ class Config:
             serpapi_keys=serpapi_keys,
             searxng_base_urls=searxng_base_urls,
             searxng_public_instances_enabled=searxng_public_instances_enabled,
+            searxng_secret=os.getenv('SEARXNG_SECRET') or None,
+            search_routing_mode=search_routing_mode,
+            searxng_request_timeout_seconds=searxng_request_timeout_seconds,
+            search_intel_total_timeout_seconds=search_intel_total_timeout_seconds,
+            anspire_daily_warning_requests=anspire_daily_warning_requests,
+            anspire_daily_hard_limit_requests=anspire_daily_hard_limit_requests,
             social_sentiment_api_key=os.getenv('SOCIAL_SENTIMENT_API_KEY') or None,
             social_sentiment_api_url=os.getenv('SOCIAL_SENTIMENT_API_URL', 'https://api.adanos.org').rstrip('/'),
             news_max_age_days=parse_env_int(os.getenv('NEWS_MAX_AGE_DAYS'), 3, field_name='NEWS_MAX_AGE_DAYS', minimum=1),
@@ -3159,6 +3225,53 @@ class Config:
                 severity="info",
                 message="未配置搜索引擎能力 (Bocha/MiniMax/Tavily/Brave/SerpAPI/SearXNG)，新闻搜索功能将不可用",
                 field="BOCHA_API_KEYS",
+            ))
+        if self.search_routing_mode not in SUPPORTED_SEARCH_ROUTING_MODES:
+            issues.append(ConfigIssue(
+                severity="warning",
+                message="SEARCH_ROUTING_MODE 无效，运行时将回退 legacy。可选值：legacy、searxng_first_cn。",
+                field="SEARCH_ROUTING_MODE",
+            ))
+        if self.search_routing_mode == SEARCH_ROUTING_SEARXNG_FIRST_CN and not self.searxng_base_urls:
+            issues.append(ConfigIssue(
+                severity="warning",
+                message=(
+                    "SEARCH_ROUTING_MODE=searxng_first_cn 需要至少一个显式 SEARXNG_BASE_URLS；"
+                    "公共实例不会作为低成本主路由，运行时将回退 legacy。"
+                ),
+                field="SEARXNG_BASE_URLS",
+            ))
+        if self.searxng_request_timeout_seconds <= 0:
+            issues.append(ConfigIssue(
+                severity="error",
+                message="SEARXNG_REQUEST_TIMEOUT_SECONDS 必须大于 0。",
+                field="SEARXNG_REQUEST_TIMEOUT_SECONDS",
+            ))
+        if self.search_intel_total_timeout_seconds < 0:
+            issues.append(ConfigIssue(
+                severity="error",
+                message="SEARCH_INTEL_TOTAL_TIMEOUT_SECONDS 不能为负数。",
+                field="SEARCH_INTEL_TOTAL_TIMEOUT_SECONDS",
+            ))
+        if self.anspire_daily_warning_requests < 0 or self.anspire_daily_hard_limit_requests < 0:
+            issues.append(ConfigIssue(
+                severity="error",
+                message="Anspire 每日预算阈值不能为负数；0 表示关闭对应阈值。",
+                field=(
+                    "ANSPIRE_DAILY_WARNING_REQUESTS"
+                    if self.anspire_daily_warning_requests < 0
+                    else "ANSPIRE_DAILY_HARD_LIMIT_REQUESTS"
+                ),
+            ))
+        if (
+            self.anspire_daily_warning_requests > 0
+            and self.anspire_daily_hard_limit_requests > 0
+            and self.anspire_daily_warning_requests >= self.anspire_daily_hard_limit_requests
+        ):
+            issues.append(ConfigIssue(
+                severity="error",
+                message="ANSPIRE_DAILY_WARNING_REQUESTS 必须小于 ANSPIRE_DAILY_HARD_LIMIT_REQUESTS。",
+                field="ANSPIRE_DAILY_WARNING_REQUESTS",
             ))
 
         # --- Notification channels ---

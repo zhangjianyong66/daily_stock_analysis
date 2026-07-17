@@ -1,0 +1,47 @@
+# DSA 私有 SearXNG：只作为容器内搜索聚合层，不对公网提供搜索页面。
+use_default_settings:
+  engines:
+    keep_only:
+      - baidu
+      - bing
+      - bing news
+      - duckduckgo
+
+general:
+  debug: false
+  instance_name: "DSA Private SearXNG"
+  enable_metrics: true
+
+search:
+  safe_search: 0
+  default_lang: "zh-CN"
+  autocomplete: ""
+  formats:
+    - html
+    - json
+
+server:
+  limiter: false
+  public_instance: false
+  image_proxy: false
+  method: "GET"
+
+valkey:
+  url: false
+
+outgoing:
+  request_timeout: 3.0
+  max_request_timeout: 5.0
+
+engines:
+  - name: baidu
+    categories: [general, news]
+    disabled: false
+  - name: bing
+    categories: [general, news]
+    disabled: false
+  - name: bing news
+    disabled: false
+  - name: duckduckgo
+    categories: [general, news]
+    disabled: false

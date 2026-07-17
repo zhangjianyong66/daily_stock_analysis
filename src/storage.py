@@ -902,6 +902,26 @@ class SearchAuditGap(Base):
     error_summary = Column(String(500), nullable=True)
 
 
+class SearchProviderDailyBudget(Base):
+    """Persistent paid-search request reservations for one Beijing calendar day."""
+
+    __tablename__ = "search_provider_daily_budgets"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    provider = Column(String(64), nullable=False)
+    budget_date = Column(Date, nullable=False)
+    reserved_requests = Column(Integer, nullable=False, default=0)
+    warning_notified_at = Column(DateTime, nullable=True)
+    hard_limit_notified_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=utc_naive_now)
+    updated_at = Column(DateTime, nullable=False, default=utc_naive_now, onupdate=utc_naive_now)
+
+    __table_args__ = (
+        UniqueConstraint("provider", "budget_date", name="uix_search_provider_daily_budget"),
+        Index("ix_search_daily_budget_provider_date", "provider", "budget_date"),
+    )
+
+
 _LLM_USAGE_TELEMETRY_COLUMN_SQL: Dict[str, str] = {
     "provider_usage_json": "TEXT",
     "provider": "VARCHAR(64)",

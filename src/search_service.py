@@ -33,11 +33,13 @@ from tenacity import (
 )
 
 from data_provider.us_index_mapping import is_us_index_code
+from data_provider.base import normalize_stock_code
 from src.config import (
     NEWS_STRATEGY_WINDOWS,
     normalize_news_strategy_profile,
     resolve_news_window_days,
 )
+from src.core.trading_calendar import get_market_for_stock
 from src.services.run_diagnostics import record_provider_run, record_provider_run_started
 from src.schemas.search_usage import (
     SearchAuditContext,
@@ -1132,7 +1134,17 @@ class AnspireSearchProvider(BaseSearchProvider):
     def __init__(self, api_keys: List[str]):
         super().__init__(api_keys, "Anspire")
     
-    def _do_search(self, query: str, api_key: str, max_results: int, days: int = 7, region_mode: int = 0) -> SearchResponse:
+    def _do_search(
+        self,
+        query: str,
+        api_key: str,
+        max_results: int,
+        days: int = 7,
+        region_mode: int = 0,
+        *,
+        timeout: float = 10.0,
+        retry_enabled: bool = True,
+    ) -> SearchResponse:
         """执行 Anspire 搜索"""
         try:
             import requests
@@ -1164,15 +1176,28 @@ class AnspireSearchProvider(BaseSearchProvider):
             }
             
             # 执行搜索
-            response = _get_with_retry(
-                url,
-                headers=headers,
-                params=payload,
-                timeout=10,
-                provider=self.name,
-                api_key=api_key,
-                query=query,
-            )
+            if retry_enabled:
+                response = _get_with_retry(
+                    url,
+                    headers=headers,
+                    params=payload,
+                    timeout=timeout,
+                    provider=self.name,
+                    api_key=api_key,
+                    query=query,
+                )
+            else:
+                response = audited_request_once(
+                    "GET",
+                    url,
+                    provider=self.name,
+                    api_key=api_key,
+                    query=query,
+                    headers=headers,
+                    params=payload,
+                    timeout=timeout,
+                    request_func=requests.get,
+                )
             
             # 检查 HTTP 状态码
             if response.status_code != 200:
@@ -1307,6 +1332,23 @@ class AnspireSearchProvider(BaseSearchProvider):
                 success=False,
                 error_message=error_msg
             )
+
+    def search(
+        self,
+        query: str,
+        max_results: int = 5,
+        days: int = 7,
+        *,
+        timeout: float = 10.0,
+        retry_enabled: bool = True,
+    ) -> SearchResponse:
+        return self._execute_search(
+            query,
+            max_results=max_results,
+            days=days,
+            timeout=max(0.1, float(timeout)),
+            retry_enabled=retry_enabled,
+        )
     
     @staticmethod
     def _extract_domain(url: str) -> str:
@@ -1964,8 +2006,9 @@ class SearXNGSearchProvider(BaseSearchProvider):
         max_results: int,
         days: int = 7,
         *,
-        timeout: int,
+        timeout: float,
         retry_enabled: bool,
+        categories: Optional[str] = None,
     ) -> SearchResponse:
         """Execute one SearXNG search against a specific instance."""
         try:
@@ -1982,6 +2025,8 @@ class SearXNGSearchProvider(BaseSearchProvider):
                 "time_range": self._time_range(days),
                 "pageno": 1,
             }
+            if categories:
+                params["categories"] = categories
 
             if retry_enabled:
                 response = _get_with_retry(
@@ -2115,16 +2160,25 @@ class SearXNGSearchProvider(BaseSearchProvider):
         except Exception:
             return "未知来源"
 
-    def _search_impl(self, query: str, max_results: int = 5, days: int = 7) -> SearchResponse:
+    def _search_impl(
+        self,
+        query: str,
+        max_results: int = 5,
+        days: int = 7,
+        *,
+        categories: Optional[str] = None,
+        request_timeout: Optional[float] = None,
+        single_instance: bool = False,
+    ) -> SearchResponse:
         """Execute SearXNG search with instance rotation and per-request failover."""
         start_time = time.time()
         if self._base_urls:
             candidates = self._rotate_candidates(
                 self._base_urls,
-                max_attempts=len(self._base_urls),
+                max_attempts=1 if single_instance else len(self._base_urls),
             )
-            retry_enabled = True
-            timeout = self.SELF_HOSTED_TIMEOUT_SECONDS
+            retry_enabled = not single_instance
+            timeout = request_timeout or self.SELF_HOSTED_TIMEOUT_SECONDS
             empty_error = "SearXNG 未配置可用实例"
         elif self._use_public_instances:
             public_instances = self._get_public_instances()
@@ -2160,13 +2214,13 @@ class SearXNGSearchProvider(BaseSearchProvider):
                 days=days,
                 timeout=timeout,
                 retry_enabled=retry_enabled,
+                categories=categories,
             )
             response.search_time = time.time() - start_time
             if response.success:
                 logger.info(
-                    "[%s] 搜索 '%s' 成功，实例=%s，返回 %s 条结果，耗时 %.2fs",
+                    "[%s] 搜索成功，实例=%s，返回 %s 条结果，耗时 %.2fs",
                     self.name,
-                    query,
                     base_url,
                     len(response.results),
                     response.search_time,
@@ -2186,10 +2240,26 @@ class SearXNGSearchProvider(BaseSearchProvider):
             search_time=elapsed,
         )
 
-    def search(self, query: str, max_results: int = 5, days: int = 7) -> SearchResponse:
+    def search(
+        self,
+        query: str,
+        max_results: int = 5,
+        days: int = 7,
+        *,
+        categories: Optional[str] = None,
+        request_timeout: Optional[float] = None,
+        single_instance: bool = False,
+    ) -> SearchResponse:
         context = current_search_audit_context() or SearchAuditContext(operation="provider_search")
         with search_audit_scope(context):
-            return self._search_impl(query, max_results=max_results, days=days)
+            return self._search_impl(
+                query,
+                max_results=max_results,
+                days=days,
+                categories=categories,
+                request_timeout=request_timeout,
+                single_instance=single_instance,
+            )
 
 
 class SearchService:
@@ -2362,6 +2432,9 @@ class SearchService:
         minimax_keys: Optional[List[str]] = None,
         searxng_base_urls: Optional[List[str]] = None,
         searxng_public_instances_enabled: bool = True,
+        search_routing_mode: str = "legacy",
+        searxng_request_timeout_seconds: float = 6.0,
+        search_intel_total_timeout_seconds: float = 30.0,
         news_max_age_days: int = 3,
         news_strategy_profile: str = "short",
     ):
@@ -2377,10 +2450,18 @@ class SearchService:
             minimax_keys: MiniMax API Key 列表
             searxng_base_urls: SearXNG 实例地址列表（自建无配额兜底）
             searxng_public_instances_enabled: 未配置自建实例时，是否自动使用公共 SearXNG 实例
+            search_routing_mode: 搜索路由模式，默认 legacy
+            searxng_request_timeout_seconds: 低成本路由单次私有 SearXNG 超时
+            search_intel_total_timeout_seconds: 单只股票低成本情报搜索总预算
             news_max_age_days: 新闻最大时效（天）
             news_strategy_profile: 新闻窗口策略档位（ultra_short/short/medium/long）
         """
         self._providers: List[BaseSearchProvider] = []
+        self.search_routing_mode = (search_routing_mode or "legacy").strip().lower()
+        self.searxng_request_timeout_seconds = max(0.1, float(searxng_request_timeout_seconds or 6.0))
+        self.search_intel_total_timeout_seconds = max(0.0, float(search_intel_total_timeout_seconds or 0.0))
+        self._private_searxng_provider: Optional[SearXNGSearchProvider] = None
+        self._anspire_provider: Optional[AnspireSearchProvider] = None
         self.news_max_age_days = max(1, news_max_age_days)
         raw_profile = (news_strategy_profile or "short").strip().lower()
         self.news_strategy_profile = normalize_news_strategy_profile(news_strategy_profile)
@@ -2432,14 +2513,22 @@ class SearchService:
         if searxng_provider.is_available:
             self._providers.append(searxng_provider)
             if searxng_base_urls:
+                self._private_searxng_provider = searxng_provider
                 logger.info("已配置 SearXNG 搜索，共 %s 个自建实例", len(searxng_base_urls))
             else:
                 logger.info("已启用 SearXNG 公共实例自动发现模式")
 
         # 7. Anspire Search（实时智能搜索优化）
         if anspire_keys:
-            self._providers.insert(0, AnspireSearchProvider(anspire_keys))
+            self._anspire_provider = AnspireSearchProvider(anspire_keys)
+            self._providers.insert(0, self._anspire_provider)
             logger.info(f"已配置 Anspire Search 搜索，共 {len(anspire_keys)} 个 API Key")
+
+        if self.search_routing_mode == "searxng_first_cn" and self._private_searxng_provider is None:
+            logger.warning(
+                "SEARCH_ROUTING_MODE=searxng_first_cn 但未配置私有 SEARXNG_BASE_URLS，已回退 legacy"
+            )
+            self.search_routing_mode = "legacy"
             
         if not self._providers:
             logger.warning("未配置任何搜索能力，新闻搜索功能将不可用")
@@ -3658,6 +3747,11 @@ class SearchService:
         cache_hit: Optional[bool] = None,
         error_type: Optional[str] = None,
         error_message: Optional[Any] = None,
+        fallback_from: Optional[str] = None,
+        fallback_to: Optional[str] = None,
+        route_source: Optional[str] = None,
+        physical_source: Optional[str] = None,
+        budget_remaining_ms: Optional[int] = None,
     ) -> None:
         record_provider_run(
             data_type="news_search",
@@ -3667,7 +3761,12 @@ class SearchService:
             latency_ms=latency_ms,
             error_type=error_type,
             error_message=error_message,
+            fallback_from=fallback_from,
+            fallback_to=fallback_to,
             cache_hit=cache_hit,
+            route_source=route_source,
+            physical_source=physical_source,
+            budget_remaining_ms=budget_remaining_ms,
             record_count=record_count,
         )
 
@@ -3700,6 +3799,251 @@ class SearchService:
         )
         with search_audit_scope(context):
             return provider.search(query, max_results=max_results, days=days, **search_kwargs)
+
+    def _should_use_searxng_first(self, stock_code: str) -> bool:
+        if self.search_routing_mode != "searxng_first_cn" or self._private_searxng_provider is None:
+            return False
+        normalized = normalize_stock_code((stock_code or "").strip())
+        return get_market_for_stock(normalized) == "cn"
+
+    def _new_low_cost_deadline(self) -> Optional[float]:
+        if self.search_intel_total_timeout_seconds <= 0:
+            return None
+        return time.monotonic() + self.search_intel_total_timeout_seconds
+
+    @staticmethod
+    def _remaining_deadline_seconds(deadline: Optional[float]) -> Optional[float]:
+        if deadline is None:
+            return None
+        return max(0.0, deadline - time.monotonic())
+
+    def _prepare_cn_dimension_response(
+        self,
+        response: SearchResponse,
+        *,
+        stock_code: str,
+        stock_name: str,
+        dimension: str,
+        strict_freshness: bool,
+        search_days: int,
+        provider_max_results: int,
+        max_results: int,
+        prefer_chinese: bool,
+    ) -> SearchResponse:
+        if strict_freshness:
+            prepared = self._filter_news_response(
+                response,
+                search_days=search_days,
+                max_results=provider_max_results,
+                log_scope=f"{stock_code}:{response.provider}:{dimension}",
+            )
+        elif dimension in {"market_analysis", "earnings", "industry"}:
+            prepared = self._filter_news_response(
+                response,
+                search_days=self.ANALYTICAL_INTEL_LOOKBACK_DAYS,
+                max_results=provider_max_results,
+                keep_unknown=True,
+                log_scope=f"{stock_code}:{response.provider}:{dimension}",
+            )
+        else:
+            prepared = self._normalize_and_limit_response(
+                response,
+                max_results=provider_max_results,
+            )
+        prepared = self._rank_news_response(
+            prepared,
+            stock_code=stock_code,
+            stock_name=stock_name,
+            prefer_chinese=prefer_chinese,
+            max_results=provider_max_results,
+            log_scope=f"{stock_code}:{response.provider}:{dimension}:rank",
+        )
+        prepared = self._filter_ranked_news_for_context(
+            prepared,
+            log_scope=f"{stock_code}:{response.provider}:{dimension}:admission",
+        )
+        return self._limit_search_response(prepared, max_results=max_results)
+
+    def _is_cn_dimension_acceptable(
+        self,
+        response: SearchResponse,
+        *,
+        strict_freshness: bool,
+        prefer_chinese: bool,
+    ) -> bool:
+        if not response.success or not response.results:
+            return False
+        if not strict_freshness:
+            return True
+        stats = self._news_relevance_stats(response, prefer_chinese=prefer_chinese)
+        return stats["direct_count"] > 0
+
+    @staticmethod
+    def _low_cost_error_type(response: SearchResponse, accepted: bool) -> Optional[str]:
+        if accepted:
+            return None
+        error_text = str(response.error_message or "").lower()
+        if "budget_blocked" in error_text:
+            return "budget_blocked"
+        if "budget_unavailable" in error_text:
+            return "budget_unavailable"
+        if "deadline_exhausted" in error_text:
+            return "deadline_exhausted"
+        return "NoUsableNews"
+
+    def _search_cn_dimension_with_fallback(
+        self,
+        *,
+        query: str,
+        stock_code: str,
+        stock_name: str,
+        dimension: str,
+        operation: str,
+        call_source: str,
+        business_search_id: str,
+        strict_freshness: bool,
+        category: str,
+        search_days: int,
+        provider_max_results: int,
+        max_results: int,
+        deadline: Optional[float],
+    ) -> SearchResponse:
+        prefer_chinese = self._should_prefer_chinese_news(stock_code, stock_name)
+        providers: List[BaseSearchProvider] = []
+        if self._private_searxng_provider is not None:
+            providers.append(self._private_searxng_provider)
+        if self._anspire_provider is not None:
+            providers.append(self._anspire_provider)
+
+        best_response: Optional[SearchResponse] = None
+        had_provider_success = False
+        for provider_attempt, provider in enumerate(providers, 1):
+            remaining = self._remaining_deadline_seconds(deadline)
+            if remaining is not None and remaining <= 0:
+                logger.warning(
+                    "[低成本搜索] %s(%s) 维度=%s 总预算耗尽，停止发起新请求",
+                    stock_name,
+                    stock_code,
+                    dimension,
+                )
+                self._record_news_search_run(
+                    provider=provider.name,
+                    operation=operation,
+                    success=False,
+                    latency_ms=0,
+                    error_type="deadline_exhausted",
+                    error_message="deadline_exhausted: 低成本搜索总预算已耗尽",
+                )
+                break
+
+            search_kwargs: Dict[str, Any] = {}
+            if isinstance(provider, SearXNGSearchProvider):
+                timeout = self.searxng_request_timeout_seconds
+                if remaining is not None:
+                    timeout = min(timeout, remaining)
+                search_kwargs.update(
+                    categories=category,
+                    request_timeout=max(0.1, timeout),
+                    single_instance=True,
+                )
+            elif isinstance(provider, AnspireSearchProvider):
+                timeout = 10.0 if remaining is None else min(10.0, remaining)
+                search_kwargs.update(timeout=max(0.1, timeout), retry_enabled=False)
+
+            started_at = time.monotonic()
+            record_provider_run_started(
+                data_type="news_search",
+                provider=provider.name,
+                operation=operation,
+                route_source="searxng_first_cn",
+                physical_source=provider.name,
+            )
+            response = self._call_provider_with_audit(
+                provider,
+                query,
+                business_search_id=business_search_id,
+                call_source=call_source,
+                operation=operation,
+                provider_attempt=provider_attempt,
+                stock_code=stock_code,
+                stock_name=stock_name,
+                dimension=dimension,
+                lookback_days=search_days,
+                max_results=provider_max_results,
+                days=search_days,
+                **search_kwargs,
+            )
+            had_provider_success = had_provider_success or bool(response.success)
+            prepared = self._prepare_cn_dimension_response(
+                response,
+                stock_code=stock_code,
+                stock_name=stock_name,
+                dimension=dimension,
+                strict_freshness=strict_freshness,
+                search_days=search_days,
+                provider_max_results=provider_max_results,
+                max_results=max_results,
+                prefer_chinese=prefer_chinese,
+            )
+            accepted = self._is_cn_dimension_acceptable(
+                prepared,
+                strict_freshness=strict_freshness,
+                prefer_chinese=prefer_chinese,
+            )
+            self._record_news_search_run(
+                provider=provider.name,
+                operation=operation,
+                success=accepted,
+                latency_ms=self._elapsed_ms(started_at),
+                record_count=len(prepared.results or []),
+                error_type=self._low_cost_error_type(response, accepted),
+                error_message=None if accepted else (response.error_message or "过滤后无有效结果"),
+                fallback_from="SearXNG" if isinstance(provider, AnspireSearchProvider) else None,
+                fallback_to=(
+                    "Anspire"
+                    if isinstance(provider, SearXNGSearchProvider)
+                    and not accepted
+                    and self._anspire_provider is not None
+                    else None
+                ),
+                route_source="searxng_first_cn",
+                physical_source=provider.name,
+                budget_remaining_ms=(
+                    None
+                    if self._remaining_deadline_seconds(deadline) is None
+                    else int(self._remaining_deadline_seconds(deadline) * 1000)
+                ),
+            )
+            if prepared.results and (
+                best_response is None or len(prepared.results) > len(best_response.results)
+            ):
+                best_response = prepared
+            if accepted:
+                logger.info(
+                    "[低成本搜索] 维度=%s 接受 provider=%s 结果=%s",
+                    dimension,
+                    provider.name,
+                    len(prepared.results),
+                )
+                return prepared
+            if isinstance(provider, SearXNGSearchProvider):
+                logger.warning(
+                    "[低成本搜索] 维度=%s SearXNG 未通过准入，准备 Anspire fallback: %s",
+                    dimension,
+                    sanitize_diagnostic_text(response.error_message or "结果不足"),
+                )
+
+        if best_response is not None:
+            return best_response
+        if had_provider_success:
+            return SearchResponse(query=query, results=[], provider="Filtered", success=True)
+        return SearchResponse(
+            query=query,
+            results=[],
+            provider="None",
+            success=False,
+            error_message="低成本搜索链路不可用或预算已阻断",
+        )
 
     def search_stock_news(
         self,
@@ -3813,6 +4157,26 @@ class SearchService:
                 return cached
 
         try:
+            if self._should_use_searxng_first(stock_code):
+                response = self._search_cn_dimension_with_fallback(
+                    query=query,
+                    stock_code=stock_code,
+                    stock_name=stock_name,
+                    dimension="latest_news",
+                    operation="search_stock_news",
+                    call_source=call_source,
+                    business_search_id=business_search_id,
+                    strict_freshness=True,
+                    category="news",
+                    search_days=search_days,
+                    provider_max_results=provider_max_results,
+                    max_results=max_results,
+                    deadline=self._new_low_cost_deadline(),
+                )
+                if response.results:
+                    self._put_cache(cache_key, response)
+                return response
+
             # 依次尝试各个搜索引擎（若过滤后为空，继续尝试下一引擎）
             had_provider_success = False
             best_ranked_response: Optional[SearchResponse] = None
@@ -4048,6 +4412,24 @@ class SearchService:
         
         # 依次尝试各个搜索引擎
         business_search_id = SearchAuditContext(call_source=call_source).business_search_id
+        if self._should_use_searxng_first(stock_code):
+            search_days = self._effective_news_window_days()
+            return self._search_cn_dimension_with_fallback(
+                query=query,
+                stock_code=stock_code,
+                stock_name=stock_name,
+                dimension="events",
+                operation="search_stock_events",
+                call_source=call_source,
+                business_search_id=business_search_id,
+                strict_freshness=True,
+                category="news",
+                search_days=search_days,
+                provider_max_results=self._provider_request_size(5),
+                max_results=5,
+                deadline=self._new_low_cost_deadline(),
+            )
+
         for provider_attempt, provider in enumerate(self._providers, 1):
             if not provider.is_available:
                 continue
@@ -4232,10 +4614,40 @@ class SearchService:
         
         # 轮流使用不同的搜索引擎
         provider_index = 0
+        use_low_cost_routing = self._should_use_searxng_first(stock_code)
+        low_cost_deadline = self._new_low_cost_deadline() if use_low_cost_routing else None
         
         for dim in search_dimensions:
             if search_count >= max_searches:
                 break
+
+            if use_low_cost_routing:
+                request_days = (
+                    self.ANALYTICAL_INTEL_LOOKBACK_DAYS
+                    if dim['name'] in {"market_analysis", "earnings", "industry"}
+                    else search_days
+                )
+                strict_freshness = dim['name'] in {"latest_news", "announcements", "risk_check"}
+                response = self._search_cn_dimension_with_fallback(
+                    query=dim['query'],
+                    stock_code=stock_code,
+                    stock_name=stock_name,
+                    dimension=dim['name'],
+                    operation="search_comprehensive_intel",
+                    call_source=call_source,
+                    business_search_id=business_search_id,
+                    strict_freshness=strict_freshness,
+                    category="news" if strict_freshness else "general",
+                    search_days=request_days,
+                    provider_max_results=provider_max_results,
+                    max_results=target_per_dimension,
+                    deadline=low_cost_deadline,
+                )
+                results[dim['name']] = response
+                search_count += 1
+                if self._remaining_deadline_seconds(low_cost_deadline) == 0:
+                    break
+                continue
             
             # 选择搜索引擎（轮流使用）
             available_providers = [p for p in self._providers if p.is_available]
@@ -4633,6 +5045,13 @@ def get_search_service() -> SearchService:
                     minimax_keys=config.minimax_api_keys,
                     searxng_base_urls=config.searxng_base_urls,
                     searxng_public_instances_enabled=config.searxng_public_instances_enabled,
+                    search_routing_mode=getattr(config, "search_routing_mode", "legacy"),
+                    searxng_request_timeout_seconds=getattr(
+                        config, "searxng_request_timeout_seconds", 6.0
+                    ),
+                    search_intel_total_timeout_seconds=getattr(
+                        config, "search_intel_total_timeout_seconds", 30.0
+                    ),
                     news_max_age_days=config.news_max_age_days,
                     news_strategy_profile=getattr(config, "news_strategy_profile", "short"),
                 )

@@ -55,7 +55,41 @@ docker-compose -f ./docker/docker-compose.yml logs -f
 docker-compose -f ./docker/docker-compose.yml ps
 ```
 
-### 3.1 Resource Recommendations
+### 3.1 Private SearXNG Tiered Search
+
+Compose includes an optional `searxng` profile pinned to an official image tag and digest. It stays on the internal Compose network, publishes no host port, and is not a startup dependency of `server` or `analyzer`.
+
+Configure `.env` first:
+
+```env
+SEARXNG_SECRET=replace-with-a-high-entropy-secret
+SEARXNG_BASE_URLS=http://searxng:8080
+SEARXNG_PUBLIC_INSTANCES_ENABLED=false
+SEARCH_ROUTING_MODE=searxng_first_cn
+SEARXNG_REQUEST_TIMEOUT_SECONDS=6
+SEARCH_INTEL_TOTAL_TIMEOUT_SECONDS=30
+ANSPIRE_DAILY_WARNING_REQUESTS=30
+ANSPIRE_DAILY_HARD_LIMIT_REQUESTS=50
+```
+
+Then start the optional profile explicitly:
+
+```bash
+docker compose -f docker/docker-compose.yml --profile searxng up -d server searxng
+docker compose -f docker/docker-compose.yml ps
+docker compose -f docker/docker-compose.yml logs -f searxng
+```
+
+Run a one-off upstream smoke test separately from the healthcheck:
+
+```bash
+docker compose -f docker/docker-compose.yml exec server \
+  python -c "import requests; r=requests.get('http://searxng:8080/search', params={'q':'Kweichow Moutai','format':'json','categories':'news'}, timeout=10); print(r.status_code, len(r.json().get('results', [])))"
+```
+
+The bundled configuration enables only Baidu, Bing, Bing News, and DuckDuckGo, with public-instance mode, limiter, Valkey, and access logs disabled. Roll back by setting `SEARCH_ROUTING_MODE=legacy` and stopping the `searxng` profile; historical audit and budget tables can remain.
+
+### 3.2 Resource Recommendations
 
 The default `docker/docker-compose.yml` sets `limits.memory: 1G` and `reservations.memory: 512M` for each service. Treat this as the recommended starting point for full analysis workloads.
 
@@ -216,6 +250,12 @@ journalctl -u stock-analyzer -f
 | `SERPAPI_API_KEYS` | - | SerpAPI realtime financial news search (recommended) |
 | `TAVILY_API_KEYS` | - | Tavily news search (optional) |
 | `MINIMAX_API_KEYS` | - | MiniMax search (optional) |
+| `SEARXNG_BASE_URLS` | - | Private SearXNG URL; the bundled Compose service uses `http://searxng:8080` |
+| `SEARXNG_SECRET` | - | High-entropy private SearXNG secret; never commit a real value |
+| `SEARCH_ROUTING_MODE` | `legacy` | Set `searxng_first_cn` to enable tiered routing only for A-shares/A-share ETFs |
+| `SEARXNG_REQUEST_TIMEOUT_SECONDS` | `6` | Hard timeout for one private SearXNG request |
+| `SEARCH_INTEL_TOTAL_TIMEOUT_SECONDS` | `30` | Per-stock total search budget; `0` disables it |
+| `ANSPIRE_DAILY_WARNING_REQUESTS` / `ANSPIRE_DAILY_HARD_LIMIT_REQUESTS` | `30` / `50` | Beijing-day physical-request warning/hard limit, enforced only in cost-routing mode |
 
 ---
 

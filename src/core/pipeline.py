@@ -238,6 +238,13 @@ class StockAnalysisPipeline:
                 minimax_keys=self.config.minimax_api_keys,
                 searxng_base_urls=self.config.searxng_base_urls,
                 searxng_public_instances_enabled=self.config.searxng_public_instances_enabled,
+                search_routing_mode=getattr(self.config, "search_routing_mode", "legacy"),
+                searxng_request_timeout_seconds=getattr(
+                    self.config, "searxng_request_timeout_seconds", 6.0
+                ),
+                search_intel_total_timeout_seconds=getattr(
+                    self.config, "search_intel_total_timeout_seconds", 30.0
+                ),
                 news_max_age_days=self.config.news_max_age_days,
                 news_strategy_profile=getattr(self.config, "news_strategy_profile", "short"),
             )

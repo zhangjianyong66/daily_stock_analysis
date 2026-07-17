@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [新功能] A 股与 A 股 ETF 新增可选私有 SearXNG 优先、Anspire 质量兜底的分层搜索路由，并加入 30/50 次北京时间每日付费请求预警与硬上限。
 - [新功能] 用量分析新增搜索调用账本，逐次记录真实供应商请求、重试、fallback、脱敏完整出入参、筛选分页以及管理员 CSV/JSON 导出。
 - [新功能] 搜索供应商余额、认证、权限和持续网络故障新增用量页卡片、Web 全局提示、24 小时降噪通知与恢复通知。
 - [修复] Anspire HTTP 401 响应正文明确余额或额度耗尽时按 `quota_exhausted` 展示，不再误报为 API Key 无效。

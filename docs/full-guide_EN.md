@@ -152,6 +152,10 @@ Go to your forked repo → `Settings` → `Secrets and variables` → `Actions` 
 | `MINIMAX_API_KEYS` | [MiniMax](https://platform.minimax.io/) Coding Plan Web Search (structured search results) | Optional |
 | `SEARXNG_BASE_URLS` | SearXNG self-hosted instances (quota-free fallback, enable format: json in settings.yml); when empty the app auto-discovers public instances | Optional |
 | `SEARXNG_PUBLIC_INSTANCES_ENABLED` | Auto-discover public SearXNG instances from `searx.space` when `SEARXNG_BASE_URLS` is empty (default `true`) | Optional |
+| `SEARCH_ROUTING_MODE` | `legacy` preserves current routing; `searxng_first_cn` routes A-shares/A-share ETFs through explicit private SearXNG before quality-based Anspire fallback | Default `legacy` |
+| `SEARXNG_REQUEST_TIMEOUT_SECONDS` | Per-request private SearXNG timeout in cost-routing mode; DSA does not retry the same instance | Default `6` |
+| `SEARCH_INTEL_TOTAL_TIMEOUT_SECONDS` | Per-stock low-cost intelligence-search budget; `0` disables the total deadline | Default `30` |
+| `ANSPIRE_DAILY_WARNING_REQUESTS` / `ANSPIRE_DAILY_HARD_LIMIT_REQUESTS` | Beijing-day Anspire physical-request warning/hard limit, enforced only in cost-routing mode; `0` disables each threshold | Default `30` / `50` |
 | `TUSHARE_TOKEN` | [Tushare Pro](https://tushare.pro/weborder/#/login?reg=834638) Token | Optional |
 | `TICKFLOW_API_KEY` | [TickFlow](https://tickflow.org) API key for optional A-share daily K-lines, realtime quotes, stock list/name lookup, and CN market review enhancement; permission or entitlement failures fall back to existing providers | Optional |
 
@@ -317,8 +321,14 @@ For the notification baseline, diagnostics, and deployment notes, see [Notificat
 | `SOCIAL_SENTIMENT_API_URL` | Stock Sentiment API endpoint (default `https://api.adanos.org`) | Optional |
 | `SEARXNG_BASE_URLS` | SearXNG self-hosted instances (quota-free fallback, enable format: json in settings.yml); when empty the app auto-discovers public instances | Optional |
 | `SEARXNG_PUBLIC_INSTANCES_ENABLED` | Auto-discover public SearXNG instances from `searx.space` when `SEARXNG_BASE_URLS` is empty (default `true`) | Optional |
+| `SEARXNG_SECRET` | High-entropy secret for the private Docker SearXNG service; stored only in deployment configuration and masked in Web settings | Optional |
+| `SEARCH_ROUTING_MODE` | `legacy` preserves provider behavior; `searxng_first_cn` uses private SearXNG → Anspire for A-shares/A-share ETFs | Default `legacy` |
+| `SEARXNG_REQUEST_TIMEOUT_SECONDS` | Hard timeout for one private SearXNG call; the low-cost path does not retry the same instance | Default `6` |
+| `SEARCH_INTEL_TOTAL_TIMEOUT_SECONDS` | Total per-stock intelligence-search budget; no new calls start after exhaustion, and `0` disables it | Default `30` |
+| `ANSPIRE_DAILY_WARNING_REQUESTS` | Beijing-day Anspire physical-request warning threshold; `0` disables it | Default `30` |
+| `ANSPIRE_DAILY_HARD_LIMIT_REQUESTS` | Beijing-day Anspire physical-request hard limit; later calls are blocked before network I/O, and `0` disables it | Default `50` |
 
-> Behavior note: Search and social sentiment are optional enhancement services. If either service fails to initialize, the system logs a warning and degrades gracefully by skipping that stage without blocking the core analysis flow.
+> Behavior note: Search and social sentiment are optional enhancement services. If either service fails to initialize, the system logs a warning and degrades gracefully by skipping that stage without blocking the core analysis flow. `searxng_first_cn` requires explicit private URLs and never promotes public instances to the primary tier. Critical news/announcement/risk dimensions require at least one direct and timely result; analytical dimensions accept one admitted result and do not pay merely to increase result count.
 
 ### Data Source Configuration
 

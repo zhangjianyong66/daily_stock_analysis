@@ -58,6 +58,12 @@ const fieldTitleMap: Record<string, string> = {
   STOCK_INDEX_REMOTE_UPDATE_ENABLED: '股票索引远程更新',
   SEARXNG_BASE_URLS: 'SearXNG 自建实例地址',
   SEARXNG_PUBLIC_INSTANCES_ENABLED: 'SearXNG 公共实例自动发现',
+  SEARXNG_SECRET: 'SearXNG 私有实例密钥',
+  SEARCH_ROUTING_MODE: '搜索成本路由模式',
+  SEARXNG_REQUEST_TIMEOUT_SECONDS: 'SearXNG 单次超时（秒）',
+  SEARCH_INTEL_TOTAL_TIMEOUT_SECONDS: '单股搜索总预算（秒）',
+  ANSPIRE_DAILY_WARNING_REQUESTS: 'Anspire 每日预警次数',
+  ANSPIRE_DAILY_HARD_LIMIT_REQUESTS: 'Anspire 每日硬上限',
   MINIMAX_API_KEYS: 'MiniMax API Keys',
   NEWS_STRATEGY_PROFILE: '新闻策略窗口档位',
   NEWS_MAX_AGE_DAYS: '新闻最大时效（天）',
@@ -224,6 +230,12 @@ const fieldDescriptionMap: Record<string, string> = {
   STOCK_INDEX_REMOTE_UPDATE_ENABLED: '控制是否从 GitHub main 远程刷新股票自动补全索引；失败会降级到本地缓存或内置索引，不影响主分析流程。',
   SEARXNG_BASE_URLS: 'SearXNG 自建实例地址（逗号分隔，无配额兜底，需在 settings.yml 启用 format: json）。',
   SEARXNG_PUBLIC_INSTANCES_ENABLED: '当未配置 SearXNG 自建实例时，自动从 searx.space 获取公共实例并轮询使用；设为 false 可禁用该默认行为。',
+  SEARXNG_SECRET: '注入私有 Docker SearXNG 的高熵密钥；设置页只显示掩码，禁止提交真实值。',
+  SEARCH_ROUTING_MODE: 'legacy 保持现有行为；searxng_first_cn 仅让 A 股/A 股 ETF 先查私有 SearXNG，再按质量需要回退 Anspire。',
+  SEARXNG_REQUEST_TIMEOUT_SECONDS: '低成本路由中每次私有 SearXNG 请求的硬超时，默认 6 秒且不在 DSA 侧重试同一实例。',
+  SEARCH_INTEL_TOTAL_TIMEOUT_SECONDS: '单只股票低成本情报搜索总预算，默认 30 秒；0 表示关闭总 deadline。',
+  ANSPIRE_DAILY_WARNING_REQUESTS: '北京时间自然日 Anspire 物理请求预警阈值；仅低成本模式启用，0 表示关闭。',
+  ANSPIRE_DAILY_HARD_LIMIT_REQUESTS: '北京时间自然日 Anspire 物理请求硬上限；达到后在网络调用前阻断，0 表示关闭。',
   MINIMAX_API_KEYS: '用于新闻检索的 MiniMax 密钥，支持逗号分隔多个（最低优先级）。',
   NEWS_STRATEGY_PROFILE: '新闻窗口档位：ultra_short=1天，short=3天，medium=7天，long=30天。',
   NEWS_MAX_AGE_DAYS: '新闻最大时效上限。实际窗口 = min(策略档位天数, NEWS_MAX_AGE_DAYS)。例如 ultra_short + 7 仍为 1 天。',
@@ -380,6 +392,10 @@ const fieldDescriptionMap: Record<string, string> = {
 };
 
 const fieldOptionLabelMap: Record<string, Record<string, string>> = {
+  SEARCH_ROUTING_MODE: {
+    legacy: '保持现有路由',
+    searxng_first_cn: 'A股优先私有 SearXNG',
+  },
   NEWS_STRATEGY_PROFILE: {
     ultra_short: '超短线（1天）',
     short: '短期（3天）',
@@ -458,6 +474,10 @@ const fieldOptionLabelMap: Record<string, Record<string, string>> = {
 };
 
 const fieldOptionLabelMapEn: Record<string, Record<string, string>> = {
+  SEARCH_ROUTING_MODE: {
+    legacy: 'Keep legacy routing',
+    searxng_first_cn: 'Private SearXNG first (CN)',
+  },
   NEWS_STRATEGY_PROFILE: {
     ultra_short: 'Ultra short (1 day)',
     short: 'Short (3 days)',
