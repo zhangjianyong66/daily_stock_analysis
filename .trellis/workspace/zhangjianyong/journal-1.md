@@ -479,3 +479,39 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 15: 完成 ETF Anspire 搜索验收与任务归档
+
+**Date**: 2026-07-17
+**Task**: 完成 ETF Anspire 搜索验收与任务归档
+**Branch**: `main`
+
+### Summary
+
+用户确认 Anspire 在线验收通过；完成 ETF 搜索污染防护子任务归档，并将已被停用方案取代的自建 SearXNG 父任务按历史状态归档。
+
+### Main Changes
+
+- 记录 Anspire 在线召回、分流、物理请求上限和脱敏审计验证已完成。
+- 归档 `07-17-searxng-contamination-guard`。
+- 将 `07-17-searxng-cost-routing` 明确标记为已被替代后归档，保留原验收清单作为历史记录。
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ee40693` | (see git log) |
+
+### Testing
+
+- 用户确认 Anspire 在线召回、分流、单标的最多两次物理请求及脱敏审计验收通过。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
