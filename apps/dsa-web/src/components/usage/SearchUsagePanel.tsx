@@ -12,7 +12,13 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
 import { Card, Drawer, InlineAlert, StatCard } from '../common';
 import { cn } from '../../utils/cn';
-import { getSearchErrorLabel, SEARCH_ERROR_CATEGORIES } from './searchUsageLabels';
+import {
+  getSearchDimensionLabel,
+  getSearchErrorLabel,
+  getSearchOperationLabel,
+  getSearchSourceLabel,
+  SEARCH_ERROR_CATEGORIES,
+} from './searchUsageLabels';
 
 const PERIODS: SearchUsagePeriod[] = ['today', '7d', 'month', 'all', 'custom'];
 
@@ -133,7 +139,7 @@ export function SearchUsagePanel() {
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
         <select className="input" value={provider} onChange={(e) => { setPage(1); setProvider(e.target.value); }}><option value="">{zh ? '全部供应商' : 'All providers'}</option>{providers.map((value) => <option key={value}>{value}</option>)}</select>
-        <select className="input" value={source} onChange={(e) => { setPage(1); setSource(e.target.value); }}><option value="">{zh ? '全部来源' : 'All sources'}</option>{sources.map((value) => <option key={value}>{value}</option>)}</select>
+        <select className="input" value={source} onChange={(e) => { setPage(1); setSource(e.target.value); }}><option value="">{zh ? '全部来源' : 'All sources'}</option>{sources.map((value) => <option key={value} value={value}>{getSearchSourceLabel(value, language)}</option>)}</select>
         <select className="input" value={success} onChange={(e) => { setPage(1); setSuccess(e.target.value); }}><option value="">{zh ? '全部状态' : 'All statuses'}</option><option value="true">{zh ? '成功' : 'Success'}</option><option value="false">{zh ? '失败' : 'Failed'}</option></select>
         <select className="input" value={errorCategory} onChange={(e) => { setPage(1); setErrorCategory(e.target.value); }}><option value="">{zh ? '全部错误' : 'All errors'}</option>{SEARCH_ERROR_CATEGORIES.map((value) => <option key={value} value={value}>{getSearchErrorLabel(value, language)}</option>)}</select>
         <select className="input" value={keyFingerprint} onChange={(e) => { setPage(1); setKeyFingerprint(e.target.value); }}><option value="">{zh ? '全部 Key' : 'All keys'}</option>{keys.map((value) => <option key={value} value={value}>{value.slice(0, 12)}</option>)}</select>
@@ -154,17 +160,17 @@ export function SearchUsagePanel() {
 
         <div className="grid gap-4 lg:grid-cols-3">
           {([
-            [zh ? '供应商分布' : 'Provider distribution', dashboard.byProvider],
-            [zh ? 'Key 指纹分布' : 'Key distribution', dashboard.byKey],
-            [zh ? '调用来源分布' : 'Source distribution', dashboard.bySource],
-          ] as const).map(([title, items]) => <Card key={title} title={title}><div className="space-y-2">{items.length ? items.map((item) => <div key={item.value} className="flex items-center justify-between gap-3 text-sm"><span className="truncate text-secondary-text" title={item.value}>{title.includes('Key') ? item.value.slice(0, 12) : item.value}</span><span className="font-medium text-foreground">{item.count}</span></div>) : <p className="text-sm text-secondary-text">{zh ? '暂无数据' : 'No data'}</p>}</div></Card>)}
+            [zh ? '供应商分布' : 'Provider distribution', dashboard.byProvider, (value: string) => value],
+            [zh ? 'Key 指纹分布' : 'Key distribution', dashboard.byKey, (value: string) => value.slice(0, 12)],
+            [zh ? '调用来源分布' : 'Source distribution', dashboard.bySource, (value: string) => getSearchSourceLabel(value, language)],
+          ] as const).map(([title, items, formatValue]) => <Card key={title} title={title}><div className="space-y-2">{items.length ? items.map((item) => <div key={item.value} className="flex items-center justify-between gap-3 text-sm"><span className="truncate text-secondary-text" title={formatValue(item.value)}>{formatValue(item.value)}</span><span className="font-medium text-foreground">{item.count}</span></div>) : <p className="text-sm text-secondary-text">{zh ? '暂无数据' : 'No data'}</p>}</div></Card>)}
         </div>
 
         <Card title={zh ? '最近搜索调用' : 'Recent search calls'} subtitle={zh ? '每次真实外部 HTTP 请求独立一行' : 'One row per real outbound HTTP request'}>
           <div className="overflow-x-auto">
             <table className="min-w-[1050px] w-full text-left text-sm">
               <thead className="text-xs uppercase tracking-wider text-secondary-text"><tr><th className="py-3">{zh ? '时间' : 'Time'}</th><th>{zh ? '供应商 / Key' : 'Provider / Key'}</th><th>{zh ? '来源 / 维度' : 'Source / Dimension'}</th><th>{zh ? '尝试' : 'Attempt'}</th><th>{zh ? '状态' : 'Status'}</th><th>{zh ? '耗时' : 'Latency'}</th><th>{zh ? '结果' : 'Results'}</th><th>{zh ? '操作' : 'Actions'}</th></tr></thead>
-              <tbody className="divide-y divide-border/60">{dashboard.calls.items.map((call) => <tr key={call.id} className="hover:bg-hover/60"><td className="py-3 pr-4 whitespace-nowrap text-secondary-text">{new Date(call.requestedAt).toLocaleString()}</td><td className="pr-4"><div className="font-medium">{call.provider}</div><div className="text-xs text-secondary-text">{call.keyFingerprint.slice(0, 12)}</div></td><td className="pr-4"><div>{call.callSource}</div><div className="text-xs text-secondary-text">{call.dimension || call.operation}</div></td><td className="pr-4">{call.providerAttempt}.{call.physicalAttempt}</td><td className="pr-4"><span className={call.success ? 'text-success' : 'text-danger'}>{call.success ? (zh ? '成功' : 'Success') : getSearchErrorLabel(call.errorCategory, language)}</span>{call.httpStatus ? <div className="text-xs text-secondary-text">HTTP {call.httpStatus}</div> : null}</td><td className="pr-4">{call.durationMs} ms</td><td className="pr-4">{call.resultCount ?? '-'}</td><td><button type="button" className="btn-ghost inline-flex items-center gap-1" disabled={!canSensitive || detailLoading} onClick={() => void openDetail(call)}><Eye className="h-4 w-4" />{zh ? '详情' : 'Details'}</button></td></tr>)}</tbody>
+              <tbody className="divide-y divide-border/60">{dashboard.calls.items.map((call) => <tr key={call.id} className="hover:bg-hover/60"><td className="py-3 pr-4 whitespace-nowrap text-secondary-text">{new Date(call.requestedAt).toLocaleString()}</td><td className="pr-4"><div className="font-medium">{call.provider}</div><div className="text-xs text-secondary-text">{call.keyFingerprint.slice(0, 12)}</div></td><td className="pr-4"><div>{getSearchSourceLabel(call.callSource, language)}</div><div className="text-xs text-secondary-text">{call.dimension ? getSearchDimensionLabel(call.dimension, language) : getSearchOperationLabel(call.operation, language)}</div></td><td className="pr-4">{call.providerAttempt}.{call.physicalAttempt}</td><td className="pr-4"><span className={call.success ? 'text-success' : 'text-danger'}>{call.success ? (zh ? '成功' : 'Success') : getSearchErrorLabel(call.errorCategory, language)}</span>{call.httpStatus ? <div className="text-xs text-secondary-text">HTTP {call.httpStatus}</div> : null}</td><td className="pr-4">{call.durationMs} ms</td><td className="pr-4">{call.resultCount ?? '-'}</td><td><button type="button" className="btn-ghost inline-flex items-center gap-1" disabled={!canSensitive || detailLoading} onClick={() => void openDetail(call)}><Eye className="h-4 w-4" />{zh ? '详情' : 'Details'}</button></td></tr>)}</tbody>
             </table>
           </div>
           {!dashboard.calls.items.length ? <p className="py-8 text-center text-secondary-text">{zh ? '暂无搜索调用记录' : 'No search calls'}</p> : null}

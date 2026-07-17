@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { UiLanguageProvider } from '../../../contexts/UiLanguageContext';
 import { SearchUsagePanel } from '../SearchUsagePanel';
@@ -39,10 +39,44 @@ describe('SearchUsagePanel', () => {
     } });
     render(<UiLanguageProvider><SearchUsagePanel /></UiLanguageProvider>);
     expect(await screen.findByText('真实外部请求')).toBeInTheDocument();
+    expect(screen.getAllByText('分析流程')).toHaveLength(3);
+    expect(screen.getByText('业绩预期')).toBeInTheDocument();
     expect(screen.getAllByText('余额不足/额度耗尽')).toHaveLength(2);
     fireEvent.click(screen.getByRole('button', { name: '详情' }));
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
-    expect(screen.getByText(/业绩预期/)).toBeInTheDocument();
+    expect(screen.getAllByText(/业绩预期/)).toHaveLength(2);
     expect(get).toHaveBeenLastCalledWith('/api/v1/usage/search/calls/7');
+  });
+
+  it('keeps the source code as the server-side filter value', async () => {
+    render(<UiLanguageProvider><SearchUsagePanel /></UiLanguageProvider>);
+    await screen.findByText('真实外部请求');
+
+    fireEvent.change(screen.getByDisplayValue('全部来源'), { target: { value: 'analysis' } });
+
+    await waitFor(() => expect(get).toHaveBeenLastCalledWith('/api/v1/usage/search/dashboard', {
+      params: expect.objectContaining({ source: 'analysis' }),
+    }));
+  });
+
+  it('uses the translated operation when a call has no dimension', async () => {
+    get.mockResolvedValueOnce({ data: {
+      ...dashboard,
+      by_source: [{ value: 'direct', count: 1 }],
+      calls: {
+        ...dashboard.calls,
+        items: [{
+          ...dashboard.calls.items[0],
+          call_source: 'direct',
+          operation: 'provider_search',
+          dimension: null,
+        }],
+      },
+    } });
+
+    render(<UiLanguageProvider><SearchUsagePanel /></UiLanguageProvider>);
+
+    expect(await screen.findAllByText('直接调用')).toHaveLength(3);
+    expect(screen.getByText('供应商搜索')).toBeInTheDocument();
   });
 });
