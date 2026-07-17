@@ -548,3 +548,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 17: 压缩搜索请求并归档任务
+
+**Date**: 2026-07-17
+**Task**: 压缩搜索请求并归档任务
+**Branch**: `main`
+
+### Summary
+
+将单市场大盘复盘新闻搜索由三次合并为一次；为 ETF 和普通股票增加进程级跨实例可信缓存与 singleflight；将非 ETF 标准 Anspire 五维搜索压缩为两组并保留失败组降级、审计与 Agent 兼容语义；完成文档规范同步及完整离线门禁。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2c2786a` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

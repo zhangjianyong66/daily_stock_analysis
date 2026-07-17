@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 16
+- **Total Sessions**: 17
 - **Last Active**: 2026-07-17
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~550 | Active |
+| `journal-1.md` | ~583 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 17 | 2026-07-17 | 压缩搜索请求并归档任务 | `2c2786a` | `main` |
 | 16 | 2026-07-17 | 搜索调用来源与维度中文化 | `ed91f43` | `main` |
 | 15 | 2026-07-17 | 完成 ETF Anspire 搜索验收与任务归档 | `ee40693` | `main` |
 | 14 | 2026-07-17 | 首页个股删除二次确认 | `cfaa69a` | `main` |
