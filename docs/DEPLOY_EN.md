@@ -72,13 +72,15 @@ ANSPIRE_DAILY_WARNING_REQUESTS=30
 ANSPIRE_DAILY_HARD_LIMIT_REQUESTS=50
 ```
 
-Then start the optional profile explicitly:
+After configuration, rebuild through the shared helper script:
 
 ```bash
-docker compose -f docker/docker-compose.yml --profile searxng up -d server searxng
-docker compose -f docker/docker-compose.yml ps
-docker compose -f docker/docker-compose.yml logs -f searxng
+./scripts/docker-up.sh restart
+./scripts/docker-up.sh status
+./scripts/docker-up.sh logs server
 ```
+
+The script reads `ENV_FILE` (the repository `.env` by default). When it finds `SEARCH_ROUTING_MODE=searxng_first_cn`, it automatically enables the `searxng` profile and starts private SearXNG while rebuilding the selected `server`. In `legacy` mode it continues to operate only on the original target services. The equivalent manual command is `docker compose -f docker/docker-compose.yml --profile searxng up -d server searxng`.
 
 Run a one-off upstream smoke test separately from the healthcheck:
 

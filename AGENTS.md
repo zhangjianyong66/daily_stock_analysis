@@ -148,7 +148,7 @@ npm run build
 
 ### 私有 SearXNG 分层搜索降本
 
-- `docker/docker-compose.yml` 提供可选 `searxng` profile，使用固定官方镜像 tag + digest；服务不发布宿主机端口、不依赖 Valkey/Redis，也不是 `server` / `analyzer` 启动硬依赖。启动示例：`docker compose -f docker/docker-compose.yml --profile searxng up -d server searxng`。
+- `docker/docker-compose.yml` 提供可选 `searxng` profile，使用固定官方镜像 tag + digest；服务不发布宿主机端口、不依赖 Valkey/Redis，也不是 `server` / `analyzer` 启动硬依赖。`.env` 配置 `SEARCH_ROUTING_MODE=searxng_first_cn` 后，`./scripts/docker-up.sh restart` 会自动激活该 profile、重建目标服务并同时启动 SearXNG；手动等价命令为 `docker compose -f docker/docker-compose.yml --profile searxng up -d server searxng`。
 - 私有实例配置位于 `docker/searxng/settings.yml`，只启用百度、Bing、Bing News、DuckDuckGo，开启 JSON，默认中文，关闭 public instance、limiter 与 Granian access log；容器内部地址为 `http://searxng:8080`。
 - `SEARCH_ROUTING_MODE=legacy` 保持现有搜索语义；`searxng_first_cn` 只覆盖 A 股与 A 股 ETF，并要求显式 `SEARXNG_BASE_URLS`。公共实例不会成为低成本主路由，其他市场继续 legacy。
 - 低成本链路每个维度先查私有 SearXNG；最新消息、公告、风险要求直接且及时结果，机构分析、业绩预期、行业分析有 1 条合格结果即可。单次 SearXNG 默认 6 秒且不在 DSA 侧重试同一实例，单股总预算默认 30 秒。
@@ -174,6 +174,7 @@ npm run build
 
 - Docker Compose 的 `server` 端口优先使用 `.env` 中的 `WEBUI_PORT`；旧部署仍可通过 `API_PORT` 兼容覆盖。排查 8000 端口冲突时，先确认 `WEBUI_PORT`、`API_PORT` 与 `docker-compose config` 渲染结果是否一致。
 - `scripts/docker-up.sh` 默认设置 `DOCKER_BUILD_NETWORK=host`、`DOCKER_BUILD_HTTPS_PROXY=http://127.0.0.1:10808`、空 `DOCKER_BUILD_HTTP_PROXY` / `DOCKER_BUILD_http_proxy`，并把 Debian apt 源切到清华 HTTPS 镜像，确保构建阶段可通过宿主机 10808 代理访问 npm、PyPI/GitHub 与 apt 源。
+- `scripts/docker-up.sh` 会从 `ENV_FILE`（默认根目录 `.env`）读取 `SEARCH_ROUTING_MODE`；值为 `searxng_first_cn` 时，`build-up`、`up/start`、`restart` 自动附加 Compose `searxng` profile 并启动 SearXNG，`legacy` 模式仍只操作显式目标服务。
 - `scripts/docker-up.sh` 仍会补齐宿主机 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 及小写同名变量，构建代理以脚本默认值为准；显式导出的 `DOCKER_BUILD_*`、`DEBIAN_APT_MIRROR`、`DEBIAN_SECURITY_APT_MIRROR` 优先级高于脚本默认值。
 - 如需覆盖构建网络，可显式执行：`DOCKER_BUILD_NETWORK=default ./scripts/docker-up.sh restart` 或 `DOCKER_BUILD_NETWORK=host ./scripts/docker-up.sh restart`。
 - 运行中的 Docker 容器不会自动继承宿主机系统代理；Linux bridge 网络下访问宿主机本地代理通常使用 `172.17.0.1:<端口>`，例如在 `.env` 中配置 `HTTP_PROXY=http://172.17.0.1:10808` / `HTTPS_PROXY=http://172.17.0.1:10808`，重启容器后生效。

@@ -9,6 +9,7 @@
 - [x] 完成 Anspire 北京时间每日 30/50 预警/硬上限，并覆盖线程、进程与重启后的原子持久化预留。
 - [x] 完成物理请求审计边界：预算阻断不伪造 `search_api_calls`，DSA → SearXNG 与 Anspire 真实请求继续逐次记账。
 - [x] 完成 Docker SearXNG 可选 profile、固定镜像 digest、内部网络、无宿主端口、资源上限与低敏日志配置。
+- [x] 优化 `scripts/docker-up.sh`：低成本路由启用时，默认 `restart` 自动激活 SearXNG profile 并同时启动私有服务，legacy 模式保持原行为。
 - [x] 完成配置注册、Web 中英文帮助、Actions、`.env.example`、中英文部署/完整指南、Changelog、`AGENTS.md` 和审计 spec 同步。
 - [x] 最终质量检查修复 SearXNG 普通日志输出完整查询的隐私问题，并补齐 A 股 ETF/非 A 股边界、预算阻断保留 best-effort 结果和 deadline 阻断回归。
 - [x] 离线质量门禁完成：最终完整后端门禁 `4483 passed` / `4 deselected` / `413 subtests passed`；Web 测试、lint、build；Docker 实测；AI 治理检查均通过。

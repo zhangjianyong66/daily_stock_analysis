@@ -64,7 +64,7 @@ docker-compose -f ./docker/docker-compose.yml ps
 ```bash
 ./scripts/docker-up.sh                  # 构建并启动 server
 ./scripts/docker-up.sh up               # 直接启动 server
-./scripts/docker-up.sh restart          # 构建并强制重建启动 server
+./scripts/docker-up.sh restart          # 构建并强制重建 server；低成本搜索模式下同时启动 SearXNG
 ./scripts/docker-up.sh stop             # 停止 server
 ./scripts/docker-up.sh up analyzer      # 启动定时分析服务
 ./scripts/docker-up.sh up all           # 同时启动 server 和 analyzer
@@ -97,13 +97,15 @@ ANSPIRE_DAILY_WARNING_REQUESTS=30
 ANSPIRE_DAILY_HARD_LIMIT_REQUESTS=50
 ```
 
-再显式启动 profile：
+配置完成后可直接使用统一脚本重建服务：
 
 ```bash
-docker compose -f docker/docker-compose.yml --profile searxng up -d server searxng
-docker compose -f docker/docker-compose.yml ps
-docker compose -f docker/docker-compose.yml logs -f searxng
+./scripts/docker-up.sh restart
+./scripts/docker-up.sh status
+./scripts/docker-up.sh logs server
 ```
+
+脚本读取 `ENV_FILE`（默认根目录 `.env`）；检测到 `SEARCH_ROUTING_MODE=searxng_first_cn` 时会自动激活 `searxng` profile，在重建目标 `server` 的同时启动私有 SearXNG。`legacy` 模式仍只操作原目标服务。需要绕过脚本时，等价手动命令为 `docker compose -f docker/docker-compose.yml --profile searxng up -d server searxng`。
 
 一次性上游 smoke（会产生真实搜索请求，不应放入 healthcheck）：
 
