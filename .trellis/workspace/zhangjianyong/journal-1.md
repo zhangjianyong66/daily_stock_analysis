@@ -614,3 +614,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 19: 完成个股栏排序功能
+
+**Date**: 2026-07-20
+**Task**: 完成个股栏排序功能
+**Branch**: `main`
+
+### Summary
+
+新增五种个股栏前端排序、浏览器偏好持久化、中英文文案与边界测试，并完成 Web lint、build、定向回归和桌面/移动可视验收。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `72ac1c0` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
