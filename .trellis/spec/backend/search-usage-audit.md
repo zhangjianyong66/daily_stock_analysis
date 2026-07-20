@@ -48,7 +48,7 @@
 - 物理请求完成后同步写入审计记录，再把供应商结果返回上层。审计写入 fail-open，不得改变搜索成功、失败或 fallback 结果，但必须记录低敏错误并暴露 audit gap。
 - 请求/响应先递归脱敏，再以明文 JSON 永久保存。请求上限 256 KiB，响应上限 2 MiB；超限保存预览、完整脱敏字节数和 SHA-256。
 - 原始 API Key、Authorization、Cookie、Token、Secret、Signature、Webhook 不得进入数据库快照、普通日志、公开汇总、CSV、JSON 下载或通知。Key 和查询只保存 domain-separated HMAC 指纹。
-- 错误分类先看供应商业务正文，再看 HTTP 状态。Anspire HTTP 401 正文明示免费额度或充值余额耗尽时必须是 `quota_exhausted`，不能是 `auth_invalid`。
+- 错误分类先看供应商错误语义，再看 HTTP 状态。HTTP 非 2xx 可检查完整错误正文；HTTP 2xx 只能检查顶层 `message/msg/error/errors/error_message/error_description/detail/reason` 和 `base_resp` 错误字段，不得扫描 `results`、`organic`、`web.results`、`data.webPages.value` 等结果集合或完整响应文本。Anspire HTTP 401 正文明示免费额度或充值余额耗尽时必须是 `quota_exhausted`，不能是 `auth_invalid`。
 - `quota_exhausted`、`auth_invalid`、`permission_denied`、`account_disabled` 首次失败立即激活；`rate_limited`、`timeout`、`connection_error`、`provider_5xx` 在 10 分钟内连续 3 次激活。真实成功清理同 Key 瞬时计数并恢复故障。
 - 同一 provider、Key 指纹、错误类别的故障通知 24 小时最多一次；恢复后只通知一次。通知链路 best-effort，不阻塞搜索。
 - dashboard 和 faults 不返回完整查询或快照，沿用用量页面可选认证。详情、复制、CSV 和单条 JSON 必须同时满足 `ADMIN_AUTH_ENABLED=true` 和有效管理员会话，没有桌面端例外。
@@ -73,6 +73,8 @@
 | 一次 DSA → 显式 SearXNG 聚合请求 | 新增 1 条 `SearXNG` 调用记录；内部引擎扇出不进入 DSA 表 |
 | 一次逻辑搜索发生 3 次 transport retry | 新增 3 条物理调用记录 |
 | HTTP/API 成功但结果为 0 | 记录成功调用，不激活故障 |
+| HTTP 2xx 且结果正文含余额、认证、权限或限流词 | 记录成功调用；结果内容不得参与错误分类 |
+| HTTP 2xx 且顶层错误字段含额度语义 | 按 `quota_exhausted` 记录失败 |
 | Anspire 401 且正文余额/额度为 0 | `quota_exhausted`，首次激活故障 |
 | HTTP 401 且无额度耗尽语义 | `auth_invalid` |
 | 同 Key 10 分钟内第 1/2 次 timeout | 仅累计瞬时计数，不激活故障 |
@@ -89,12 +91,14 @@
 - Good：两个独立 `SearchService` 同时分析同一 ETF，首个实例成为 owner，每组只发一次 Anspire 请求；第二个实例等待并读取深拷贝，不产生调用审计行。
 - Good：普通股票近期组物理失败、分析组成功时，只对最新消息/风险/公告执行 Provider fallback，机构分析/业绩不重复请求。
 - Good：超大响应仍按原 provider 解析并返回业务结果，审计详情显示截断、原始脱敏大小和 SHA-256。
+- Good：搜索结果正文讨论“余额不足”或 `quota exhausted` 时仍记录为成功，只有顶层错误元数据或失败 HTTP 正文参与错误分类。
 - Good：宽基、策略或商品 ETF 没有索引元数据，但名称命中受控词时建立保守底层映射；`未知ETF` 保持 `generic_etf`。
 - Base：一次 provider 请求成功且结果非空，写一条成功记录，页面统计物理请求数和业务搜索任务数。
 - Base：供应商正常返回空结果，写成功记录但不产生余额或可用性告警。
 - Base：单市场大盘三个主题合并为一个查询，最终最多 6 条，供应商请求最多 12 个候选。
 - Bad：只在 `SearchResponse` 返回后记一条，导致 Tenacity retry、备用 Key 和多实例请求漏计。
 - Bad：按 HTTP 401 直接显示“API Key 无效”，忽略正文中的额度耗尽业务语义。
+- Bad：把完整成功响应序列化后扫描错误关键词，导致财经公告或技术文章中的“余额 0”“额度不足”“unauthorized”等内容激活供应商故障。
 - Bad：只在前端禁用详情按钮，服务端在管理员认证关闭时仍允许下载快照。
 - Bad：普通日志打印完整 query、请求体或供应商响应，绕开详情 API 权限边界。
 - Bad：把缓存放回 `SearchService` 实例字段，导致 Pipeline 每次新建 service 后短期重复分析仍完整扣费。
@@ -104,7 +108,7 @@
 ## 6. Tests Required
 
 - transport 测试断言：每次 retry、备用 Key、provider fallback、SearXNG 多实例都产生独立记录；缓存和正文补抓不产生记录。
-- 分类测试断言：Anspire 401 余额不足为 `quota_exhausted`；普通 401 为 `auth_invalid`；空结果不告警。
+- 分类测试断言：Anspire 401 余额不足为 `quota_exhausted`；普通 401 为 `auth_invalid`；空结果不告警；HTTP 2xx 搜索结果正文包含各类错误关键词仍成功；HTTP 2xx 顶层业务错误仍按语义分类。
 - 脱敏测试断言：嵌套对象、列表、URL 参数、请求头、响应头和错误文本均不含测试凭据；当前 API Key 被正文回显时也会替换。
 - 截断测试断言：请求 256 KiB、响应 2 MiB 边界，以及 preview、size、SHA-256 字段。
 - 持久化测试断言：旧数据库启动自动建表；同步写入发生在业务返回前；写入失败 fail-open 且 audit gap 可见。
@@ -133,6 +137,27 @@ python3 -m pytest \
 ```
 
 ## 7. Wrong vs Correct
+
+### Wrong：扫描完整成功响应识别供应商错误
+
+```python
+semantic_text = json.dumps(payload, ensure_ascii=False).lower()
+if "余额不足" in semantic_text:
+    return False, "quota_exhausted"
+```
+
+搜索结果本身是非可信业务数据，正文可能正常讨论余额、额度、认证或限流，不能作为供应商账户状态证据。
+
+### Correct：按传输状态隔离错误元数据和结果数据
+
+```python
+if status is not None and 200 <= status < 300:
+    semantic_payload = {key: payload.get(key) for key in ERROR_FIELDS if key in payload}
+else:
+    semantic_payload = payload  # 失败响应正文可用于区分额度、认证等语义
+```
+
+HTTP 2xx 业务错误通过顶层错误字段和错误码识别，正常结果集合永远不进入关键词扫描。
 
 ### Wrong：在逻辑返回层记一次
 

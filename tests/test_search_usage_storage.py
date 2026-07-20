@@ -9,8 +9,8 @@ import requests
 from tenacity import wait_none
 
 from src.config import Config
-from src.schemas.search_usage import SearchAuditContext, search_audit_scope
-from src.services.search_request_audit_service import audited_request_once
+from src.schemas.search_usage import SearchAuditContext, SearchErrorCategory, search_audit_scope
+from src.services.search_request_audit_service import audited_request_once, classify_search_response
 from src.services.search_usage_service import SearchUsageService
 from src.storage import DatabaseManager
 from src.repositories.search_usage_repo import SearchUsageRepository
@@ -68,6 +68,104 @@ def test_anspire_balance_401_is_persisted_as_quota_exhausted_and_redacted(search
     assert "test-anspire-key" not in serialized
     assert "leaked-secret" not in serialized
     assert detail["request_snapshot"]["query_params"]["query"] == "半导体设备ETF 业绩预期"
+
+
+def test_successful_search_result_with_balance_terms_is_not_recorded_as_quota_failure(search_usage_db):
+    response = fake_response(
+        200,
+        {
+            "Uuid": "request-id",
+            "query": "上市公司现金管理",
+            "results": [
+                {
+                    "title": "公司公告",
+                    "content": "账户余额 0 元不代表接口余额不足，授信额度不足部分另行披露。",
+                    "url": "https://example.com/notice",
+                }
+            ],
+        },
+    )
+
+    audited_request_once(
+        "GET",
+        "https://plugin.anspire.cn/api/ntsearch/search",
+        provider="Anspire",
+        api_key="test-anspire-key",
+        query="上市公司现金管理",
+        timeout=1,
+        request_func=lambda *_args, **_kwargs: response,
+    )
+
+    detail = SearchUsageService().get_call_detail(1)
+    assert detail is not None
+    assert detail["success"] is True
+    assert detail["error_category"] is None
+    assert detail["result_count"] == 1
+
+
+@pytest.mark.parametrize(
+    "result_content",
+    [
+        "quota exhausted 是本次研究报告讨论的术语",
+        "invalid api key 是常见认证失败原因",
+        "permission denied 错误处理说明",
+        "rate limit 会影响第三方接口稳定性",
+        "account disabled 状态的排障步骤",
+    ],
+)
+def test_successful_result_content_does_not_trigger_error_semantics(result_content):
+    payload = {"code": 200, "msg": "success", "results": [{"content": result_content}]}
+    response = fake_response(200, payload)
+
+    success, category, provider_code = classify_search_response(
+        provider="Anspire",
+        response=response,
+        payload=payload,
+        text=response.text,
+        error=None,
+    )
+
+    assert success is True
+    assert category is None
+    assert provider_code == "200"
+
+
+def test_plain_401_is_classified_as_auth_invalid():
+    payload = {"message": "Invalid API key"}
+    response = fake_response(401, payload)
+
+    success, category, _ = classify_search_response(
+        provider="Anspire",
+        response=response,
+        payload=payload,
+        text=response.text,
+        error=None,
+    )
+
+    assert success is False
+    assert category == SearchErrorCategory.AUTH_INVALID.value
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_category"),
+    [
+        ({"code": 40301, "msg": "充值余额 0，额度耗尽"}, SearchErrorCategory.QUOTA_EXHAUSTED.value),
+        ({"code": 40001, "msg": "请求参数错误"}, SearchErrorCategory.OTHER.value),
+    ],
+)
+def test_http_200_business_error_uses_top_level_error_semantics(payload, expected_category):
+    response = fake_response(200, payload)
+
+    success, category, _ = classify_search_response(
+        provider="Anspire",
+        response=response,
+        payload=payload,
+        text=response.text,
+        error=None,
+    )
+
+    assert success is False
+    assert category == expected_category
 
 
 def test_tenacity_retries_create_three_physical_rows(search_usage_db):

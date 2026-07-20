@@ -43,6 +43,16 @@ _AUTH_TERMS = ("invalid api key", "api key invalid", "apikey invalid", "key无�
 _PERMISSION_TERMS = ("permission denied", "forbidden", "无权限", "权限不足")
 _DISABLED_TERMS = ("account disabled", "account suspended", "账户停用", "账号停用", "账户禁用")
 _RATE_LIMIT_TERMS = ("rate limit", "too many requests", "频率达到限制", "请求过于频繁", "限流")
+_ERROR_PAYLOAD_FIELDS = (
+    "message",
+    "msg",
+    "error",
+    "errors",
+    "error_message",
+    "error_description",
+    "detail",
+    "reason",
+)
 
 
 def audited_request_once(
@@ -205,19 +215,18 @@ def classify_search_response(
     error: Optional[BaseException],
 ) -> Tuple[bool, Optional[str], Optional[str]]:
     provider_code = _provider_code(payload)
-    payload_text = json.dumps(payload, ensure_ascii=False, default=str) if payload is not None else ""
-    semantic_text = f"{text} {payload_text}".lower()
     if error is not None:
         if isinstance(error, requests.exceptions.Timeout):
             return False, SearchErrorCategory.TIMEOUT.value, provider_code
         if isinstance(error, (requests.exceptions.ConnectionError, requests.exceptions.SSLError)):
             return False, SearchErrorCategory.CONNECTION_ERROR.value, provider_code
         return False, SearchErrorCategory.OTHER.value, provider_code
+    status = getattr(response, "status_code", None)
+    semantic_text = _provider_error_text(payload, text=text, status=status).lower()
     if any(term.lower() in semantic_text for term in _QUOTA_TERMS):
         return False, SearchErrorCategory.QUOTA_EXHAUSTED.value, provider_code
     if any(term.lower() in semantic_text for term in _DISABLED_TERMS):
         return False, SearchErrorCategory.ACCOUNT_DISABLED.value, provider_code
-    status = getattr(response, "status_code", None)
     if status == 429 or any(term.lower() in semantic_text for term in _RATE_LIMIT_TERMS):
         return False, SearchErrorCategory.RATE_LIMITED.value, provider_code
     if status == 401 or any(term.lower() in semantic_text for term in _AUTH_TERMS):
@@ -276,6 +285,25 @@ def _provider_payload_failed(payload: Any) -> bool:
     if isinstance(base_resp, Mapping) and str(base_resp.get("status_code", 0)) != "0":
         return True
     return False
+
+
+def _provider_error_text(payload: Any, *, text: str, status: Optional[int]) -> str:
+    """Return provider error semantics without scanning successful search results."""
+    if status is None or not 200 <= status < 300:
+        payload_text = json.dumps(payload, ensure_ascii=False, default=str) if payload is not None else ""
+        return f"{text} {payload_text}"
+    if not isinstance(payload, Mapping):
+        return ""
+
+    error_values = [payload.get(field) for field in _ERROR_PAYLOAD_FIELDS if field in payload]
+    base_resp = payload.get("base_resp")
+    if isinstance(base_resp, Mapping):
+        error_values.extend(
+            base_resp.get(field)
+            for field in ("status_msg", "message", "msg", "error", "detail")
+            if field in base_resp
+        )
+    return json.dumps(error_values, ensure_ascii=False, default=str)
 
 
 def _result_count(payload: Any) -> Optional[int]:

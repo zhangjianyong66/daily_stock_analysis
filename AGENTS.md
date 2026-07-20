@@ -142,6 +142,7 @@ npm run build
 - 所有搜索 provider 的网络出口必须经过 `src/services/search_request_audit_service.py`；新增或替换 SDK 时必须证明能观察到每次物理请求，不能只在 `SearchResponse` 逻辑返回层补一条记录。
 - 搜索审计会把深度脱敏后的完整业务请求/响应以明文 JSON 永久写入 `search_api_calls`；请求上限 256 KiB、响应上限 2 MiB，超限保存预览、原始脱敏大小和 SHA-256。普通日志禁止重复输出完整查询或响应。
 - 错误分类以供应商响应语义优先于 HTTP 状态；Anspire 401 正文明示免费额度/充值余额为 0 时必须归类为 `quota_exhausted`，不能显示为 Key 无效。
+- HTTP 2xx 搜索响应只能从顶层错误字段和 `base_resp` 错误元数据识别余额、认证、权限或限流语义；不得扫描正常结果集合或完整响应正文，否则结果内容中的同名业务词会误激活供应商故障。HTTP 非 2xx 仍可检查完整错误正文。
 - 余额、认证、权限和账户停用首次失败立即激活故障；限流、超时、连接失败、5xx 需同供应商/Key 在 10 分钟内连续 3 次。成功请求会清空该 Key 的瞬时计数并恢复故障。
 - 搜索汇总沿用现有可选认证边界；完整出入参、复制、CSV 和单条 JSON 下载必须 `ADMIN_AUTH_ENABLED=true` 且管理员已登录，没有桌面端例外。
 - 搜索审计目标回归：`python3 -m pytest tests/test_search_usage_storage.py tests/test_search_usage_service.py tests/test_search_usage_api.py tests/test_anspire_search.py tests/test_search_tavily_provider.py tests/test_search_serpapi_provider.py tests/test_search_searxng.py -q`。
