@@ -647,3 +647,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 20: 调整个股栏排序选项
+
+**Date**: 2026-07-20
+**Task**: 调整个股栏排序选项
+**Branch**: `main`
+
+### Summary
+
+删除最早分析和分析次数最多排序，新增情绪分最低排序，补齐旧偏好回退、中英文文案、测试与 Changelog；定向 42 项测试、lint 和 build 通过。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `397ecad` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
