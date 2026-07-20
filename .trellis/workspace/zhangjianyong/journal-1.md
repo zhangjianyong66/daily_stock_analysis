@@ -581,3 +581,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 18: 修复搜索用量额度耗尽误判
+
+**Date**: 2026-07-20
+**Task**: 修复搜索用量额度耗尽误判
+**Branch**: `main`
+
+### Summary
+
+限制 HTTP 2xx 搜索审计只扫描顶层错误元数据，避免正常结果正文触发余额、认证、权限或限流故障；补齐回归测试、规范与变更日志，后端完整门禁通过。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e2ced72` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
