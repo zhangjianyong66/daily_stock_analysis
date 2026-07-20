@@ -5,9 +5,8 @@ export const STOCK_BAR_SORT_STORAGE_KEY = 'dsa.stockBarSort.v1';
 
 export const STOCK_BAR_SORT_OPTIONS = [
   'recent',
-  'oldest',
-  'most-analyzed',
   'highest-sentiment',
+  'lowest-sentiment',
   'name-code',
 ] as const;
 
@@ -126,25 +125,18 @@ export function sortStockBarItems(
     switch (option) {
       case 'recent':
         return compareRecentThenCode(collator, left, right);
-      case 'oldest':
-        primaryOrder = compareOptionalNumbers(
-          parseAnalysisTime(left.lastAnalysisTime),
-          parseAnalysisTime(right.lastAnalysisTime),
-          'asc',
-        );
-        return primaryOrder !== 0 ? primaryOrder : compareCode(collator, left, right);
-      case 'most-analyzed':
-        primaryOrder = compareOptionalNumbers(
-          finiteNumber(left.analysisCount),
-          finiteNumber(right.analysisCount),
-          'desc',
-        );
-        break;
       case 'highest-sentiment':
         primaryOrder = compareOptionalNumbers(
           finiteNumber(left.sentimentScore),
           finiteNumber(right.sentimentScore),
           'desc',
+        );
+        break;
+      case 'lowest-sentiment':
+        primaryOrder = compareOptionalNumbers(
+          finiteNumber(left.sentimentScore),
+          finiteNumber(right.sentimentScore),
+          'asc',
         );
         break;
       case 'name-code': {

@@ -405,9 +405,8 @@ const zh = {
   'stockBar.market': '大盘',
   'stockBar.sortHighestSentiment': '情绪分最高',
   'stockBar.sortLabel': '排序',
-  'stockBar.sortMostAnalyzed': '分析次数最多',
+  'stockBar.sortLowestSentiment': '情绪分最低',
   'stockBar.sortNameCode': '名称/代码',
-  'stockBar.sortOldest': '最早分析',
   'stockBar.sortRecent': '最近分析',
   'stockBar.title': '个股栏',
 
@@ -1227,9 +1226,8 @@ const en: Record<UiTextKey, string> = {
   'stockBar.market': 'Market',
   'stockBar.sortHighestSentiment': 'Highest sentiment',
   'stockBar.sortLabel': 'Sort',
-  'stockBar.sortMostAnalyzed': 'Most analyzed',
+  'stockBar.sortLowestSentiment': 'Lowest sentiment',
   'stockBar.sortNameCode': 'Name / code',
-  'stockBar.sortOldest': 'Oldest analysis',
   'stockBar.sortRecent': 'Recent analysis',
   'stockBar.title': 'Stocks',
 

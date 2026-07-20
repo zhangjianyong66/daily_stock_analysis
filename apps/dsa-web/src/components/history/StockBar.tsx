@@ -68,9 +68,8 @@ export const StockBar: React.FC<StockBarProps> = ({
 
   const sortOptions = useMemo(() => [
     { value: 'recent', label: t('stockBar.sortRecent') },
-    { value: 'oldest', label: t('stockBar.sortOldest') },
-    { value: 'most-analyzed', label: t('stockBar.sortMostAnalyzed') },
     { value: 'highest-sentiment', label: t('stockBar.sortHighestSentiment') },
+    { value: 'lowest-sentiment', label: t('stockBar.sortLowestSentiment') },
     { value: 'name-code', label: t('stockBar.sortNameCode') },
   ] satisfies Array<{ value: StockBarSortOption; label: string }>, [t]);
 

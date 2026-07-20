@@ -53,16 +53,15 @@ describe('StockBar', () => {
     window.localStorage.removeItem(STOCK_BAR_SORT_STORAGE_KEY);
   });
 
-  it('sorts by recent analysis by default and exposes all five sort options', () => {
+  it('sorts by recent analysis by default and exposes the four supported sort options', () => {
     renderStockBar();
 
     const sortSelect = screen.getByLabelText('排序');
     expect(sortSelect).toHaveValue('recent');
     expect(within(sortSelect).getAllByRole('option').map((option) => option.textContent)).toEqual([
       '最近分析',
-      '最早分析',
-      '分析次数最多',
       '情绪分最高',
+      '情绪分最低',
       '名称/代码',
     ]);
     expect(screen.getAllByRole('button', { name: /历史记录$/ }).map((button) => button.getAttribute('aria-label'))).toEqual([
@@ -71,25 +70,18 @@ describe('StockBar', () => {
       '贵州茅台 600519 历史记录',
     ]);
 
-    fireEvent.change(sortSelect, { target: { value: 'oldest' } });
-    expect(screen.getAllByRole('button', { name: /历史记录$/ }).map((button) => button.getAttribute('aria-label'))).toEqual([
-      '贵州茅台 600519 历史记录',
-      '平安银行 000001 历史记录',
-      'Apple AAPL 历史记录',
-    ]);
-
-    fireEvent.change(sortSelect, { target: { value: 'most-analyzed' } });
-    expect(screen.getAllByRole('button', { name: /历史记录$/ }).map((button) => button.getAttribute('aria-label'))).toEqual([
-      'Apple AAPL 历史记录',
-      '贵州茅台 600519 历史记录',
-      '平安银行 000001 历史记录',
-    ]);
-
     fireEvent.change(sortSelect, { target: { value: 'highest-sentiment' } });
     expect(screen.getAllByRole('button', { name: /历史记录$/ }).map((button) => button.getAttribute('aria-label'))).toEqual([
       'Apple AAPL 历史记录',
       '贵州茅台 600519 历史记录',
       '平安银行 000001 历史记录',
+    ]);
+
+    fireEvent.change(sortSelect, { target: { value: 'lowest-sentiment' } });
+    expect(screen.getAllByRole('button', { name: /历史记录$/ }).map((button) => button.getAttribute('aria-label'))).toEqual([
+      '平安银行 000001 历史记录',
+      '贵州茅台 600519 历史记录',
+      'Apple AAPL 历史记录',
     ]);
 
     fireEvent.change(sortSelect, { target: { value: 'name-code' } });
@@ -102,26 +94,26 @@ describe('StockBar', () => {
 
   it('persists the selected sort and reapplies it when refreshed items change', () => {
     const { rerender, unmount } = renderStockBar();
-    fireEvent.change(screen.getByLabelText('排序'), { target: { value: 'most-analyzed' } });
+    fireEvent.change(screen.getByLabelText('排序'), { target: { value: 'lowest-sentiment' } });
 
-    expect(window.localStorage.getItem(STOCK_BAR_SORT_STORAGE_KEY)).toBe('most-analyzed');
+    expect(window.localStorage.getItem(STOCK_BAR_SORT_STORAGE_KEY)).toBe('lowest-sentiment');
 
     rerender(
       <StockBar
         items={items.map((item) => (
-          item.stockCode === '000001' ? { ...item, analysisCount: 10 } : item
+          item.stockCode === '000001' ? { ...item, sentimentScore: 80 } : item
         ))}
         isLoading={false}
         onItemClick={vi.fn()}
       />,
     );
 
-    expect(screen.getByLabelText('排序')).toHaveValue('most-analyzed');
-    expect(screen.getAllByRole('button', { name: /历史记录$/ })[0]).toHaveAccessibleName('平安银行 000001 历史记录');
+    expect(screen.getByLabelText('排序')).toHaveValue('lowest-sentiment');
+    expect(screen.getAllByRole('button', { name: /历史记录$/ })[0]).toHaveAccessibleName('贵州茅台 600519 历史记录');
 
     unmount();
     renderStockBar();
-    expect(screen.getByLabelText('排序')).toHaveValue('most-analyzed');
+    expect(screen.getByLabelText('排序')).toHaveValue('lowest-sentiment');
   });
 
   it('filters visible stocks by code or name without changing the loaded list', () => {
@@ -264,5 +256,6 @@ describe('StockBar', () => {
     expect(screen.getByRole('button', { name: 'Confirm delete' })).toBeInTheDocument();
     expect(screen.getByLabelText('Sort')).toHaveValue('recent');
     expect(screen.getByRole('option', { name: 'Highest sentiment' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Lowest sentiment' })).toBeInTheDocument();
   });
 });

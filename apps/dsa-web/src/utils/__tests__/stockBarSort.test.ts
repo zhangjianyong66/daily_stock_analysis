@@ -43,14 +43,11 @@ describe('stockBarSort', () => {
     expect(sortStockBarItems(items, 'recent', 'zh').map((item) => item.stockCode)).toEqual([
       'AAPL', '000001', '600519',
     ]);
-    expect(sortStockBarItems(items, 'oldest', 'zh').map((item) => item.stockCode)).toEqual([
-      '600519', '000001', 'AAPL',
-    ]);
-    expect(sortStockBarItems(items, 'most-analyzed', 'zh').map((item) => item.stockCode)).toEqual([
-      '000001', '600519', 'AAPL',
-    ]);
     expect(sortStockBarItems(items, 'highest-sentiment', 'zh').map((item) => item.stockCode)).toEqual([
       'AAPL', '600519', '000001',
+    ]);
+    expect(sortStockBarItems(items, 'lowest-sentiment', 'zh').map((item) => item.stockCode)).toEqual([
+      '000001', '600519', 'AAPL',
     ]);
     expect(sortStockBarItems(items, 'name-code', 'zh').map((item) => item.stockCode)).toEqual([
       '600519', '000001', 'AAPL',
@@ -70,14 +67,11 @@ describe('stockBarSort', () => {
     expect(sortStockBarItems(edgeItems, 'recent', 'en').map((item) => item.stockCode)).toEqual([
       'TIE-NEW', 'TIE-OLD', '2', '10', 'MISSING',
     ]);
-    expect(sortStockBarItems(edgeItems, 'oldest', 'en').map((item) => item.stockCode)).toEqual([
-      '2', 'TIE-OLD', 'TIE-NEW', '10', 'MISSING',
-    ]);
-    expect(sortStockBarItems(edgeItems, 'most-analyzed', 'en').map((item) => item.stockCode)).toEqual([
-      'TIE-NEW', 'TIE-OLD', 'MISSING', '2', '10',
-    ]);
     expect(sortStockBarItems(edgeItems, 'highest-sentiment', 'en').map((item) => item.stockCode)).toEqual([
       'TIE-NEW', 'TIE-OLD', '2', '10', 'MISSING',
+    ]);
+    expect(sortStockBarItems(edgeItems, 'lowest-sentiment', 'en').map((item) => item.stockCode)).toEqual([
+      '2', 'TIE-NEW', 'TIE-OLD', '10', 'MISSING',
     ]);
     expect(sortStockBarItems(edgeItems.slice(0, 2), 'name-code', 'en').map((item) => item.stockCode)).toEqual([
       '2', '10',
@@ -91,9 +85,14 @@ describe('stockBarSort', () => {
       setItem: (key: string, value: string) => values.set(key, value),
     } as unknown as Storage;
 
-    persistStockBarSort(storage, 'most-analyzed');
-    expect(values.get(STOCK_BAR_SORT_STORAGE_KEY)).toBe('most-analyzed');
-    expect(resolveInitialStockBarSort(storage)).toBe('most-analyzed');
+    persistStockBarSort(storage, 'lowest-sentiment');
+    expect(values.get(STOCK_BAR_SORT_STORAGE_KEY)).toBe('lowest-sentiment');
+    expect(resolveInitialStockBarSort(storage)).toBe('lowest-sentiment');
+
+    values.set(STOCK_BAR_SORT_STORAGE_KEY, 'oldest');
+    expect(resolveInitialStockBarSort(storage)).toBe(DEFAULT_STOCK_BAR_SORT);
+    values.set(STOCK_BAR_SORT_STORAGE_KEY, 'most-analyzed');
+    expect(resolveInitialStockBarSort(storage)).toBe(DEFAULT_STOCK_BAR_SORT);
 
     values.set(STOCK_BAR_SORT_STORAGE_KEY, 'unsupported');
     expect(resolveInitialStockBarSort(storage)).toBe(DEFAULT_STOCK_BAR_SORT);
@@ -104,6 +103,6 @@ describe('stockBarSort', () => {
       setItem: () => { throw new Error('blocked'); },
     } as unknown as Storage;
     expect(resolveInitialStockBarSort(throwingStorage)).toBe(DEFAULT_STOCK_BAR_SORT);
-    expect(() => persistStockBarSort(throwingStorage, 'oldest')).not.toThrow();
+    expect(() => persistStockBarSort(throwingStorage, 'lowest-sentiment')).not.toThrow();
   });
 });
