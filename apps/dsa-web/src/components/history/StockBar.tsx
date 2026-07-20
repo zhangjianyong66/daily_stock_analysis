@@ -1,10 +1,19 @@
 import type React from 'react';
 import { useState, useCallback, useRef, useEffect, useId, useMemo } from 'react';
+import { ArrowUpDown, ChevronDown } from 'lucide-react';
 import { Badge, Button, ConfirmDialog, ScrollArea } from '../common';
 import { DashboardPanelHeader, DashboardStateBlock } from '../dashboard';
 import { StockBarItemComponent } from './StockBarItem';
 import type { StockBarItem as StockBarItemType } from '../../types/analysis';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
+import {
+  getStockBarSortStorage,
+  normalizeStockBarSort,
+  persistStockBarSort,
+  resolveInitialStockBarSort,
+  sortStockBarItems,
+  type StockBarSortOption,
+} from '../../utils/stockBarSort';
 
 interface StockBarProps {
   items: StockBarItemType[];
@@ -24,7 +33,7 @@ type PendingDelete = {
 
 /**
  * 个股栏组件：以股票维度展示历史分析记录，每只股票只显示一条。
- * 大盘复盘可作为 MARKET 项参与展示，并按最近分析时间排序。
+ * 大盘复盘可作为 MARKET 项参与展示，并与普通个股使用同一排序方案。
  */
 export const StockBar: React.FC<StockBarProps> = ({
   items,
@@ -39,21 +48,38 @@ export const StockBar: React.FC<StockBarProps> = ({
   const { language, t } = useUiLanguage();
   const isMarketReview = (code: string) => code === 'MARKET';
   const [filterText, setFilterText] = useState('');
+  const [sortOption, setSortOption] = useState<StockBarSortOption>(resolveInitialStockBarSort);
   const [selectedCodes, setSelectedCodes] = useState<Set<string>>(new Set());
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
   const selectAllRef = useRef<HTMLInputElement>(null);
   const selectAllId = useId();
+  const sortId = useId();
 
   const normalizedFilter = filterText.trim().toLocaleLowerCase();
   const visibleItems = useMemo(() => {
-    if (!normalizedFilter) return items;
-    return items.filter((item) => {
+    const filteredItems = !normalizedFilter ? items : items.filter((item) => {
       const stockCode = String(item.stockCode || '').toLocaleLowerCase();
       const stockName = String(item.stockName || '').toLocaleLowerCase();
       return stockCode.includes(normalizedFilter) || stockName.includes(normalizedFilter);
     });
-  }, [items, normalizedFilter]);
+    return sortStockBarItems(filteredItems, sortOption, language);
+  }, [items, language, normalizedFilter, sortOption]);
+
+  const sortOptions = useMemo(() => [
+    { value: 'recent', label: t('stockBar.sortRecent') },
+    { value: 'oldest', label: t('stockBar.sortOldest') },
+    { value: 'most-analyzed', label: t('stockBar.sortMostAnalyzed') },
+    { value: 'highest-sentiment', label: t('stockBar.sortHighestSentiment') },
+    { value: 'name-code', label: t('stockBar.sortNameCode') },
+  ] satisfies Array<{ value: StockBarSortOption; label: string }>, [t]);
+
+  const handleSortChange = useCallback((value: string) => {
+    const nextOption = normalizeStockBarSort(value);
+    if (!nextOption) return;
+    setSortOption(nextOption);
+    persistStockBarSort(getStockBarSortStorage(), nextOption);
+  }, []);
 
   const deletableItems = visibleItems;
   const selectedCount = [...selectedCodes].filter((code) => deletableItems.some((item) => item.stockCode === code)).length;
@@ -187,6 +213,36 @@ export const StockBar: React.FC<StockBarProps> = ({
               aria-label={t('stockBar.filterAria')}
               className="w-full rounded-lg border border-border/70 bg-elevated/70 px-3 py-2 text-xs text-foreground outline-none transition-colors placeholder:text-muted-text focus:border-primary/60 focus:ring-2 focus:ring-primary/15"
             />
+          ) : null}
+
+          {items.length > 0 ? (
+            <div className="flex h-9 items-center gap-2">
+              <label
+                htmlFor={sortId}
+                className="flex shrink-0 items-center gap-1.5 text-[11px] font-medium text-muted-text"
+              >
+                <ArrowUpDown className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>{t('stockBar.sortLabel')}</span>
+              </label>
+              <div className="relative min-w-0 flex-1">
+                <select
+                  id={sortId}
+                  value={sortOption}
+                  onChange={(event) => handleSortChange(event.target.value)}
+                  className="h-9 w-full appearance-none rounded-lg border border-border/70 bg-elevated/70 py-1.5 pl-3 pr-8 text-xs text-foreground outline-none transition-colors focus:border-primary/60 focus:ring-2 focus:ring-primary/15"
+                >
+                  {sortOptions.map((option) => (
+                    <option key={option.value} value={option.value} className="bg-elevated text-foreground">
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown
+                  className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-text"
+                  aria-hidden="true"
+                />
+              </div>
+            </div>
           ) : null}
 
           {items.length > 0 && onDeleteStock && (

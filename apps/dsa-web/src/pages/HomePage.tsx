@@ -742,11 +742,7 @@ const HomePage: React.FC = () => {
       marketPhaseSummary: latestMarketReview.marketPhaseSummary,
     };
 
-    return [marketReviewItem, ...stockItems].sort((left, right) => {
-      const leftTime = left.lastAnalysisTime ? Date.parse(left.lastAnalysisTime) : 0;
-      const rightTime = right.lastAnalysisTime ? Date.parse(right.lastAnalysisTime) : 0;
-      return rightTime - leftTime;
-    });
+    return [marketReviewItem, ...stockItems];
   }, [marketReviewHistoryItems, stockBarItems, t]);
 
   const sidebarContent = useMemo(
