@@ -19,6 +19,23 @@ TypeScript / Web：
 - Web 使用 React、Vite、TypeScript、ESLint、Vitest。
 - 前端类型放在 `apps/dsa-web/src/types/`；后端 API schema 改动时必须同步检查。
 
+### Web Drawer 焦点与叠层约定
+
+- 模态 Drawer 打开后应把焦点移入对话框，约束 Tab/Shift+Tab，支持 Escape 关闭，并在关闭后恢复到触发元素；触发按钮使用 `aria-expanded` 和 `aria-controls` 关联对话框。
+- 焦点初始化和恢复副作用只随 `isOpen` 生命周期执行。`onClose` 等父组件回调应通过 ref 读取最新值，不能作为焦点副作用的变化依赖，否则父组件重渲染会把用户当前焦点重新抢到关闭按钮。
+- 从一个 Drawer 打开替代型详情 Drawer 时，先关闭当前 Drawer，再打开目标 Drawer；不要仅依赖更高 `z-index` 覆盖旧 Drawer，否则 Escape、焦点约束和滚动锁会同时作用于两层。
+
+```tsx
+const onCloseRef = useRef(onClose);
+onCloseRef.current = onClose;
+
+const handleKeyDown = useCallback((event: KeyboardEvent) => {
+  if (event.key === 'Escape') onCloseRef.current();
+}, []);
+```
+
+对应测试至少断言：打开后初始焦点、首尾 Tab 循环、父组件重渲染后焦点不跳转、Escape 后触发器恢复焦点，以及替代 Drawer 打开后旧 Drawer 已卸载。
+
 ## 分层规则
 
 - Endpoint 只负责 HTTP 边界：参数、response model、调用 service、异常映射。参考 `api/v1/endpoints/portfolio.py`。

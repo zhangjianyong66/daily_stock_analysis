@@ -8,6 +8,7 @@ import { formatDateTime } from '../../utils/format';
 import { getMarketPhaseSummaryLabel } from '../../utils/marketPhase';
 import { truncateStockName } from '../../utils/stockName';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
+import { cn } from '../../utils/cn';
 
 interface StockBarItemProps {
   item: StockBarItemType;
@@ -18,6 +19,9 @@ interface StockBarItemProps {
   onDelete?: (stockCode: string) => void;
   isDeleting?: boolean;
   isMarketReview?: boolean;
+  variant?: 'default' | 'compact';
+  className?: string;
+  ariaLabel?: string;
 }
 
 export const StockBarItemComponent: React.FC<StockBarItemProps> = ({
@@ -29,6 +33,9 @@ export const StockBarItemComponent: React.FC<StockBarItemProps> = ({
   onDelete,
   isDeleting = false,
   isMarketReview = false,
+  variant = 'default',
+  className,
+  ariaLabel,
 }) => {
   const { language, t } = useUiLanguage();
   const sentimentScore = typeof item.sentimentScore === 'number' ? item.sentimentScore : null;
@@ -49,6 +56,7 @@ export const StockBarItemComponent: React.FC<StockBarItemProps> = ({
     ?.replace('市场阶段: ', '')
     .replace('市场阶段：', '')
     .replace('Market phase: ', '');
+  const isCompact = variant === 'compact';
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget) return;
@@ -63,10 +71,13 @@ export const StockBarItemComponent: React.FC<StockBarItemProps> = ({
       tabIndex={0}
       onClick={() => onClick(item.id)}
       onKeyDown={handleKeyDown}
-      aria-label={t('history.itemAria', { name: stockName, code: item.stockCode })}
-      className={`home-history-item w-full min-w-0 flex-1 cursor-pointer text-left p-2.5 group/item focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
-        isViewing ? 'home-history-item-selected' : ''
-      }`}
+      aria-label={ariaLabel ?? t('history.itemAria', { name: stockName, code: item.stockCode })}
+      className={cn(
+        'home-history-item w-full min-w-0 flex-1 cursor-pointer text-left group/item focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
+        isCompact ? 'min-h-11 p-2' : 'p-2.5',
+        isViewing && 'home-history-item-selected',
+        className,
+      )}
     >
       <div className="relative z-10 flex items-center gap-2.5">
         {isMarketReview ? (
@@ -117,7 +128,7 @@ export const StockBarItemComponent: React.FC<StockBarItemProps> = ({
                   {operationLabel} {sentimentScore}
                 </Badge>
               ) : null}
-              {onTogglePin && (
+              {!isCompact && onTogglePin && (
                 <Button
                   variant="ghost"
                   size="xsm"
@@ -141,7 +152,7 @@ export const StockBarItemComponent: React.FC<StockBarItemProps> = ({
                   />
                 </Button>
               )}
-              {onDelete && (
+              {!isCompact && onDelete && (
                 <Button
                   variant="ghost"
                   size="xsm"
@@ -160,11 +171,11 @@ export const StockBarItemComponent: React.FC<StockBarItemProps> = ({
               )}
             </div>
           </div>
-          <div className="mt-1 flex flex-wrap items-center gap-2" data-testid="history-card-meta">
+          <div className={cn('mt-1 items-center gap-2', isCompact ? 'flex' : 'flex flex-wrap')} data-testid="history-card-meta">
             <span className="text-[11px] text-secondary-text font-mono">
               {item.stockCode}
             </span>
-            {item.lastAnalysisTime && (
+            {!isCompact && item.lastAnalysisTime && (
               <>
                 <span className="w-1 h-1 rounded-full bg-subtle-hover" />
                 <span className="text-[11px] text-muted-text">
@@ -172,7 +183,7 @@ export const StockBarItemComponent: React.FC<StockBarItemProps> = ({
                 </span>
               </>
             )}
-            {item.analysisCount > 1 && (
+            {!isCompact && item.analysisCount > 1 && (
               <>
                 <span className="w-1 h-1 rounded-full bg-subtle-hover" />
                 <span className="text-[10px] text-muted-text">
@@ -180,7 +191,7 @@ export const StockBarItemComponent: React.FC<StockBarItemProps> = ({
                 </span>
               </>
             )}
-            {phaseLabel ? (
+            {!isCompact && phaseLabel ? (
               <>
                 <span className="w-1 h-1 rounded-full bg-subtle-hover" />
                 <Badge variant="default" size="sm" className="shrink-0 shadow-none text-[10px] leading-none">

@@ -1,5 +1,5 @@
 import type React from 'react';
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useRef } from 'react';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
 import { cn } from '../../utils/cn';
 
@@ -10,9 +10,10 @@ interface DrawerProps {
   onClose: () => void;
   title?: string;
   children: React.ReactNode;
+  dialogId?: string;
   width?: string;
   zIndex?: number;
-  side?: 'left' | 'right';
+  side?: 'left' | 'right' | 'bottom';
   backdropClassName?: string;
 }
 
@@ -24,29 +25,63 @@ export const Drawer: React.FC<DrawerProps> = ({
   onClose,
   title,
   children,
+  dialogId,
   width = 'max-w-2xl',
   zIndex = 50,
   side = 'right',
   backdropClassName,
 }) => {
   const { t } = useUiLanguage();
-  // Close the drawer when Escape is pressed.
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        onClose();
+        onCloseRef.current();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+      const focusableElements = Array.from(dialog.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      )).filter((element) => !element.hasAttribute('hidden'));
+
+      if (focusableElements.length === 0) {
+        e.preventDefault();
+        dialog.focus();
+        return;
+      }
+
+      const firstElement = focusableElements[0];
+      const lastElement = focusableElements[focusableElements.length - 1];
+      const activeElement = document.activeElement;
+      if (e.shiftKey && (activeElement === firstElement || !dialog.contains(activeElement))) {
+        e.preventDefault();
+        lastElement.focus();
+      } else if (!e.shiftKey && activeElement === lastElement) {
+        e.preventDefault();
+        firstElement.focus();
       }
     },
-    [onClose]
+    []
   );
 
   useEffect(() => {
     if (isOpen) {
+      const previouslyFocused = document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
       document.addEventListener('keydown', handleKeyDown);
       activeDrawerCount++;
       if (activeDrawerCount === 1) {
         document.body.style.overflow = 'hidden';
       }
+      closeButtonRef.current?.focus();
 
       return () => {
         document.removeEventListener('keydown', handleKeyDown);
@@ -54,6 +89,7 @@ export const Drawer: React.FC<DrawerProps> = ({
         if (activeDrawerCount === 0) {
           document.body.style.overflow = '';
         }
+        previouslyFocused?.focus();
       };
     }
   }, [isOpen, handleKeyDown]);
@@ -61,8 +97,16 @@ export const Drawer: React.FC<DrawerProps> = ({
   if (!isOpen) return null;
 
   const titleId = title ? `drawer-title-${side}` : undefined;
-  const sidePositionClass = side === 'left' ? 'left-0 justify-start' : 'right-0 justify-end';
-  const borderClass = side === 'left' ? 'border-r' : 'border-l';
+  const isBottom = side === 'bottom';
+  const drawerPositionClass = isBottom
+    ? 'absolute inset-x-0 bottom-0 flex w-full items-end justify-center'
+    : cn('absolute inset-y-0 flex w-full', side === 'left' ? 'left-0 justify-start' : 'right-0 justify-end', width);
+  const borderClass = isBottom ? 'border-t' : side === 'left' ? 'border-r' : 'border-l';
+  const animationClass = isBottom
+    ? 'animate-slide-up'
+    : side === 'left'
+      ? 'animate-slide-in-left'
+      : 'animate-slide-in-right';
 
   return (
     <div className="fixed inset-0 overflow-hidden" style={{ zIndex }} role="presentation">
@@ -75,19 +119,23 @@ export const Drawer: React.FC<DrawerProps> = ({
         onClick={onClose}
       />
 
-      <div className={cn('absolute inset-y-0 flex w-full', sidePositionClass, width)}>
+      <div className={drawerPositionClass}>
         <div
+          ref={dialogRef}
+          id={dialogId}
           role="dialog"
           aria-modal="true"
           aria-labelledby={titleId}
+          tabIndex={-1}
           className={cn(
             'relative flex w-full flex-col bg-card',
             borderClass,
             side === 'right' ? 'border-border/80' : 'border-border/70 shadow-2xl',
-            side === 'left' ? 'animate-slide-in-left' : 'animate-slide-in-right'
+            isBottom && cn('max-h-[min(82dvh,42rem)] rounded-t-2xl pb-[env(safe-area-inset-bottom)]', width),
+            animationClass,
           )}
         >
-          <div className="flex items-center justify-between border-b border-border/60 px-6 py-4">
+          <div className={cn('flex items-center justify-between border-b border-border/60 px-6 py-4', isBottom && 'px-4 py-3')}>
             {title ? (
               <div>
                 <span className="label-uppercase">DETAIL VIEW</span>
@@ -95,9 +143,13 @@ export const Drawer: React.FC<DrawerProps> = ({
               </div>
             ) : <div />}
             <button
+              ref={closeButtonRef}
               type="button"
               onClick={onClose}
-              className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-border/70 bg-card/80 text-secondary-text transition-colors hover:bg-hover hover:text-foreground"
+              className={cn(
+                'inline-flex h-10 w-10 items-center justify-center rounded-xl border border-border/70 bg-card/80 text-secondary-text transition-colors hover:bg-hover hover:text-foreground',
+                isBottom && 'h-11 w-11',
+              )}
               aria-label={t('common.closeDrawer')}
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -105,7 +157,7 @@ export const Drawer: React.FC<DrawerProps> = ({
               </svg>
             </button>
           </div>
-          <div className="flex-1 overflow-y-auto p-6">
+          <div className={cn('flex-1 overflow-y-auto p-6', isBottom && 'p-4')}>
             {children}
           </div>
         </div>

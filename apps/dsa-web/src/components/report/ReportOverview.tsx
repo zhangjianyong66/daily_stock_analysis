@@ -243,22 +243,22 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
   );
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-3 md:space-y-5">
       {/* 主信息区 - 两列布局 */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 items-start">
+      <div className="grid grid-cols-1 items-start gap-3 md:gap-5 lg:grid-cols-3">
         {/* 左侧：股票信息与结论 */}
-        <div className="lg:col-span-2 space-y-5">
+        <div className="space-y-3 md:space-y-5 lg:col-span-2">
           {/* 股票头部 */}
           <Card variant="gradient" padding="md" className="home-report-hero">
-            <div className="flex items-start justify-between mb-5">
-              <div className="flex-1">
-                <div className="flex items-center gap-3">
-                  <h2 className="text-[28px] font-bold leading-tight text-foreground">
+            <div className="mb-4 flex items-start justify-between md:mb-5">
+              <div className="min-w-0 flex-1">
+                <div className="flex min-w-0 flex-wrap items-baseline gap-2 md:gap-3">
+                  <h2 className="min-w-0 break-words text-xl font-bold leading-tight text-foreground sm:text-2xl md:text-[28px]">
                     {meta.stockName || meta.stockCode}
                   </h2>
                   {/* 价格和涨跌幅 */}
                   {meta.currentPrice != null && (
-                    <div className="flex items-baseline gap-2">
+                    <div className="flex shrink-0 items-baseline gap-2">
                       <span className="text-xl font-bold font-mono" style={getPriceChangeStyle(meta.changePct)}>
                         {meta.currentPrice.toFixed(2)}
                       </span>
@@ -293,7 +293,7 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
             </div>
 
             {/* 关键结论 */}
-            <div className="home-divider border-t pt-5">
+            <div className="home-divider border-t pt-4 md:pt-5">
               <span className="label-uppercase">{text.keyInsights}</span>
               <p className="mt-2 max-w-[62ch] whitespace-pre-wrap text-left text-[15px] leading-7 text-foreground">
                 {summary.analysisSummary || text.noAnalysisSummary}
@@ -301,7 +301,7 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
             </div>
           </Card>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+          <div className="grid grid-cols-1 items-start gap-3 md:grid-cols-2 md:gap-4">
             {/* 操作建议 */}
             <Card
               variant="bordered"
