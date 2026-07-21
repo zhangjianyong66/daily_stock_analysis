@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 22
+- **Total Sessions**: 23
 - **Last Active**: 2026-07-21
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~748 | Active |
+| `journal-1.md` | ~781 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 23 | 2026-07-21 | 恢复移动端首页原版 UI | `b8abcbc` | `main` |
 | 22 | 2026-07-21 | 完成移动端首页 UI 与交互优化 | `2cd093e` | `main` |
 | 21 | 2026-07-21 | 完成首页个股栏置顶功能 | `0bcead9` | `main` |
 | 20 | 2026-07-20 | 调整个股栏排序选项 | `397ecad` | `main` |

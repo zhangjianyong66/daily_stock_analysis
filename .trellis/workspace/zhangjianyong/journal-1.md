@@ -746,3 +746,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 23: 恢复移动端首页原版 UI
+
+**Date**: 2026-07-21
+**Task**: 恢复移动端首页原版 UI
+**Branch**: `main`
+
+### Summary
+
+恢复移动端首页原版布局，移除割裂的快捷栏、底部抽屉、报告总折叠和固定操作栏，保留 Drawer 可访问性与窄屏尺寸间距优化；完成定向测试、Web lint/build 和多视口可视验收。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b8abcbc` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
