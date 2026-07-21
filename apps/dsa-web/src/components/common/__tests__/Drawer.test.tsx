@@ -10,8 +10,15 @@ function DrawerHarness() {
 
   return (
     <UiLanguageProvider>
-      <button type="button" onClick={() => setIsOpen(true)}>打开操作</button>
-      <Drawer isOpen={isOpen} onClose={() => setIsOpen(false)} title="更多操作" side="bottom">
+      <button
+        type="button"
+        onClick={() => setIsOpen(true)}
+        aria-expanded={isOpen}
+        aria-controls="drawer-test"
+      >
+        打开操作
+      </button>
+      <Drawer isOpen={isOpen} onClose={() => setIsOpen(false)} title="操作详情" dialogId="drawer-test">
         <button type="button" onClick={() => setUpdateCount((count) => count + 1)}>
           更新内容 {updateCount}
         </button>
@@ -31,8 +38,11 @@ describe('Drawer', () => {
 
     const closeButton = screen.getByRole('button', { name: /关闭抽屉|Close drawer/ });
     const lastAction = screen.getByRole('button', { name: '最后一个操作' });
+    expect(screen.getByRole('dialog')).toHaveAttribute('id', 'drawer-test');
     expect(closeButton).toHaveFocus();
-    expect(closeButton).toHaveClass('h-11', 'w-11');
+
+    fireEvent.keyDown(document, { key: 'Tab', shiftKey: true });
+    expect(lastAction).toHaveFocus();
 
     lastAction.focus();
     fireEvent.keyDown(document, { key: 'Tab' });

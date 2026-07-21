@@ -245,73 +245,7 @@ describe('HomePage', () => {
     expect(historyApi.getMarkdown).not.toHaveBeenCalled();
   });
 
-  it('renders the mobile quick-access strip and keeps report actions above the safe area', async () => {
-    vi.mocked(historyApi.getList).mockResolvedValue({
-      total: 1,
-      page: 1,
-      limit: 20,
-      items: [historyItem],
-    });
-    vi.mocked(historyApi.getDetail).mockImplementation(async (recordId) => (
-      recordId === 2
-        ? {
-            ...historyReport,
-            meta: {
-              ...historyReport.meta,
-              id: 2,
-              stockCode: 'AAPL',
-              stockName: 'Apple',
-            },
-          }
-        : historyReport
-    ));
-    vi.mocked(historyApi.getStockBarList).mockResolvedValue({
-      total: 2,
-      items: [
-        {
-          id: 1,
-          stockCode: '600519',
-          stockName: '贵州茅台',
-          sentimentScore: 78,
-          operationAdvice: '继续观察买点',
-          analysisCount: 1,
-        },
-        {
-          id: 2,
-          stockCode: 'AAPL',
-          stockName: 'Apple',
-          sentimentScore: 70,
-          operationAdvice: '继续观察',
-          analysisCount: 1,
-        },
-      ],
-    });
-
-    render(
-      <MemoryRouter>
-        <HomePage />
-      </MemoryRouter>,
-    );
-
-    const strip = await screen.findByTestId('mobile-stock-strip');
-    expect(strip).toHaveClass('overflow-x-auto', 'touch-pan-x', 'snap-mandatory');
-    expect(within(strip).getByRole('button', { name: '快速打开 贵州茅台（600519）' })).toHaveClass('min-h-11');
-    expect(screen.getByRole('button', { name: '历史记录' })).toHaveClass('h-11', 'w-11');
-    expect(screen.getByRole('button', { name: '历史记录' })).toHaveAttribute('aria-controls', 'mobile-home-history');
-
-    const fullReportButton = await screen.findByRole('button', { name: '完整分析报告' });
-    const actionBar = fullReportButton.parentElement;
-    expect(actionBar).toHaveClass('fixed', 'bottom-0');
-    expect(actionBar?.className).toContain('safe-area-inset-bottom');
-    expect(screen.getByRole('button', { name: '展开深入分析' })).toHaveAttribute('aria-expanded', 'false');
-    fireEvent.click(screen.getByRole('button', { name: '展开深入分析' }));
-    expect(screen.getByRole('button', { name: '收起深入分析' })).toHaveAttribute('aria-expanded', 'true');
-    fireEvent.click(within(strip).getByRole('button', { name: '快速打开 Apple（AAPL）' }));
-    await screen.findByRole('heading', { name: /Apple/ });
-    expect(screen.getByRole('button', { name: '展开深入分析' })).toHaveAttribute('aria-expanded', 'false');
-  });
-
-  it('moves secondary mobile controls into the bottom operations drawer', async () => {
+  it('keeps the original mobile controls visible with text and allows narrow-screen wrapping', async () => {
     vi.mocked(agentApi.getSkills).mockResolvedValue({
       default_skill_id: 'bull_trend',
       skills: [
@@ -320,11 +254,12 @@ describe('HomePage', () => {
       ],
     });
     vi.mocked(historyApi.getList).mockResolvedValue({
-      total: 0,
+      total: 1,
       page: 1,
       limit: 20,
-      items: [],
+      items: [historyItem],
     });
+    vi.mocked(historyApi.getDetail).mockResolvedValue(historyReport);
 
     render(
       <MemoryRouter>
@@ -332,21 +267,26 @@ describe('HomePage', () => {
       </MemoryRouter>,
     );
 
-    const moreActionsButton = await screen.findByRole('button', { name: '更多操作' });
-    expect(moreActionsButton).toHaveAttribute('aria-expanded', 'false');
-    expect(moreActionsButton).toHaveAttribute('aria-controls', 'mobile-home-operations');
-    fireEvent.click(moreActionsButton);
-    const dialog = screen.getByRole('dialog', { name: '分析选项' });
-    expect(dialog).toHaveAttribute('id', 'mobile-home-operations');
-    expect(moreActionsButton).toHaveAttribute('aria-expanded', 'true');
-    expect(dialog).toHaveClass('rounded-t-2xl');
-    expect(dialog.className).toContain('safe-area-inset-bottom');
-    fireEvent.change(within(dialog).getByLabelText('策略'), { target: { value: 'growth_quality' } });
-    fireEvent.click(within(dialog).getByLabelText('推送通知'));
-    expect(within(dialog).getByRole('button', { name: '批量分析配置' })).toHaveClass('h-11');
-    expect(within(dialog).getByRole('button', { name: '大盘复盘' })).toHaveClass('h-11');
-    expect(within(dialog).getByLabelText('策略')).toHaveValue('growth_quality');
-    expect(within(dialog).getByLabelText('推送通知')).not.toBeChecked();
+    const historyButton = await screen.findByRole('button', { name: '历史记录' });
+    expect(historyButton).toHaveClass('h-11', 'w-11');
+    expect(historyButton).toHaveAttribute('aria-controls', 'mobile-home-history');
+    expect(screen.getByRole('button', { name: '策略' })).toHaveClass('h-11');
+    expect(screen.getByLabelText('推送通知').parentElement).toHaveClass('h-11');
+    expect(screen.getByRole('button', { name: '批量分析配置' })).toHaveClass('h-11');
+    expect(screen.getByRole('button', { name: '大盘复盘' })).toHaveClass('h-11');
+    expect(screen.getByRole('button', { name: '分析' })).toHaveClass('h-11');
+    expect(screen.queryByRole('button', { name: '更多操作' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('mobile-stock-strip')).not.toBeInTheDocument();
+
+    const fullReportButton = await screen.findByRole('button', { name: '完整分析报告' });
+    expect(fullReportButton).toHaveTextContent('完整分析报告');
+    expect(fullReportButton.parentElement).toHaveClass('flex-wrap');
+    expect(fullReportButton.parentElement).not.toHaveClass('fixed');
+    expect(screen.getByRole('button', { name: '重新分析' })).toHaveTextContent('重新分析');
+    expect(screen.getByRole('button', { name: '追问 AI' })).toHaveTextContent('追问 AI');
+    expect(screen.getByRole('button', { name: '历史趋势' })).toHaveTextContent('历史趋势');
+    expect(screen.queryByRole('button', { name: '展开深入分析' })).not.toBeInTheDocument();
+    expect(screen.getByText('趋势维持强势')).toBeInTheDocument();
   });
 
   it('loads markdown only after opening the full report drawer', async () => {
@@ -1196,15 +1136,15 @@ describe('HomePage', () => {
     const trigger = await screen.findByRole('button', { name: '历史记录' });
     fireEvent.click(trigger);
 
-    expect(screen.getByRole('dialog', { name: '历史记录' })).toBeInTheDocument();
-    expect(document.body.style.overflow).toBe('hidden');
+    const dialog = screen.getByRole('dialog', { name: '历史记录' });
+    expect(dialog).toHaveClass('dashboard-card', '!absolute', '!rounded-r-xl');
+    expect(container.querySelector('.page-drawer-overlay')).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: '关闭抽屉' }));
+    fireEvent.click(container.querySelector('.fixed.inset-0.z-40') as HTMLElement);
 
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { name: '历史记录' })).not.toBeInTheDocument();
     });
-    expect(document.body.style.overflow).toBe('');
     expect(container.querySelector('[data-testid="home-dashboard"]')).toBeInTheDocument();
   });
 

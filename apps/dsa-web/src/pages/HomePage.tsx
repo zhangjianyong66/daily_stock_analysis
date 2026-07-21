@@ -6,7 +6,6 @@ import {
   FileText,
   ListChecks,
   MessageSquareQuote,
-  MoreHorizontal,
   RefreshCw,
   SlidersHorizontal,
   TrendingUp,
@@ -18,10 +17,10 @@ import { analysisApi } from '../api/analysis';
 import { historyApi } from '../api/history';
 import { agentApi, type SkillInfo } from '../api/agent';
 import { systemConfigApi } from '../api/systemConfig';
-import { ApiErrorAlert, Button, ConfirmDialog, Drawer, EmptyState, InlineAlert, Select } from '../components/common';
+import { ApiErrorAlert, Button, ConfirmDialog, Drawer, EmptyState, InlineAlert } from '../components/common';
 import { DashboardStateBlock } from '../components/dashboard';
 import { StockAutocomplete } from '../components/StockAutocomplete';
-import { MobileStockStrip, StockHistoryTrendDrawer, StockBar } from '../components/history';
+import { StockHistoryTrendDrawer, StockBar } from '../components/history';
 import { ReportMarkdownDrawer } from '../components/report/ReportMarkdownDrawer';
 import { MarketReviewReportView } from '../components/report/MarketReviewReportView';
 import { ReportSummary } from '../components/report/ReportSummary';
@@ -76,7 +75,6 @@ const HomePage: React.FC = () => {
   const location = useLocation();
   const { language: uiLanguage, t } = useUiLanguage();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [mobileOperationsOpen, setMobileOperationsOpen] = useState(false);
   const [isSubmittingMarketReview, setIsSubmittingMarketReview] = useState(false);
   const [marketReviewNotice, setMarketReviewNotice] = useState<MarketReviewNotice>(null);
   const [marketReviewError, setMarketReviewError] = useState<ParsedApiError | null>(null);
@@ -794,8 +792,8 @@ const HomePage: React.FC = () => {
     >
       <div className="flex-1 flex flex-col min-h-0 min-w-0 max-w-full lg:max-w-6xl mx-auto w-full">
         <header className="relative z-30 flex min-w-0 flex-shrink-0 items-center overflow-visible px-3 py-2.5 md:px-4 md:py-4">
-          <div className="flex min-w-0 flex-1 flex-col gap-2.5 md:flex-row md:items-center">
-            <div className="flex min-w-0 flex-1 items-center gap-2.5">
+          <div className="flex min-w-0 flex-1 flex-col gap-2 md:flex-row md:items-center md:gap-2.5">
+            <div className="grid min-w-0 flex-1 grid-cols-[2.75rem_minmax(0,1fr)] items-center gap-2 min-[360px]:grid-cols-[2.75rem_minmax(0,1fr)_auto] md:flex md:gap-2.5">
               <button
                 onClick={() => setSidebarOpen(true)}
                 className="-ml-1 inline-flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-lg text-secondary-text transition-colors hover:bg-hover hover:text-foreground md:hidden"
@@ -820,7 +818,7 @@ const HomePage: React.FC = () => {
                 />
               </div>
               {analysisSkills.length > 0 ? (
-                <div ref={strategyMenuRef} className="relative hidden flex-shrink-0 md:block">
+                <div ref={strategyMenuRef} className="relative col-start-2 min-w-0 min-[360px]:col-start-auto md:flex-shrink-0">
                   <button
                     ref={strategyButtonRef}
                     id="strategy-menu-button"
@@ -831,7 +829,7 @@ const HomePage: React.FC = () => {
                     onClick={() => setStrategyMenuOpen((open) => !open)}
                     onKeyDown={handleStrategyButtonKeyDown}
                     disabled={isAnalyzing}
-                    className="home-surface-button flex h-10 max-w-[8.5rem] items-center gap-1.5 rounded-xl px-3 text-xs text-foreground disabled:cursor-not-allowed disabled:opacity-60 sm:max-w-[11rem]"
+                    className="home-surface-button flex h-11 w-full min-w-0 items-center gap-1.5 rounded-xl px-3 text-xs text-foreground disabled:cursor-not-allowed disabled:opacity-60 min-[360px]:max-w-[8.5rem] md:h-10 sm:max-w-[11rem]"
                   >
                     <SlidersHorizontal className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
                     <span className="truncate">{selectedStrategy?.name || t('home.strategy')}</span>
@@ -871,20 +869,9 @@ const HomePage: React.FC = () => {
                   ) : null}
                 </div>
               ) : null}
-              <button
-                type="button"
-                onClick={() => setMobileOperationsOpen(true)}
-                className="home-surface-button inline-flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl text-secondary-text md:hidden"
-                aria-label={t('home.moreActions')}
-                aria-haspopup="dialog"
-                aria-expanded={mobileOperationsOpen}
-                aria-controls="mobile-home-operations"
-              >
-                <MoreHorizontal className="h-5 w-5" aria-hidden="true" />
-              </button>
             </div>
-            <div className="flex min-w-0 flex-shrink-0 items-center gap-2.5">
-              <label className="hidden h-10 flex-shrink-0 cursor-pointer items-center gap-1.5 rounded-xl border border-subtle bg-surface/60 px-3 text-xs text-secondary-text select-none transition-colors hover:border-subtle-hover hover:text-foreground md:flex">
+            <div className="grid min-w-0 flex-shrink-0 grid-cols-2 items-center gap-2 sm:grid-cols-4 md:flex md:gap-2.5">
+              <label className="flex h-11 min-w-0 cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-subtle bg-surface/60 px-2 text-xs text-secondary-text select-none transition-colors hover:border-subtle-hover hover:text-foreground md:h-10 md:flex-shrink-0 md:px-3">
                 <input
                   type="checkbox"
                   checked={notify}
@@ -900,7 +887,7 @@ const HomePage: React.FC = () => {
                 isLoading={isPreparingBatchConfigured || isSubmittingBatchConfigured}
                 loadingText={t('home.batchConfiguredSubmitting')}
                 onClick={() => void handlePrepareBatchConfiguredAnalysis()}
-                className="hidden h-10 flex-1 whitespace-nowrap md:inline-flex md:flex-none"
+                className="h-11 min-w-0 w-full whitespace-nowrap px-2 md:h-10 md:w-auto md:flex-none md:px-4"
               >
                 <ListChecks className="h-4 w-4" aria-hidden="true" />
                 {t('home.batchConfiguredAnalyze')}
@@ -912,7 +899,7 @@ const HomePage: React.FC = () => {
                 isLoading={isSubmittingMarketReview}
                 loadingText={t('home.submitMarketReview')}
                 onClick={() => void handleTriggerMarketReview()}
-                className="hidden h-10 flex-1 whitespace-nowrap md:inline-flex md:flex-none"
+                className="h-11 min-w-0 w-full whitespace-nowrap px-2 md:h-10 md:w-auto md:flex-none md:px-4"
               >
                 <BarChart3 className="h-4 w-4" aria-hidden="true" />
                 {t('home.marketReview')}
@@ -921,7 +908,7 @@ const HomePage: React.FC = () => {
                 type="button"
                 onClick={() => handleSubmitAnalysis()}
                 disabled={!query || isAnalyzing}
-                className="btn-primary flex h-11 flex-1 items-center justify-center gap-1.5 whitespace-nowrap md:h-10 md:flex-none"
+                className="btn-primary flex h-11 min-w-0 w-full items-center justify-center gap-1.5 whitespace-nowrap px-2 md:h-10 md:w-auto md:flex-none md:px-4"
               >
                 {isAnalyzing ? (
                   <>
@@ -995,19 +982,26 @@ const HomePage: React.FC = () => {
           </div>
         ) : null}
 
-        <MobileStockStrip
-          items={mergedStockBarItems}
-          isLoading={isLoadingStockBar}
-          selectedStockCode={selectedReport?.meta.stockCode}
-          selectedRecordId={selectedReport?.meta.id}
-          onItemClick={handleHistoryItemClick}
-          onViewAll={() => setSidebarOpen(true)}
-        />
-
         <div className="flex-1 flex min-h-0 overflow-hidden">
           <div className="hidden min-h-0 w-64 shrink-0 flex-col overflow-hidden pl-4 pb-4 md:flex lg:w-72">
             {sidebarContent}
           </div>
+
+          {sidebarOpen ? (
+            <div className="fixed inset-0 z-40 md:hidden" onClick={() => setSidebarOpen(false)}>
+              <div className="page-drawer-overlay absolute inset-0" />
+              <div
+                id="mobile-home-history"
+                role="dialog"
+                aria-modal="true"
+                aria-label={t('home.historyButton')}
+                className="dashboard-card !absolute bottom-0 left-0 top-0 flex w-[min(18rem,calc(100vw-2rem))] flex-col overflow-hidden !rounded-none !rounded-r-xl p-3 shadow-2xl"
+                onClick={(event) => event.stopPropagation()}
+              >
+                {sidebarContent}
+              </div>
+            </div>
+          ) : null}
 
           <section
             ref={dashboardScrollRef}
@@ -1077,10 +1071,8 @@ const HomePage: React.FC = () => {
                 <DashboardStateBlock title={t('home.loadingReport')} loading />
               </div>
             ) : !marketReviewReport && selectedReport ? (
-              <div className={isHistoryTrendOpen
-                ? 'max-w-6xl space-y-4 pb-[calc(6.5rem+env(safe-area-inset-bottom))] md:pb-8'
-                : 'max-w-4xl space-y-4 pb-[calc(6.5rem+env(safe-area-inset-bottom))] md:pb-8'}>
-                <div className="fixed inset-x-0 bottom-0 z-30 flex items-center gap-1 border-t border-subtle bg-card/95 px-3 pt-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] shadow-[0_-10px_28px_hsl(220_18%_20%/0.12)] backdrop-blur-md md:static md:flex-wrap md:justify-end md:gap-2 md:border-0 md:bg-transparent md:p-0 md:shadow-none md:backdrop-blur-none">
+              <div className={isHistoryTrendOpen ? 'max-w-6xl space-y-4 pb-8' : 'max-w-4xl space-y-4 pb-8'}>
+                <div className="flex flex-wrap items-center justify-end gap-2">
                   {!isMarketReviewHistoryReport ? (
                     <>
                       <Button
@@ -1088,22 +1080,20 @@ const HomePage: React.FC = () => {
                         size="sm"
                         disabled={isAnalyzing || selectedReport.meta.id === undefined}
                         onClick={handleReanalyze}
-                        aria-label={t('home.reanalyze')}
-                        className="h-11 min-w-11 flex-1 px-0 md:h-9 md:flex-none md:px-3"
+                        className="h-11 basis-[calc(50%-0.25rem)] px-2 min-[480px]:basis-auto md:h-9 md:px-3"
                       >
                         <RefreshCw className="h-4 w-4" aria-hidden="true" />
-                        <span className="hidden md:inline">{t('home.reanalyze')}</span>
+                        {t('home.reanalyze')}
                       </Button>
                       <Button
                         variant="home-action-ai"
                         size="sm"
                         disabled={selectedReport.meta.id === undefined}
                         onClick={handleAskFollowUp}
-                        aria-label={t('home.askAi')}
-                        className="h-11 min-w-11 flex-1 px-0 md:h-9 md:flex-none md:px-3"
+                        className="h-11 basis-[calc(50%-0.25rem)] px-2 min-[480px]:basis-auto md:h-9 md:px-3"
                       >
                         <MessageSquareQuote className="h-4 w-4" aria-hidden="true" />
-                        <span className="hidden md:inline">{t('home.askAi')}</span>
+                        {t('home.askAi')}
                       </Button>
                     </>
                   ) : (
@@ -1114,18 +1104,17 @@ const HomePage: React.FC = () => {
                       isLoading={isSubmittingMarketReview}
                       loadingText={t('home.submitMarketReview')}
                       onClick={() => void handleTriggerMarketReview()}
-                      aria-label={t('home.rerunMarketReview')}
-                      className="h-11 min-w-11 flex-1 px-0 md:h-9 md:flex-none md:px-3"
+                      className="h-11 basis-[calc(50%-0.25rem)] px-2 min-[480px]:basis-auto md:h-9 md:px-3"
                     >
                       <BarChart3 className="h-4 w-4" aria-hidden="true" />
-                      <span className="hidden md:inline">{t('home.rerunMarketReview')}</span>
+                      {t('home.rerunMarketReview')}
                     </Button>
                   )}
                   <Button
                     variant="home-action-ai"
                     size="sm"
                     disabled={selectedReport.meta.id === undefined || isHistoryTrendUnavailable}
-                    className={`${isHistoryTrendOpen ? 'border-primary/70 bg-primary/15 text-primary shadow-glow-cyan ' : ''}h-11 min-w-11 flex-1 px-0 md:h-9 md:flex-none md:px-3`}
+                    className={`${isHistoryTrendOpen ? 'border-primary/70 bg-primary/15 text-primary shadow-glow-cyan ' : ''}h-11 basis-[calc(50%-0.25rem)] px-2 min-[480px]:basis-auto md:h-9 md:px-3`}
                     onClick={() => {
                       if (isHistoryTrendOpen) {
                         closeHistoryTrend();
@@ -1133,21 +1122,19 @@ const HomePage: React.FC = () => {
                       }
                       void openHistoryTrend();
                     }}
-                    aria-label={t('home.historyTrend')}
                   >
                     <TrendingUp className="h-4 w-4" aria-hidden="true" />
-                    <span className="hidden md:inline">{t('home.historyTrend')}</span>
+                    {t('home.historyTrend')}
                   </Button>
                   <Button
                     variant="home-action-ai"
                     size="sm"
                     disabled={selectedReport.meta.id === undefined}
                     onClick={openMarkdownDrawer}
-                    aria-label={t('home.fullReport')}
-                    className="h-11 min-w-11 flex-1 px-0 md:h-9 md:flex-none md:px-3"
+                    className="h-11 basis-[calc(50%-0.25rem)] px-2 min-[480px]:basis-auto md:h-9 md:px-3"
                   >
                     <FileText className="h-4 w-4" aria-hidden="true" />
-                    <span className="hidden md:inline">{t('home.fullReport')}</span>
+                    {t('home.fullReport')}
                   </Button>
                 </div>
                 {isHistoryTrendOpen ? (
@@ -1169,7 +1156,6 @@ const HomePage: React.FC = () => {
                   />
                 ) : (
                   <ReportSummary
-                    key={selectedReport.meta.id ?? selectedReport.meta.queryId ?? selectedReport.meta.stockCode}
                     data={selectedReport}
                     isHistory
                     onOpenRunFlow={openHistoryRunFlow}
@@ -1226,81 +1212,6 @@ const HomePage: React.FC = () => {
           />
         </Drawer>
       ) : null}
-
-      <Drawer
-        isOpen={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
-        title={t('home.historyButton')}
-        dialogId="mobile-home-history"
-        width="max-w-xs"
-        zIndex={80}
-        side="left"
-      >
-        {sidebarContent}
-      </Drawer>
-
-      <Drawer
-        isOpen={mobileOperationsOpen}
-        onClose={() => setMobileOperationsOpen(false)}
-        title={t('home.mobileOperations')}
-        dialogId="mobile-home-operations"
-        width="max-w-lg"
-        zIndex={85}
-        side="bottom"
-      >
-        <div className="space-y-4">
-          {analysisSkills.length > 0 ? (
-            <Select
-              value={selectedStrategyId}
-              onChange={setSelectedStrategyId}
-              options={strategyOptions.map((option) => ({ value: option.id, label: option.name }))}
-              label={t('home.strategy')}
-              disabled={isAnalyzing}
-            />
-          ) : null}
-          <label className="flex min-h-11 cursor-pointer items-center justify-between gap-4 rounded-xl border border-subtle bg-surface/60 px-3 text-sm text-foreground select-none">
-            <span>{t('home.notify')}</span>
-            <input
-              type="checkbox"
-              checked={notify}
-              onChange={(event) => setNotify(event.target.checked)}
-              className="h-5 w-5 rounded border-border accent-primary"
-            />
-          </label>
-          <div className="grid grid-cols-1 gap-2 min-[360px]:grid-cols-2">
-            <Button
-              type="button"
-              variant="secondary"
-              size="lg"
-              isLoading={isPreparingBatchConfigured || isSubmittingBatchConfigured}
-              loadingText={t('home.batchConfiguredSubmitting')}
-              onClick={() => {
-                setMobileOperationsOpen(false);
-                void handlePrepareBatchConfiguredAnalysis();
-              }}
-              className="w-full"
-            >
-              <ListChecks className="h-4 w-4" aria-hidden="true" />
-              {t('home.batchConfiguredAnalyze')}
-            </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              size="lg"
-              isLoading={isSubmittingMarketReview}
-              loadingText={t('home.submitMarketReview')}
-              onClick={() => {
-                setMobileOperationsOpen(false);
-                void handleTriggerMarketReview();
-              }}
-              className="w-full"
-            >
-              <BarChart3 className="h-4 w-4" aria-hidden="true" />
-              {t('home.marketReview')}
-            </Button>
-          </div>
-        </div>
-      </Drawer>
 
       <ConfirmDialog
         isOpen={batchConfiguredCodes.length > 0}

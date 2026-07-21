@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
-- [改进] Web 首页优化移动端首屏和报告交互，新增最近分析横向快捷栏、次要操作底部面板、紧凑报告摘要与安全区底部操作栏，并保持桌面端布局不变。
+- [修复] Web 移动端首页恢复原版连续布局，移除割裂的快捷栏、底部操作面板和报告折叠，并优化窄屏控件尺寸、间距与换行。
 - [新功能] Web 首页个股栏支持在当前浏览器中置顶常看的股票或 ETF，置顶项会在现有排序结果中优先展示。
 - [改进] Web 首页个股栏提供最近分析、情绪分高低和名称/代码排序，并在浏览器中保留用户选择。
 - [修复] 搜索调用审计不再把正常搜索结果正文中的余额、额度、认证或限流词误判为供应商故障，同时保留真实错误响应的语义分类。

@@ -13,7 +13,7 @@ interface DrawerProps {
   dialogId?: string;
   width?: string;
   zIndex?: number;
-  side?: 'left' | 'right' | 'bottom';
+  side?: 'left' | 'right';
   backdropClassName?: string;
 }
 
@@ -97,16 +97,13 @@ export const Drawer: React.FC<DrawerProps> = ({
   if (!isOpen) return null;
 
   const titleId = title ? `drawer-title-${side}` : undefined;
-  const isBottom = side === 'bottom';
-  const drawerPositionClass = isBottom
-    ? 'absolute inset-x-0 bottom-0 flex w-full items-end justify-center'
-    : cn('absolute inset-y-0 flex w-full', side === 'left' ? 'left-0 justify-start' : 'right-0 justify-end', width);
-  const borderClass = isBottom ? 'border-t' : side === 'left' ? 'border-r' : 'border-l';
-  const animationClass = isBottom
-    ? 'animate-slide-up'
-    : side === 'left'
-      ? 'animate-slide-in-left'
-      : 'animate-slide-in-right';
+  const drawerPositionClass = cn(
+    'absolute inset-y-0 flex w-full',
+    side === 'left' ? 'left-0 justify-start' : 'right-0 justify-end',
+    width,
+  );
+  const borderClass = side === 'left' ? 'border-r' : 'border-l';
+  const animationClass = side === 'left' ? 'animate-slide-in-left' : 'animate-slide-in-right';
 
   return (
     <div className="fixed inset-0 overflow-hidden" style={{ zIndex }} role="presentation">
@@ -131,11 +128,10 @@ export const Drawer: React.FC<DrawerProps> = ({
             'relative flex w-full flex-col bg-card',
             borderClass,
             side === 'right' ? 'border-border/80' : 'border-border/70 shadow-2xl',
-            isBottom && cn('max-h-[min(82dvh,42rem)] rounded-t-2xl pb-[env(safe-area-inset-bottom)]', width),
             animationClass,
           )}
         >
-          <div className={cn('flex items-center justify-between border-b border-border/60 px-6 py-4', isBottom && 'px-4 py-3')}>
+          <div className="flex items-center justify-between border-b border-border/60 px-6 py-4">
             {title ? (
               <div>
                 <span className="label-uppercase">DETAIL VIEW</span>
@@ -146,10 +142,7 @@ export const Drawer: React.FC<DrawerProps> = ({
               ref={closeButtonRef}
               type="button"
               onClick={onClose}
-              className={cn(
-                'inline-flex h-10 w-10 items-center justify-center rounded-xl border border-border/70 bg-card/80 text-secondary-text transition-colors hover:bg-hover hover:text-foreground',
-                isBottom && 'h-11 w-11',
-              )}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-border/70 bg-card/80 text-secondary-text transition-colors hover:bg-hover hover:text-foreground"
               aria-label={t('common.closeDrawer')}
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -157,7 +150,7 @@ export const Drawer: React.FC<DrawerProps> = ({
               </svg>
             </button>
           </div>
-          <div className={cn('flex-1 overflow-y-auto p-6', isBottom && 'p-4')}>
+          <div className="flex-1 overflow-y-auto p-6">
             {children}
           </div>
         </div>

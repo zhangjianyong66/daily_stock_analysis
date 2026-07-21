@@ -1,6 +1,5 @@
 export { HistoryList } from './HistoryList';
 export { HistoryListItem } from './HistoryListItem';
-export { MobileStockStrip } from './MobileStockStrip';
 export { StockBar } from './StockBar';
 export { StockBarItemComponent } from './StockBarItem';
 export { StockHistoryTrendDrawer } from './StockHistoryTrendDrawer';

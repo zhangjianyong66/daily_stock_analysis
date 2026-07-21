@@ -1,5 +1,4 @@
-import React, { useState } from 'react';
-import { ChevronDown } from 'lucide-react';
+import React from 'react';
 import type { AnalysisResult, AnalysisReport } from '../../types/analysis';
 import { ReportOverview } from './ReportOverview';
 import { ReportStrategy } from './ReportStrategy';
@@ -9,8 +8,6 @@ import { ReportDiagnostics } from './ReportDiagnostics';
 import { AnalysisContextSummary } from './AnalysisContextSummary';
 import { MarketReviewReportView } from './MarketReviewReportView';
 import { getReportText, normalizeReportLanguage } from '../../utils/reportLanguage';
-import { useUiLanguage } from '../../contexts/UiLanguageContext';
-import { cn } from '../../utils/cn';
 
 interface ReportSummaryProps {
   data: AnalysisResult | AnalysisReport;
@@ -35,8 +32,6 @@ export const ReportSummary: React.FC<ReportSummaryProps> = ({
   watchlist,
   onOpenRunFlow,
 }) => {
-  const { t } = useUiLanguage();
-  const [mobileDetailsOpen, setMobileDetailsOpen] = useState(false);
   // 兼容 AnalysisResult 和 AnalysisReport 两种数据格式
   const report: AnalysisReport = 'report' in data ? data.report : data;
   // 使用 report id，因为 queryId 在批量分析时可能重复，且历史报告详情接口需要 recordId 来获取关联资讯和详情数据
@@ -73,52 +68,35 @@ export const ReportSummary: React.FC<ReportSummaryProps> = ({
         watchlist={watchlist}
       />
 
-      <button
-        type="button"
-        onClick={() => setMobileDetailsOpen((open) => !open)}
-        className="flex min-h-11 w-full items-center justify-between rounded-xl border border-subtle bg-card/80 px-4 text-sm font-medium text-foreground shadow-soft-card md:hidden"
-        aria-expanded={mobileDetailsOpen}
-        aria-controls="mobile-report-details"
-      >
-        <span>{t(mobileDetailsOpen ? 'home.lessReportDetails' : 'home.moreReportDetails')}</span>
-        <ChevronDown className={cn('h-4 w-4 transition-transform', mobileDetailsOpen && 'rotate-180')} aria-hidden="true" />
-      </button>
+      {/* 策略点位区 */}
+      <ReportStrategy strategy={strategy} language={reportLanguage} />
 
-      <div
-        id="mobile-report-details"
-        className={cn('space-y-5', mobileDetailsOpen ? 'block' : 'hidden', 'md:block')}
-      >
+      {/* 资讯区 */}
+      <ReportNews recordId={recordId} limit={8} language={reportLanguage} />
 
-        {/* 策略点位区 */}
-        <ReportStrategy strategy={strategy} language={reportLanguage} />
+      {/* 输入数据块低敏摘要 */}
+      <AnalysisContextSummary
+        overview={details?.analysisContextPackOverview}
+        language={reportLanguage}
+      />
 
-        {/* 资讯区 */}
-        <ReportNews recordId={recordId} limit={8} language={reportLanguage} />
+      {/* 运行诊断摘要 */}
+      <ReportDiagnostics
+        recordId={recordId}
+        summary={diagnosticSummary}
+        language={reportLanguage}
+        onOpenRunFlow={onOpenRunFlow}
+      />
 
-        {/* 输入数据块低敏摘要 */}
-        <AnalysisContextSummary
-          overview={details?.analysisContextPackOverview}
-          language={reportLanguage}
-        />
+      {/* 透明度与追溯区 */}
+      <ReportDetails details={details} recordId={recordId} language={reportLanguage} />
 
-        {/* 运行诊断摘要 */}
-        <ReportDiagnostics
-          recordId={recordId}
-          summary={diagnosticSummary}
-          language={reportLanguage}
-          onOpenRunFlow={onOpenRunFlow}
-        />
-
-        {/* 透明度与追溯区 */}
-        <ReportDetails details={details} recordId={recordId} language={reportLanguage} />
-
-        {/* 分析模型标记（Issue #528）— 报告末尾 */}
-        {shouldShowModel && (
-          <p className="px-1 text-xs text-muted-text">
-            {text.analysisModel}: {modelUsed}
-          </p>
-        )}
-      </div>
+      {/* 分析模型标记（Issue #528）— 报告末尾 */}
+      {shouldShowModel && (
+        <p className="px-1 text-xs text-muted-text">
+          {text.analysisModel}: {modelUsed}
+        </p>
+      )}
     </div>
   );
 };
