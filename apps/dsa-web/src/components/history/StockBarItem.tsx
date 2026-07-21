@@ -1,4 +1,5 @@
 import type React from 'react';
+import { Pin } from 'lucide-react';
 import { Badge, Button } from '../common';
 import type { StockBarItem as StockBarItemType } from '../../types/analysis';
 import { getSentimentColor } from '../../types/analysis';
@@ -11,7 +12,9 @@ import { useUiLanguage } from '../../contexts/UiLanguageContext';
 interface StockBarItemProps {
   item: StockBarItemType;
   isViewing: boolean;
+  isPinned?: boolean;
   onClick: (recordId: number) => void;
+  onTogglePin?: (stockCode: string) => void;
   onDelete?: (stockCode: string) => void;
   isDeleting?: boolean;
   isMarketReview?: boolean;
@@ -20,7 +23,9 @@ interface StockBarItemProps {
 export const StockBarItemComponent: React.FC<StockBarItemProps> = ({
   item,
   isViewing,
+  isPinned = false,
   onClick,
+  onTogglePin,
   onDelete,
   isDeleting = false,
   isMarketReview = false,
@@ -29,6 +34,9 @@ export const StockBarItemComponent: React.FC<StockBarItemProps> = ({
   const sentimentScore = typeof item.sentimentScore === 'number' ? item.sentimentScore : null;
   const sentimentColor = sentimentScore !== null ? getSentimentColor(sentimentScore) : null;
   const stockName = item.stockName || item.stockCode;
+  const pinLabel = t(isPinned ? 'stockBar.unpinStock' : 'stockBar.pinStock', {
+    name: stockName,
+  });
   const actionLabels = buildDecisionActionLabelMap(t);
   const operationLabel = getDecisionActionLabel(
     item.action,
@@ -42,12 +50,21 @@ export const StockBarItemComponent: React.FC<StockBarItemProps> = ({
     .replace('市场阶段：', '')
     .replace('Market phase: ', '');
 
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.target !== event.currentTarget) return;
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    onClick(item.id);
+  };
+
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={() => onClick(item.id)}
+      onKeyDown={handleKeyDown}
       aria-label={t('history.itemAria', { name: stockName, code: item.stockCode })}
-      className={`home-history-item w-full min-w-0 flex-1 text-left p-2.5 group/item ${
+      className={`home-history-item w-full min-w-0 flex-1 cursor-pointer text-left p-2.5 group/item focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
         isViewing ? 'home-history-item-selected' : ''
       }`}
     >
@@ -100,6 +117,30 @@ export const StockBarItemComponent: React.FC<StockBarItemProps> = ({
                   {operationLabel} {sentimentScore}
                 </Badge>
               ) : null}
+              {onTogglePin && (
+                <Button
+                  variant="ghost"
+                  size="xsm"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onTogglePin(item.stockCode);
+                  }}
+                  aria-label={pinLabel}
+                  aria-pressed={isPinned}
+                  title={pinLabel}
+                  className={`h-6 w-6 p-0 flex items-center justify-center ${
+                    isPinned
+                      ? 'bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary'
+                      : 'text-muted-text'
+                  }`}
+                >
+                  <Pin
+                    className="h-3.5 w-3.5"
+                    fill={isPinned ? 'currentColor' : 'none'}
+                    aria-hidden="true"
+                  />
+                </Button>
+              )}
               {onDelete && (
                 <Button
                   variant="ghost"
@@ -150,6 +191,6 @@ export const StockBarItemComponent: React.FC<StockBarItemProps> = ({
           </div>
         </div>
       </div>
-    </button>
+    </div>
   );
 };

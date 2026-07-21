@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [新功能] Web 首页个股栏支持在当前浏览器中置顶常看的股票或 ETF，置顶项会在现有排序结果中优先展示。
 - [改进] Web 首页个股栏提供最近分析、情绪分高低和名称/代码排序，并在浏览器中保留用户选择。
 - [修复] 搜索调用审计不再把正常搜索结果正文中的余额、额度、认证或限流词误判为供应商故障，同时保留真实错误响应的语义分类。
 - [改进] 大盘复盘新闻搜索由每市场 3 次合并为 1 次，非 ETF 标准 Anspire 分析由五维请求合并为两组，并通过跨实例可信缓存与 singleflight 消除 ETF/个股短期重复调用。

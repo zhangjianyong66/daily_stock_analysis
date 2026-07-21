@@ -14,6 +14,17 @@ import {
   sortStockBarItems,
   type StockBarSortOption,
 } from '../../utils/stockBarSort';
+import {
+  getStockBarPinsStorage,
+  isStockBarItemPinned,
+  normalizeStockBarPinCode,
+  persistStockBarPins,
+  prioritizePinnedStockBarItems,
+  resolveInitialStockBarPins,
+  STOCK_BAR_PINS_STORAGE_KEY,
+} from '../../utils/stockBarPins';
+
+const STOCK_BAR_PINS_CHANGED_EVENT = 'dsa:stock-bar-pins-changed';
 
 interface StockBarProps {
   items: StockBarItemType[];
@@ -49,6 +60,7 @@ export const StockBar: React.FC<StockBarProps> = ({
   const isMarketReview = (code: string) => code === 'MARKET';
   const [filterText, setFilterText] = useState('');
   const [sortOption, setSortOption] = useState<StockBarSortOption>(resolveInitialStockBarSort);
+  const [pinnedCodes, setPinnedCodes] = useState<Set<string>>(resolveInitialStockBarPins);
   const [selectedCodes, setSelectedCodes] = useState<Set<string>>(new Set());
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
@@ -63,8 +75,9 @@ export const StockBar: React.FC<StockBarProps> = ({
       const stockName = String(item.stockName || '').toLocaleLowerCase();
       return stockCode.includes(normalizedFilter) || stockName.includes(normalizedFilter);
     });
-    return sortStockBarItems(filteredItems, sortOption, language);
-  }, [items, language, normalizedFilter, sortOption]);
+    const sortedItems = sortStockBarItems(filteredItems, sortOption, language);
+    return prioritizePinnedStockBarItems(sortedItems, pinnedCodes);
+  }, [items, language, normalizedFilter, pinnedCodes, sortOption]);
 
   const sortOptions = useMemo(() => [
     { value: 'recent', label: t('stockBar.sortRecent') },
@@ -80,6 +93,23 @@ export const StockBar: React.FC<StockBarProps> = ({
     persistStockBarSort(getStockBarSortStorage(), nextOption);
   }, []);
 
+  const handleTogglePin = useCallback((stockCode: string) => {
+    const normalizedCode = normalizeStockBarPinCode(stockCode);
+    if (!normalizedCode) return;
+
+    const next = new Set(pinnedCodes);
+    if (next.has(normalizedCode)) {
+      next.delete(normalizedCode);
+    } else {
+      next.add(normalizedCode);
+    }
+    setPinnedCodes(next);
+    persistStockBarPins(getStockBarPinsStorage(), next);
+    window.dispatchEvent(new CustomEvent<ReadonlySet<string>>(STOCK_BAR_PINS_CHANGED_EVENT, {
+      detail: next,
+    }));
+  }, [pinnedCodes]);
+
   const deletableItems = visibleItems;
   const selectedCount = [...selectedCodes].filter((code) => deletableItems.some((item) => item.stockCode === code)).length;
   const allVisibleSelected = deletableItems.length > 0 && selectedCount === deletableItems.length;
@@ -90,6 +120,25 @@ export const StockBar: React.FC<StockBarProps> = ({
       selectAllRef.current.indeterminate = someVisibleSelected;
     }
   }, [someVisibleSelected]);
+
+  useEffect(() => {
+    const handlePinsChanged = (event: Event) => {
+      const { detail } = event as CustomEvent<ReadonlySet<string>>;
+      setPinnedCodes(new Set(detail));
+    };
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === STOCK_BAR_PINS_STORAGE_KEY || event.key === null) {
+        setPinnedCodes(resolveInitialStockBarPins());
+      }
+    };
+
+    window.addEventListener(STOCK_BAR_PINS_CHANGED_EVENT, handlePinsChanged);
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener(STOCK_BAR_PINS_CHANGED_EVENT, handlePinsChanged);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, []);
 
   const toggleCode = useCallback((code: string) => {
     setSelectedCodes((prev) => {
@@ -322,7 +371,9 @@ export const StockBar: React.FC<StockBarProps> = ({
                   <StockBarItemComponent
                     item={item}
                     isViewing={isSelected}
+                    isPinned={isStockBarItemPinned(pinnedCodes, code)}
                     onClick={onItemClick}
+                    onTogglePin={isMarket ? undefined : handleTogglePin}
                     onDelete={onDeleteStock ? handleRequestSingleDelete : undefined}
                     isDeleting={deleteBusy}
                     isMarketReview={isMarket}
