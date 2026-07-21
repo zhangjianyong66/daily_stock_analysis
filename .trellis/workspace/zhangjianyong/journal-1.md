@@ -680,3 +680,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 21: 完成首页个股栏置顶功能
+
+**Date**: 2026-07-21
+**Task**: 完成首页个股栏置顶功能
+**Branch**: `main`
+
+### Summary
+
+实现股票与 ETF 浏览器本地置顶、排序分组、双实例同步和完整 Web 验证。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0bcead9` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
