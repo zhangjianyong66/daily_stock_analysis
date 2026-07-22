@@ -845,3 +845,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 26: 优化本地测试验证策略
+
+**Date**: 2026-07-22
+**Task**: 优化本地测试验证策略
+**Branch**: `main`
+
+### Summary
+
+调整 AGENTS.md：Codex 本地默认执行受影响测试与直接上下游回归，完整 ci_gate 由 GitHub CI 兜底；高风险且影响范围不明时先征求用户同意。治理校验通过。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9fdc48d` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
