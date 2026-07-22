@@ -159,7 +159,7 @@ class TestFundamentalContext(unittest.TestCase):
             {"name": "Consumer Electronics", "type": "概念"},
         ])
 
-    def test_etf_market_downgrades_to_partial_or_not_supported(self) -> None:
+    def test_etf_market_uses_capital_flow_while_other_stock_only_blocks_downgrade(self) -> None:
         manager = DataFetcherManager(fetchers=[])
         cfg = SimpleNamespace(
             enable_fundamental_pipeline=True,
@@ -189,6 +189,39 @@ class TestFundamentalContext(unittest.TestCase):
                 patch(
                     "data_provider.fundamental_adapter.AkshareFundamentalAdapter.get_fundamental_bundle",
                     return_value=bundle,
+                ), \
+                patch(
+                    "data_provider.fundamental_adapter.AkshareFundamentalAdapter.get_capital_flow",
+                    return_value={
+                        "status": "ok",
+                        "stock_flow": {
+                            "main_net_inflow": 1_500_000,
+                            "inflow_5d": 3_000_000,
+                            "inflow_10d": 4_000_000,
+                            "as_of": "2026-07-21",
+                            "scope": "daily",
+                        },
+                        "intraday_flow": {},
+                        "sector_rankings": {"top": [], "bottom": []},
+                        "limitations": ["intraday_trade_direction_unavailable"],
+                        "source_chain": ["capital_stock:stock_individual_fund_flow"],
+                        "errors": [],
+                    },
+                ), \
+                patch(
+                    "data_provider.fundamental_adapter.AkshareFundamentalAdapter.get_intraday_capital_flow",
+                    return_value={
+                        "status": "ok",
+                        "intraday_flow": {
+                            "active_net_inflow": 200_000,
+                            "scope": "intraday",
+                            "classification": "vendor_classified",
+                            "is_estimated": True,
+                        },
+                        "limitations": [],
+                        "source_chain": ["capital_intraday:stock_intraday_em"],
+                        "errors": [],
+                    },
                 ):
             ctx = manager.get_fundamental_context("159915")
         self.assertEqual(ctx["market"], "cn")
@@ -197,7 +230,8 @@ class TestFundamentalContext(unittest.TestCase):
         self.assertEqual(ctx["coverage"].get("growth"), "not_supported")
         self.assertEqual(ctx["coverage"].get("earnings"), "not_supported")
         self.assertEqual(ctx["coverage"].get("institution"), "not_supported")
-        self.assertEqual(ctx["coverage"].get("capital_flow"), "not_supported")
+        self.assertEqual(ctx["coverage"].get("capital_flow"), "ok")
+        self.assertEqual(ctx["capital_flow"]["data"]["stock_flow"]["main_net_inflow"], 1_500_000)
         self.assertEqual(ctx["coverage"].get("dragon_tiger"), "not_supported")
         self.assertEqual(ctx["coverage"].get("boards"), "not_supported")
 

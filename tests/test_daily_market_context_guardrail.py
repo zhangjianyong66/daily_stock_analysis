@@ -82,6 +82,30 @@ def test_conservative_market_context_softens_aggressive_buy() -> None:
     assert "大盘环境" in phase_decision["confidence_reason"]
 
 
+def test_conservative_market_context_does_not_override_deterministic_etf_strategy() -> None:
+    result = _result()
+    result.code = "159865"
+    result.sentiment_score = 65
+    result.operation_advice = "买入（仅20%-30%试仓）"
+    result.dashboard["etf_short_term_strategy"] = {
+        "strategy_version": "etf_short_swing_v1",
+        "strategy_state": "starter_entry",
+        "score_min": 60,
+        "score_max": 69,
+    }
+
+    adjustments = apply_daily_market_context_guardrail(
+        result,
+        daily_market_context={"risk_tags": ["conservative"]},
+        report_language="zh",
+    )
+
+    assert adjustments == []
+    assert result.decision_type == "buy"
+    assert result.operation_advice == "买入（仅20%-30%试仓）"
+    assert result.sentiment_score == 65
+
+
 def test_position_cap_only_market_context_softens_aggressive_buy() -> None:
     cases = [
         ("zh", "市场震荡，仓位不超过30%。", "立即买入并积极加仓", "高", "观望"),

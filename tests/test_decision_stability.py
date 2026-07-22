@@ -3,7 +3,12 @@
 
 from types import SimpleNamespace
 
-from src.analyzer import AnalysisResult, _capital_flow_bias, stabilize_decision_with_structure
+from src.analyzer import (
+    AnalysisResult,
+    _capital_flow_bias,
+    _etf_risk_reward_plan,
+    stabilize_decision_with_structure,
+)
 
 
 def _result(
@@ -13,9 +18,10 @@ def _result(
     score: int,
     current_price: float,
     change_pct: float = 0.0,
+    code: str = "002812",
 ) -> AnalysisResult:
     return AnalysisResult(
-        code="002812",
+        code=code,
         name="恩捷股份",
         sentiment_score=score,
         trend_prediction="看多" if decision_type == "buy" else "看空",
@@ -58,6 +64,49 @@ def _unsupported_fund_flow() -> dict:
 
 def _unsupported_fund_flow_caps() -> dict:
     return {"capital_flow": {"status": "NOT_SUPPORTED", "data": {"stock_flow": {"main_net_inflow": 0}}}}
+
+
+def _etf_fund_flow(
+    *,
+    latest: float,
+    previous: float,
+    latest_pct: float,
+    previous_pct: float,
+    inflow_3d: float,
+    positive_days_3d: int,
+    inflow_5d: float,
+    as_of: str = "2026-07-21",
+    intraday_net: float = 0.0,
+) -> dict:
+    return {
+        "capital_flow": {
+            "status": "ok",
+            "data": {
+                "stock_flow": {
+                    "main_net_inflow": latest,
+                    "main_net_inflow_pct": latest_pct,
+                    "previous_main_net_inflow": previous,
+                    "previous_main_net_inflow_pct": previous_pct,
+                    "inflow_3d": inflow_3d,
+                    "positive_days_3d": positive_days_3d,
+                    "inflow_5d": inflow_5d,
+                    "inflow_10d": inflow_5d,
+                    "as_of": as_of,
+                    "scope": "daily",
+                },
+                "intraday_flow": {
+                    "active_net_inflow": intraday_net,
+                    "scope": "intraday",
+                    "classification": "vendor_classified",
+                    "is_estimated": True,
+                },
+            },
+        }
+    }
+
+
+def _phase(effective_date: str = "2026-07-21") -> dict:
+    return {"effective_daily_bar_date": effective_date, "phase": "premarket"}
 
 
 def test_capital_flow_bias_is_unavailable_when_stock_flow_data_is_missing() -> None:
@@ -340,3 +389,299 @@ def test_refines_hold_pullback_near_support_as_shakeout_watch() -> None:
     assert result.decision_type == "hold"
     assert result.operation_advice == "洗盘观察"
     assert "更适合按洗盘观察处理" in result.risk_warning
+
+
+def test_etf_oversold_with_improving_flow_allows_only_starter_position() -> None:
+    result = _result(
+        code="159865",
+        decision_type="hold",
+        operation_advice="观望",
+        score=35,
+        current_price=10.1,
+    )
+    trend = SimpleNamespace(
+        current_price=10.1,
+        ma5=10.5,
+        bias_ma5=-3.81,
+        rsi_12=31.0,
+        change_3d=-5.0,
+        is_new_low_3d=False,
+        support_levels=[10.0],
+        resistance_levels=[11.0],
+    )
+
+    stabilize_decision_with_structure(
+        result,
+        trend,
+        _etf_fund_flow(
+            latest=-500_000,
+            previous=-1_000_000,
+            latest_pct=-2.0,
+            previous_pct=-4.2,
+            inflow_3d=-1_200_000,
+            positive_days_3d=1,
+            inflow_5d=-2_000_000,
+        ),
+        _phase(),
+    )
+
+    strategy = result.dashboard["etf_short_term_strategy"]
+    assert strategy["strategy_state"] == "starter_entry"
+    assert 60 <= result.sentiment_score <= 69
+    assert result.decision_type == "buy"
+    assert strategy["position_cap_pct"] == 30
+    assert "20%-30%试仓" in result.operation_advice
+    assert "未提供真实成本" in result.dashboard["core_conclusion"]["position_advice"]["has_position"]
+
+
+def test_etf_oversold_but_new_low_and_outflow_stays_watch_only() -> None:
+    result = _result(
+        code="512480",
+        decision_type="buy",
+        operation_advice="买入",
+        score=88,
+        current_price=9.9,
+    )
+    trend = SimpleNamespace(
+        current_price=9.9,
+        ma5=10.4,
+        bias_ma5=-4.81,
+        rsi_12=29.0,
+        change_3d=-6.0,
+        is_new_low_3d=True,
+        support_levels=[10.0],
+        resistance_levels=[11.0],
+    )
+
+    stabilize_decision_with_structure(
+        result,
+        trend,
+        _etf_fund_flow(
+            latest=-1_200_000,
+            previous=-800_000,
+            latest_pct=-5.0,
+            previous_pct=-3.0,
+            inflow_3d=-2_500_000,
+            positive_days_3d=0,
+            inflow_5d=-4_000_000,
+            intraday_net=99_000_000,
+        ),
+        _phase(),
+    )
+
+    strategy = result.dashboard["etf_short_term_strategy"]
+    assert strategy["strategy_state"] == "oversold_watch"
+    assert result.decision_type == "hold"
+    assert result.sentiment_score == 59
+    assert strategy["intraday_flow_used_for_score"] is False
+
+
+def test_etf_single_oversold_indicator_cannot_trigger_starter_entry() -> None:
+    result = _result(
+        code="159865",
+        decision_type="buy",
+        operation_advice="买入",
+        score=90,
+        current_price=10.1,
+    )
+    trend = SimpleNamespace(
+        current_price=10.1,
+        ma5=10.2,
+        bias_ma5=-0.98,
+        rsi_12=30.0,
+        change_3d=-1.0,
+        is_new_low_3d=False,
+        support_levels=[10.0],
+        resistance_levels=[11.0],
+    )
+
+    stabilize_decision_with_structure(
+        result,
+        trend,
+        _etf_fund_flow(
+            latest=500_000,
+            previous=-500_000,
+            latest_pct=2.0,
+            previous_pct=-2.0,
+            inflow_3d=800_000,
+            positive_days_3d=2,
+            inflow_5d=1_000_000,
+        ),
+        _phase(),
+    )
+
+    strategy = result.dashboard["etf_short_term_strategy"]
+    assert strategy["oversold_signal_count"] == 1
+    assert strategy["strategy_state"] == "neutral_watch"
+    assert result.decision_type == "hold"
+    assert result.sentiment_score == 59
+
+
+def test_etf_missing_new_low_confirmation_stays_watch_only() -> None:
+    result = _result(
+        code="159865",
+        decision_type="buy",
+        operation_advice="买入",
+        score=90,
+        current_price=10.1,
+    )
+    trend = SimpleNamespace(
+        current_price=10.1,
+        ma5=10.5,
+        bias_ma5=-3.81,
+        rsi_12=31.0,
+        change_3d=-5.0,
+        support_levels=[10.0],
+        resistance_levels=[11.0],
+    )
+
+    stabilize_decision_with_structure(
+        result,
+        trend,
+        _etf_fund_flow(
+            latest=-500_000,
+            previous=-1_000_000,
+            latest_pct=-2.0,
+            previous_pct=-4.2,
+            inflow_3d=-1_200_000,
+            positive_days_3d=1,
+            inflow_5d=-2_000_000,
+        ),
+        _phase(),
+    )
+
+    strategy = result.dashboard["etf_short_term_strategy"]
+    assert strategy["strategy_state"] == "oversold_watch"
+    assert strategy["stopped_falling"] is False
+    assert result.decision_type == "hold"
+
+
+def test_etf_confirmed_flow_and_ma5_reclaim_allows_add_on() -> None:
+    result = _result(
+        code="561510",
+        decision_type="hold",
+        operation_advice="观望",
+        score=45,
+        current_price=10.0,
+    )
+    trend = SimpleNamespace(
+        current_price=10.0,
+        ma5=9.9,
+        bias_ma5=1.01,
+        rsi_12=32.0,
+        change_3d=-4.5,
+        is_new_low_3d=False,
+        support_levels=[9.9],
+        resistance_levels=[10.3],
+    )
+
+    stabilize_decision_with_structure(
+        result,
+        trend,
+        _etf_fund_flow(
+            latest=600_000,
+            previous=-200_000,
+            latest_pct=2.5,
+            previous_pct=-0.5,
+            inflow_3d=900_000,
+            positive_days_3d=2,
+            inflow_5d=1_100_000,
+        ),
+        _phase(),
+    )
+
+    strategy = result.dashboard["etf_short_term_strategy"]
+    assert strategy["strategy_state"] == "add_on_confirmation"
+    assert 70 <= result.sentiment_score <= 79
+    assert result.action == "add"
+    assert strategy["position_cap_pct"] == 60
+
+
+def test_etf_high_bias_overbought_near_resistance_forces_full_exit() -> None:
+    result = _result(
+        code="513050",
+        decision_type="buy",
+        operation_advice="买入",
+        score=92,
+        current_price=10.8,
+    )
+    trend = SimpleNamespace(
+        current_price=10.8,
+        ma5=10.3,
+        bias_ma5=4.85,
+        rsi_12=70.0,
+        change_3d=5.0,
+        is_new_low_3d=False,
+        support_levels=[10.2],
+        resistance_levels=[11.0],
+    )
+
+    stabilize_decision_with_structure(result, trend, _unsupported_fund_flow(), _phase())
+
+    strategy = result.dashboard["etf_short_term_strategy"]
+    assert strategy["strategy_state"] == "take_profit_exit"
+    assert result.sentiment_score == 19
+    assert result.decision_type == "sell"
+    assert strategy["position_cap_pct"] == 0
+    assert "全额退出" in result.operation_advice
+
+
+def test_etf_stale_daily_flow_cannot_trigger_starter_entry() -> None:
+    result = _result(
+        code="159865",
+        decision_type="buy",
+        operation_advice="买入",
+        score=80,
+        current_price=10.1,
+    )
+    trend = SimpleNamespace(
+        current_price=10.1,
+        ma5=10.5,
+        bias_ma5=-3.81,
+        rsi_12=31.0,
+        change_3d=-5.0,
+        is_new_low_3d=False,
+        support_levels=[10.0],
+        resistance_levels=[11.0],
+    )
+
+    stabilize_decision_with_structure(
+        result,
+        trend,
+        _etf_fund_flow(
+            latest=500_000,
+            previous=-500_000,
+            latest_pct=2.0,
+            previous_pct=-2.0,
+            inflow_3d=800_000,
+            positive_days_3d=2,
+            inflow_5d=1_000_000,
+            as_of="2026-07-18",
+        ),
+        _phase("2026-07-21"),
+    )
+
+    strategy = result.dashboard["etf_short_term_strategy"]
+    assert strategy["strategy_state"] == "oversold_watch"
+    assert strategy["daily_capital_flow"]["is_fresh"] is False
+    assert result.decision_type == "hold"
+
+
+def test_etf_structure_stop_over_3pct_rejects_entry() -> None:
+    plan = _etf_risk_reward_plan(entry_price=10.3, support=9.8, resistance=12.0)
+
+    assert plan["valid"] is False
+    assert plan["invalid_reason"] == "structure_stop_distance_exceeds_3pct"
+
+
+def test_etf_risk_reward_requires_at_least_exactly_1_5r() -> None:
+    reference = _etf_risk_reward_plan(entry_price=10.0, support=9.9, resistance=12.0)
+    exact_target = reference["minimum_target_price"]
+
+    exact = _etf_risk_reward_plan(entry_price=10.0, support=9.9, resistance=exact_target)
+    below = _etf_risk_reward_plan(entry_price=10.0, support=9.9, resistance=exact_target - 0.0002)
+
+    assert exact["valid"] is True
+    assert exact["reward_risk_ratio"] >= 1.5
+    assert below["valid"] is False
+    assert below["invalid_reason"] == "first_resistance_below_1_5r"

@@ -35,7 +35,7 @@ class _DummyManagerOk:
 
 
 class _DummyManagerNotSupported:
-    """Returns not_supported status (e.g. ETF or HK stock)."""
+    """Returns not_supported status (e.g. HK stock or an unsupported source)."""
 
     def get_capital_flow_context(self, _stock_code: str):
         return {"status": "not_supported"}
@@ -71,16 +71,47 @@ class TestGetCapitalFlowContract(unittest.TestCase):
         self.assertEqual(result["errors"], [])
 
     def test_not_supported_for_non_cn_or_etf(self) -> None:
-        """ETF / non-CN stocks return status=not_supported with an explanatory note."""
+        """Unsupported markets return status=not_supported with an explanatory note."""
         with patch(
             "src.agent.tools.data_tools._get_fetcher_manager",
             return_value=_DummyManagerNotSupported(),
         ):
-            result = _handle_get_capital_flow("510300")
+            result = _handle_get_capital_flow("HK00700")
 
-        self.assertEqual(result["stock_code"], "510300")
+        self.assertEqual(result["stock_code"], "HK00700")
         self.assertEqual(result["status"], "not_supported")
         self.assertIn("note", result)
+
+    def test_etf_response_exposes_daily_scope_and_intraday_reference(self) -> None:
+        manager = _DummyManagerOk()
+        original = manager.get_capital_flow_context
+
+        def _etf_context(stock_code: str):
+            ctx = original(stock_code)
+            ctx["data"]["stock_flow"].update(
+                {
+                    "main_net_inflow_pct": 2.5,
+                    "as_of": "2026-07-21",
+                    "scope": "daily",
+                }
+            )
+            ctx["data"]["intraday_flow"] = {
+                "active_net_inflow": 2_000_000,
+                "scope": "intraday",
+                "classification": "vendor_classified",
+                "is_estimated": True,
+            }
+            return ctx
+
+        manager.get_capital_flow_context = _etf_context
+        with patch("src.agent.tools.data_tools._get_fetcher_manager", return_value=manager):
+            result = _handle_get_capital_flow("159865")
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["scope"], "daily")
+        self.assertEqual(result["as_of"], "2026-07-21")
+        self.assertEqual(result["main_net_inflow_pct"], 2.5)
+        self.assertEqual(result["intraday_flow"]["scope"], "intraday")
 
     def test_exception_path_formatting(self) -> None:
         """Fetch errors are caught and returned with status=error."""

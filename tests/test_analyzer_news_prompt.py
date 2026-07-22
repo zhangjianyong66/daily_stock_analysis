@@ -232,6 +232,70 @@ class AnalyzerNewsPromptTestCase(unittest.TestCase):
         self.assertIn("接近压力且主力流出时不得追买", prompt)
         self.assertIn("洗盘观察", prompt)
 
+    def test_etf_prompt_uses_exchange_flow_and_one_to_five_day_plan(self) -> None:
+        with patch.object(GeminiAnalyzer, "_init_litellm", return_value=None):
+            analyzer = GeminiAnalyzer()
+
+        context = {
+            "code": "159865",
+            "stock_name": "养殖ETF",
+            "date": "2026-07-22",
+            "is_index_etf": True,
+            "today": {"close": 0.72, "ma5": 0.74, "ma10": 0.75, "ma20": 0.76},
+            "market_phase_context": {
+                "market": "cn",
+                "phase": "premarket",
+                "effective_daily_bar_date": "2026-07-21",
+                "is_partial_bar": False,
+            },
+            "fundamental_context": {
+                "capital_flow": {
+                    "status": "ok",
+                    "data": {
+                        "stock_flow": {
+                            "main_net_inflow": -6_646_402,
+                            "main_net_inflow_pct": -2.84,
+                            "previous_main_net_inflow": -9_000_000,
+                            "previous_main_net_inflow_pct": -5.1,
+                            "inflow_3d": 1_200_000,
+                            "previous_inflow_3d": -8_000_000,
+                            "positive_days_3d": 2,
+                            "inflow_5d": -2_000_000,
+                            "inflow_10d": -4_000_000,
+                            "large_net_inflow": 500_000,
+                            "super_large_net_inflow": -1_000_000,
+                            "as_of": "2026-07-21",
+                            "scope": "daily",
+                        },
+                        "intraday_flow": {
+                            "active_buy_amount": 10_000_000,
+                            "active_sell_amount": 8_000_000,
+                            "active_net_inflow": 2_000_000,
+                            "neutral_amount": 1_000_000,
+                            "as_of": "2026-07-22T10:30:00+08:00",
+                            "classification": "vendor_classified",
+                            "scope": "intraday",
+                            "is_estimated": True,
+                        },
+                        "sector_rankings": {"top": [], "bottom": []},
+                    },
+                }
+            },
+        }
+
+        prompt = analyzer._format_prompt(context, "养殖ETF", news_context=None)
+
+        self.assertIn("场内 ETF 二级市场交易资金流", prompt)
+        self.assertIn("2026-07-21", prompt)
+        self.assertIn("-6646402", prompt)
+        self.assertIn("大单净流入", prompt)
+        self.assertIn("盘中主动成交估算（仅展示，不评分）", prompt)
+        self.assertIn("盘中值仅来自供应商逐笔买/卖/中性分类", prompt)
+        self.assertIn("A股场内 ETF 1-5 日短线计划（强制）", prompt)
+        self.assertIn("etf_short_swing_v1", prompt)
+        self.assertIn("第5个交易日必须退出或重新生成计划", prompt)
+        self.assertIn("流动性不作禁入或分数封顶条件", prompt)
+
     def test_prompt_prefers_context_news_window_days(self) -> None:
         with patch.object(GeminiAnalyzer, "_init_litellm", return_value=None):
             analyzer = GeminiAnalyzer()

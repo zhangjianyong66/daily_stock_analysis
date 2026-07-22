@@ -136,6 +136,17 @@ npm run build
 - 实时源确已尝试但全部失败且无合格 stale 时，AnalysisContextPack 使用 `fetch_failed`；功能未启用或没有请求证据时才使用 `missing`。
 - 实时行情目标回归：`python3 -m pytest tests/test_realtime_types.py tests/test_realtime_quote_fallback_logging.py tests/test_akshare_realtime_quote.py tests/test_etf_realtime_singleflight.py tests/test_fetcher_source_optimization.py tests/test_hk_realtime_routing.py tests/test_tw_market_support.py tests/test_run_diagnostics_p1.py tests/test_analysis_context_builder.py tests/test_pipeline_market_phase_context.py -q`。
 
+### A 股场内 ETF 资金流与短线决策
+
+- 场内 ETF 的 `capital_flow` 是东方财富二级市场日主力/大单/超大单资金流，不是一级市场申购赎回；上海 `51/52/56/58` 传 `market=sh`，深圳 `15/16/18` 传 `market=sz`。
+- 日资金流必须按日期取最新行，并自行计算最近/前序 3 日、5 日和 10 日完整窗口；兼容字段 `main_net_inflow/inflow_5d/inflow_10d` 不得删除。日流 `as_of` 只有与 `effective_daily_bar_date` 同日才可参与动作。
+- 盘中主动流只可从逐笔供应商买盘/卖盘/中性盘分类聚合，中性与未知方向不得归入净流入；盘中估算只展示、不评分，汇总成交量额或价格涨跌不得用于猜测资金方向。日流与盘中流必须拆分调用，日流先返回，盘中只使用剩余预算且最多 3 秒；盘中超时不得丢失日流。
+- ETF 使用 `etf_short_swing_v1` 的 1-5 日机会分：超跌/高抛各按 RSI(12)、MA5 乖离、3 日涨跌及支撑/压力执行 2-of-3；超跌后仍需右侧止跌和日资金改善才可 20%-30% 试仓，MA5 与 3/5 日资金确认后才可提高到 40%-60%。
+- 空仓计划同时受结构止损、3% 硬上限和至少 1.5R 约束；普通到 1.5R 止盈一半，完整高抛或结构失效全额退出，第 2 日未走强减仓，第 5 日退出/重评。持仓未知时不得编造成本、盈亏、仓位或持有时间。
+- ETF 流动性只作限价单、滑点和折溢价风险提示，不作为禁入或分数封顶硬门槛。资金流单源失败保持 fail-open。
+- `etf_short_swing_v1` 写入后是 ETF 最终动作/分数契约；通用大盘环境护栏不得再改写其动作或分数，避免状态、分数和报告建议互相矛盾。
+- 目标回归：`.venv/bin/python -m pytest tests/test_etf_capital_flow.py tests/test_fundamental_context.py tests/test_decision_stability.py tests/test_analyzer_news_prompt.py tests/test_data_tools_get_capital_flow.py -q`。
+
 ### 搜索调用审计与余额告警
 
 - 搜索供应商用量以真实外部 HTTP 请求为计数真源；自动重试、备用 Key、供应商 fallback 和 SearXNG 多实例尝试逐次记账，缓存、本地过滤、正文补抓和公共实例目录刷新不计数。

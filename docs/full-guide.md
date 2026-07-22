@@ -418,7 +418,7 @@ daily_stock_analysis/
 > 行为说明：
 > - A 股 ETF 会按 `REALTIME_SOURCE_PRIORITY` 真正调用腾讯、新浪和 Eastmoney 对应实现；`efinance` 与 `akshare_em` 同属 Eastmoney，同上游网络失败时本轮不会重复请求。全部实时源失败后，仅同交易日 30 分钟内的 last-good 行情可作为显式 `stale` 降级。
 > - A 股：按 `valuation/growth/earnings/institution/capital_flow/dragon_tiger/boards` 聚合能力返回；
-> - ETF：返回可得项，缺失能力标记为 `not_supported`，整体不影响原流程；
+> - A 股场内 ETF：`capital_flow` 按沪深代码路由东方财富日主力/大单/超大单资金流，并在逐笔有明确买卖性质时附加仅展示的盘中主动流估算；龙虎榜、板块等缺失能力继续标记为 `not_supported`，任一资金流请求失败均 fail-open；
 > - 美股/港股：通过 yfinance 适配器返回 `valuation/growth/earnings/belong_boards`（来源 `info.sector`/`industry`），`institution/capital_flow/dragon_tiger/boards` 暂无对应数据源仍标记 `not_supported`；yfinance 不可用或字段缺失时整体降级回 `not_supported`，仍走 fail-open；
 > - 日股/韩股：当前仅走 Yfinance 基础路径获取日线与实时行情；`institution`、`capital_flow`、`dragon_tiger`、`boards` 等依赖 A 股专属源/离岸完整版的能力会降级为 `not_supported`（详见 [市场支持与边界](market-support.md)）；
 > - 台股：在美股/港股 offshore 基础路径之外，`institution` 区块额外展示三大法人原始买卖超净额（TWSE T86 / TPEx，默认开启、fail-open，取不到数据时维持 `not_supported`）；`capital_flow`、`dragon_tiger`、`boards` 仍为 `not_supported`；
@@ -1386,6 +1386,8 @@ python main.py --debug
 ## 分析决策可操作性
 
 个股报告的操作建议会结合支撑位、压力位、量能/筹码、主力资金流向和风险事件进行校准，避免仅因单日涨跌或评分跨线在“买入/卖出”之间剧烈切换。若价格处在支撑与压力之间且资金流不明确，报告会优先给出“持有、震荡观望、洗盘观察”等中性可执行建议；只有接近支撑确认、有效突破压力且量价/资金配合时才给出买入，跌破关键支撑或主力资金持续流出时才给出卖出/减仓。
+
+A 股场内 ETF 采用独立的 `etf_short_swing_v1` 口径：`sentiment_score` 衡量未来 1-5 个交易日短线机会，而非中期趋势强弱。超跌与高抛均按 RSI(12)、MA5 乖离、3 日涨跌及支撑/压力的 2-of-3 判定；超跌只形成候选，必须等支撑止跌且日主力资金改善后才允许 20%-30% 试仓，站回 MA5、3 日资金确认且 5 日累计转正后才允许提高到 40%-60%。结构止损和模拟成本下方 3% 取更近边界，第一压力不足 1.5R 时不入场；普通到 1.5R 止盈一半，完整高抛全额退出，第 2 日未走强减仓，第 5 日退出或重评。盘中主动流估算仅展示，不参与评分。
 该项调整会影响可操作决策的运行时落盘与提示词约束链路，但不变更 LLM 模型、LiteLLM 路由、Provider/Key 及其兼容边界，不影响配置保存/清理语义。
 兼容性核验结论：除配置和模型侧语义外，该决策稳定性链路覆盖 `src/analyzer.py`、`src/core/pipeline.py`、`src/core/backtest_engine.py`、`src/report_language.py` 及 `src/agent` 决策路径的运行时行为，建议复核报告决策类型映射与回测入口联动。
 核验路径：相关逻辑在上述运行时路径与对应测试（`tests/test_backtest_engine.py`、`tests/test_analyzer_news_prompt.py`、`tests/test_decision_stability.py`、`tests/test_agent_pipeline.py` 等）中生效；未在 `src/config.py`、`src/report.py`、存储/持久化链路新增配置字段或清理逻辑。

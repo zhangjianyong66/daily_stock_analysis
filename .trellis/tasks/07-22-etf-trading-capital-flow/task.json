@@ -1,0 +1,29 @@
+{
+  "id": "etf-trading-capital-flow",
+  "name": "etf-trading-capital-flow",
+  "title": "接入场内ETF交易资金流",
+  "description": "",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "zhangjianyong",
+  "assignee": "zhangjianyong",
+  "createdAt": "2026-07-22",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "实现与离线验证已完成；沪深在线 smoke 因当前代理链 ProxyError 未取得东方财富数据，AkShare 函数签名与路由已核对。等待用户确认后再提交和归档。",
+  "meta": {
+    "implementation_complete": true,
+    "online_smoke": "blocked_by_proxy"
+  }
+}

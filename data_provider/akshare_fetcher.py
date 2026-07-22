@@ -45,6 +45,7 @@ from tenacity import (
 
 from src.patches.eastmoney_patch import eastmoney_patch
 from src.config import get_config
+from src.services.market_symbol_utils import is_cn_etf_symbol
 from .base import BaseFetcher, DataFetchError, RateLimitError, STANDARD_COLUMNS, is_bse_code, is_st_stock, is_kc_cy_stock, normalize_stock_code
 from .realtime_types import (
     UnifiedRealtimeQuote, ChipDistribution, RealtimeSource,
@@ -112,9 +113,7 @@ def _is_etf_code(stock_code: str) -> bool:
     Returns:
         True 表示是 ETF 代码，False 表示是普通股票代码
     """
-    etf_prefixes = ('51', '52', '56', '58', '15', '16', '18')
-    code = stock_code.strip().split('.')[0]
-    return code.startswith(etf_prefixes) and len(code) == 6
+    return is_cn_etf_symbol(stock_code)
 
 
 def _is_hk_code(stock_code: str) -> bool:

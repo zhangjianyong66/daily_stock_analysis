@@ -100,6 +100,7 @@ from src.schemas.decision_scale import (
 from src.schemas.report_schema import AnalysisReportSchema
 from src.market_context import detect_market, get_market_role, get_market_guidelines
 from src.services.daily_market_context import format_daily_market_context_prompt_section
+from src.services.market_symbol_utils import is_cn_etf_symbol
 from src.market_phase_prompt import format_market_phase_prompt_section
 
 logger = logging.getLogger(__name__)
@@ -993,6 +994,7 @@ def stabilize_decision_with_structure(
     result: "AnalysisResult",
     trend_result: Any = None,
     fundamental_context: Optional[Dict[str, Any]] = None,
+    market_phase_summary: Optional[Dict[str, Any]] = None,
 ) -> None:
     """
     Calibrate aggressive buy/sell advice with price levels and capital flow.
@@ -1040,6 +1042,26 @@ def stabilize_decision_with_structure(
         )
 
         flow_bias, flow_reason = _capital_flow_bias_with_status(fundamental_context)
+        if is_cn_etf_symbol(getattr(result, "code", "")):
+            etf_support = _first_numeric_value(
+                _first_list_value(trend_dict.get("support_levels")),
+                support,
+            )
+            etf_resistance = _first_numeric_value(
+                _first_list_value(trend_dict.get("resistance_levels")),
+                resistance,
+            )
+            _apply_etf_short_term_strategy(
+                result,
+                trend_dict=trend_dict,
+                fundamental_context=fundamental_context,
+                market_phase_summary=market_phase_summary,
+                current_price=current_price,
+                support=etf_support,
+                resistance=etf_resistance,
+                flow_reason=flow_reason,
+            )
+            return
         if flow_bias == "unavailable":
             if isinstance(fundamental_context, dict) and "capital_flow" in fundamental_context:
                 if decision_type == "buy" or advice_decision_type == "buy":
@@ -1308,6 +1330,453 @@ def _capital_flow_bias_with_status(
         if signal is not None:
             return signal, "ok"
     return "neutral", "neutral"
+
+
+_ETF_SHORT_TERM_STRATEGY_VERSION = "etf_short_swing_v1"
+_ETF_ESTIMATED_ROUND_TRIP_COST_RATE = 0.001
+_ETF_SCORE_RANGES = {
+    "invalidated": (0, 19),
+    "take_profit_exit": (0, 19),
+    "neutral_watch": (40, 59),
+    "oversold_watch": (40, 59),
+    "starter_entry": (60, 69),
+    "add_on_confirmation": (70, 79),
+    "strong_entry": (80, 100),
+}
+
+
+def _capital_flow_data(fundamental_context: Optional[Dict[str, Any]]) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    if not isinstance(fundamental_context, dict):
+        return {}, {}
+    block = fundamental_context.get("capital_flow")
+    if not isinstance(block, dict):
+        return {}, {}
+    data = block.get("data") if isinstance(block.get("data"), dict) else block
+    if not isinstance(data, dict):
+        return {}, {}
+    stock_flow = data.get("stock_flow") if isinstance(data.get("stock_flow"), dict) else {}
+    intraday_flow = data.get("intraday_flow") if isinstance(data.get("intraday_flow"), dict) else {}
+    return stock_flow, intraday_flow
+
+
+def _etf_fund_flow_signal(
+    stock_flow: Dict[str, Any],
+    market_phase_summary: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    as_of = str(stock_flow.get("as_of") or "").strip()
+    effective_date = ""
+    if isinstance(market_phase_summary, dict):
+        effective_date = str(market_phase_summary.get("effective_daily_bar_date") or "").strip()
+    is_fresh = bool(as_of and effective_date and as_of == effective_date)
+
+    latest_amount = _coerce_numeric_value(stock_flow.get("main_net_inflow"))
+    previous_amount = _coerce_numeric_value(stock_flow.get("previous_main_net_inflow"))
+    latest_pct = _coerce_numeric_value(stock_flow.get("main_net_inflow_pct"))
+    previous_pct = _coerce_numeric_value(stock_flow.get("previous_main_net_inflow_pct"))
+    inflow_3d = _coerce_numeric_value(stock_flow.get("inflow_3d"))
+    positive_days_3d = _coerce_numeric_value(stock_flow.get("positive_days_3d"))
+    inflow_5d = _coerce_numeric_value(stock_flow.get("inflow_5d"))
+
+    turned_positive = (
+        latest_pct is not None
+        and previous_pct is not None
+        and latest_pct > 0 >= previous_pct
+    )
+    outflow_narrowed = (
+        latest_pct is not None
+        and previous_pct is not None
+        and latest_pct - previous_pct >= 2.0
+        and latest_amount is not None
+        and previous_amount is not None
+        and previous_amount < 0
+        and latest_amount > previous_amount
+    )
+    improving = is_fresh and (turned_positive or outflow_narrowed)
+    confirmed = (
+        is_fresh
+        and inflow_3d is not None
+        and inflow_3d > 0
+        and positive_days_3d is not None
+        and positive_days_3d >= 2
+    )
+
+    if confirmed:
+        signal = "confirmed_inflow"
+    elif improving:
+        signal = "improving"
+    elif not is_fresh:
+        signal = "stale_or_unverified"
+    elif latest_amount is not None and latest_amount < 0:
+        signal = "outflow"
+    else:
+        signal = "neutral"
+    return {
+        "signal": signal,
+        "is_fresh": is_fresh,
+        "as_of": as_of or None,
+        "effective_daily_bar_date": effective_date or None,
+        "improving": improving,
+        "confirmed": confirmed,
+        "inflow_5d": inflow_5d,
+    }
+
+
+def _etf_risk_reward_plan(
+    *,
+    entry_price: Optional[float],
+    support: Optional[float],
+    resistance: Optional[float],
+) -> Dict[str, Any]:
+    empty = {
+        "entry_price": entry_price,
+        "structure_stop_price": None,
+        "hard_stop_price": None,
+        "effective_stop_price": None,
+        "r_value": None,
+        "minimum_target_price": None,
+        "resistance_price": resistance,
+        "reward_risk_ratio": None,
+        "structure_stop_distance_pct": None,
+        "estimated_round_trip_cost_rate": _ETF_ESTIMATED_ROUND_TRIP_COST_RATE,
+        "valid": False,
+        "invalid_reason": "missing_entry_support_or_resistance",
+    }
+    if entry_price is None or entry_price <= 0 or support is None or support <= 0 or resistance is None:
+        return empty
+
+    structure_stop = min(support * 0.995, entry_price * 0.999)
+    hard_stop = entry_price * 0.97
+    structure_distance_pct = (entry_price - structure_stop) / entry_price * 100.0
+    effective_stop = max(structure_stop, hard_stop)
+    estimated_cost = entry_price * _ETF_ESTIMATED_ROUND_TRIP_COST_RATE
+    r_value = entry_price - effective_stop + estimated_cost
+    available_reward = resistance - entry_price - estimated_cost
+    reward_risk_ratio = available_reward / r_value if r_value > 0 else None
+    minimum_target = entry_price + 1.5 * r_value + estimated_cost
+
+    invalid_reason = None
+    if structure_distance_pct > 3.0:
+        invalid_reason = "structure_stop_distance_exceeds_3pct"
+    elif available_reward < 0 or reward_risk_ratio is None or reward_risk_ratio < 1.5 - 1e-6:
+        invalid_reason = "first_resistance_below_1_5r"
+
+    return {
+        "entry_price": round(entry_price, 4),
+        "structure_stop_price": round(structure_stop, 4),
+        "hard_stop_price": round(hard_stop, 4),
+        "effective_stop_price": round(effective_stop, 4),
+        "r_value": round(r_value, 4),
+        "minimum_target_price": math.ceil(minimum_target * 10_000) / 10_000,
+        "resistance_price": round(resistance, 4),
+        "reward_risk_ratio": round(reward_risk_ratio, 4) if reward_risk_ratio is not None else None,
+        "structure_stop_distance_pct": round(structure_distance_pct, 4),
+        "estimated_round_trip_cost_rate": _ETF_ESTIMATED_ROUND_TRIP_COST_RATE,
+        "valid": invalid_reason is None,
+        "invalid_reason": invalid_reason,
+    }
+
+
+def _clamp_etf_score(raw_score: Any, state: str) -> tuple[int, int, int]:
+    score_min, score_max = _ETF_SCORE_RANGES[state]
+    try:
+        normalized = int(raw_score)
+    except (TypeError, ValueError):
+        normalized = 50
+    return normalized, min(score_max, max(score_min, normalized)), score_min
+
+
+def _apply_etf_short_term_strategy(
+    result: "AnalysisResult",
+    *,
+    trend_dict: Dict[str, Any],
+    fundamental_context: Optional[Dict[str, Any]],
+    market_phase_summary: Optional[Dict[str, Any]],
+    current_price: Optional[float],
+    support: Optional[float],
+    resistance: Optional[float],
+    flow_reason: str,
+) -> None:
+    language = normalize_report_language(getattr(result, "report_language", "zh"))
+    rsi_12 = _coerce_numeric_value(trend_dict.get("rsi_12"))
+    bias_ma5 = _coerce_numeric_value(trend_dict.get("bias_ma5"))
+    change_3d = _coerce_numeric_value(trend_dict.get("change_3d"))
+    ma5 = _coerce_numeric_value(trend_dict.get("ma5"))
+    new_low_3d_value = trend_dict.get("is_new_low_3d")
+    is_new_low_3d = new_low_3d_value is True
+
+    broke_support = support is not None and current_price is not None and current_price < support * 0.985
+    near_support = (
+        support is not None
+        and current_price is not None
+        and not broke_support
+        and current_price <= support * 1.03
+    )
+    near_resistance = (
+        resistance is not None
+        and current_price is not None
+        and resistance * 0.97 <= current_price <= resistance * 1.01
+    )
+    oversold_signals = {
+        "rsi_12_below_35": rsi_12 is not None and rsi_12 < 35,
+        "bias_ma5_at_or_below_minus_3pct": bias_ma5 is not None and bias_ma5 <= -3.0,
+        "change_3d_at_or_below_minus_4pct_near_support": (
+            change_3d is not None and change_3d <= -4.0 and near_support
+        ),
+    }
+    take_profit_signals = {
+        "rsi_12_above_65": rsi_12 is not None and rsi_12 > 65,
+        "bias_ma5_at_or_above_3pct": bias_ma5 is not None and bias_ma5 >= 3.0,
+        "change_3d_at_or_above_4pct_near_resistance": (
+            change_3d is not None and change_3d >= 4.0 and near_resistance
+        ),
+    }
+    oversold_count = sum(1 for matched in oversold_signals.values() if matched)
+    take_profit_count = sum(1 for matched in take_profit_signals.values() if matched)
+
+    stock_flow, intraday_flow = _capital_flow_data(fundamental_context)
+    flow = _etf_fund_flow_signal(stock_flow, market_phase_summary)
+    risk_plan = _etf_risk_reward_plan(
+        entry_price=current_price,
+        support=support,
+        resistance=resistance,
+    )
+    stopped_falling = not broke_support and new_low_3d_value is False
+    reclaimed_ma5 = current_price is not None and ma5 is not None and ma5 > 0 and current_price >= ma5
+    five_day_positive = flow["inflow_5d"] is not None and flow["inflow_5d"] > 0
+
+    if take_profit_count >= 2:
+        state = "take_profit_exit"
+    elif broke_support:
+        state = "invalidated"
+    elif oversold_count >= 2 and stopped_falling and flow["confirmed"] and reclaimed_ma5 and five_day_positive and risk_plan["valid"]:
+        reward_ratio = risk_plan.get("reward_risk_ratio")
+        state = "strong_entry" if reward_ratio is not None and reward_ratio >= 2.0 else "add_on_confirmation"
+    elif oversold_count >= 2 and stopped_falling and flow["improving"] and risk_plan["valid"]:
+        state = "starter_entry"
+    elif oversold_count >= 2:
+        state = "oversold_watch"
+    else:
+        state = "neutral_watch"
+
+    raw_score, adjusted_score, score_min = _clamp_etf_score(getattr(result, "sentiment_score", 50), state)
+    score_max = _ETF_SCORE_RANGES[state][1]
+    result.sentiment_score = adjusted_score
+    if state == "take_profit_exit":
+        decision_type, action = "sell", "sell"
+        operation_advice = "卖出（完整高抛条件触发，全额退出）"
+        position_cap = 0
+        reason = "高抛 2-of-3 条件成立，当前计划全额退出，不保留底仓。"
+    elif state == "invalidated":
+        decision_type, action = "sell", "sell"
+        operation_advice = "卖出（反弹结构失效，全额退出）"
+        position_cap = 0
+        reason = "价格有效跌破反弹支撑，结构失效；T+1 跳空时按首次可执行机会退出。"
+    elif state == "strong_entry":
+        decision_type, action = "buy", "buy"
+        operation_advice = "买入（强确认，计划仓位40%-60%）"
+        position_cap = 60
+        reason = "超跌、止跌、资金持续流入、MA5 与至少 2R 空间同时确认。"
+    elif state == "add_on_confirmation":
+        decision_type, action = "buy", "add"
+        operation_advice = "加仓（确认后提高至40%-60%）"
+        position_cap = 60
+        reason = "超跌反弹已站回 MA5，最近 3 日资金持续流入且 5 日累计转正。"
+    elif state == "starter_entry":
+        decision_type, action = "buy", "buy"
+        operation_advice = "买入（仅20%-30%试仓）"
+        position_cap = 30
+        reason = "超跌后支撑未破、未继续创新低且资金出现拐点，仅允许小仓试错。"
+    elif state == "oversold_watch":
+        decision_type, action = "hold", "watch"
+        operation_advice = "观望（超跌候选，等待右侧确认）"
+        position_cap = 0
+        reason = "超跌 2-of-3 已成立，但止跌、资金拐点或 1.5R 条件尚未同时确认。"
+    else:
+        decision_type, action = "hold", "watch"
+        operation_advice = "观望（等待低吸或高抛条件）"
+        position_cap = 0
+        reason = "当前不属于已确认的超跌低吸或完整高抛状态，不追涨也不猜底。"
+
+    if language in {"en", "ko"}:
+        translations = {
+            "take_profit_exit": (
+                "Sell (full take-profit exit)",
+                "The symmetric 2-of-3 take-profit rule is met; exit the full planned position.",
+            ),
+            "invalidated": (
+                "Sell (rebound structure invalidated)",
+                "Price broke rebound support; under T+1, exit at the first executable opportunity after a gap.",
+            ),
+            "strong_entry": (
+                "Buy (strong confirmation, 40%-60% plan cap)",
+                "Oversold, stabilization, sustained inflow, MA5 reclaim, and at least 2R are aligned.",
+            ),
+            "add_on_confirmation": (
+                "Add (raise plan cap to 40%-60%)",
+                "The rebound reclaimed MA5, three-day inflow is confirmed, and five-day flow is positive.",
+            ),
+            "starter_entry": (
+                "Buy (starter only, 20%-30%)",
+                "Support held, no new low formed, and daily flow improved; only a starter position is allowed.",
+            ),
+            "oversold_watch": (
+                "Watch (oversold setup needs confirmation)",
+                "The oversold 2-of-3 setup is present, but stabilization, flow improvement, or 1.5R is incomplete.",
+            ),
+            "neutral_watch": (
+                "Watch (wait for a low-buy or take-profit setup)",
+                "No confirmed mean-reversion entry or full take-profit state is present; do not chase or guess a bottom.",
+            ),
+        }
+        operation_advice, reason = translations[state]
+
+    result.decision_type = decision_type
+    result.action = action
+    result.action_label = operation_advice
+    result.operation_advice = operation_advice
+    confidence_key = "中" if state in {"starter_entry", "add_on_confirmation", "strong_entry"} else "低"
+    result.confidence_level = localize_confidence_level(confidence_key, language)
+
+    dashboard = result.dashboard if isinstance(result.dashboard, dict) else {}
+    result.dashboard = dashboard
+    core = dashboard.get("core_conclusion") if isinstance(dashboard.get("core_conclusion"), dict) else {}
+    dashboard["core_conclusion"] = core
+    core["one_sentence"] = reason
+    if language == "zh":
+        core["signal_type"] = (
+            "🟢买入信号" if decision_type == "buy" else "🔴卖出信号" if decision_type == "sell" else "🟡持有观望"
+        )
+        core["time_sensitivity"] = "未来1-5个交易日"
+    else:
+        core["signal_type"] = "Buy" if decision_type == "buy" else "Sell" if decision_type == "sell" else "Watch"
+        core["time_sensitivity"] = "Next 1-5 trading days"
+    position_advice = core.get("position_advice") if isinstance(core.get("position_advice"), dict) else {}
+    core["position_advice"] = position_advice
+    if decision_type == "buy" and language == "zh":
+        entry = risk_plan.get("entry_price")
+        stop = risk_plan.get("effective_stop_price")
+        target = risk_plan.get("minimum_target_price")
+        position_advice["no_position"] = (
+            f"以计划触发价 {entry} 作为模拟成本，先按上限 {position_cap}% 分批执行；"
+            f"有效止损 {stop}，最低目标 {target}。建议仓位不是账户真实仓位。"
+        )
+        position_advice["has_position"] = (
+            f"未提供真实成本与持有天数，仅按结构管理；仓位上限 {position_cap}%，"
+            f"跌破 {risk_plan.get('structure_stop_price')} 或资金转弱时减仓/退出。"
+        )
+    elif decision_type == "buy":
+        position_advice["no_position"] = (
+            f"Use planned trigger {risk_plan.get('entry_price')} as the simulated cost and scale in up to "
+            f"{position_cap}%; effective stop {risk_plan.get('effective_stop_price')}, minimum target "
+            f"{risk_plan.get('minimum_target_price')}. This is not the account's actual position."
+        )
+        position_advice["has_position"] = (
+            "Actual cost and holding period are unknown; use structure only. "
+            f"Keep the plan cap at {position_cap}% and reduce/exit below "
+            f"{risk_plan.get('structure_stop_price')} or when flow weakens."
+        )
+    elif decision_type == "sell" and language == "zh":
+        position_advice["no_position"] = "空仓不追入，等待下一份低吸计划。"
+        position_advice["has_position"] = "未知真实成本，不计算虚构盈亏；按当前结构信号全额退出。"
+    elif decision_type == "sell":
+        position_advice["no_position"] = "Stay flat and wait for a new mean-reversion plan."
+        position_advice["has_position"] = "Actual cost is unknown; do not invent P&L and exit fully on the structure signal."
+    elif language == "zh":
+        position_advice["no_position"] = "空仓等待止跌、资金改善和至少 1.5R 空间同时确认。"
+        position_advice["has_position"] = "未知真实成本，仅以支撑失效、MA5 和资金转弱做结构风控。"
+    else:
+        position_advice["no_position"] = "Wait for stabilization, daily-flow improvement, and at least 1.5R."
+        position_advice["has_position"] = "Actual cost is unknown; use support, MA5, and flow weakening for structure risk control."
+
+    battle_plan = dashboard.get("battle_plan") if isinstance(dashboard.get("battle_plan"), dict) else {}
+    dashboard["battle_plan"] = battle_plan
+    sniper_points = battle_plan.get("sniper_points") if isinstance(battle_plan.get("sniper_points"), dict) else {}
+    battle_plan["sniper_points"] = sniper_points
+    sniper_points.update(
+        {
+            "ideal_buy": risk_plan.get("entry_price"),
+            "secondary_buy": ma5,
+            "stop_loss": risk_plan.get("effective_stop_price") or support,
+            "take_profit": risk_plan.get("minimum_target_price") or resistance,
+        }
+    )
+    position_strategy = (
+        battle_plan.get("position_strategy")
+        if isinstance(battle_plan.get("position_strategy"), dict)
+        else {}
+    )
+    battle_plan["position_strategy"] = position_strategy
+    if language == "zh":
+        position_strategy.update(
+            {
+                "suggested_position": f"单只 ETF 计划仓位上限 {position_cap}%（不代表实际账户仓位）",
+                "entry_plan": "右侧确认后分批进入；流动性只影响限价单、滑点和执行仓位，不作为禁入门槛。",
+                "risk_control": "结构失效优先，空仓模拟计划硬止损最多3%；第2日未走强减仓，第5日退出或重评。",
+            }
+        )
+        battle_plan["action_checklist"] = [
+            "普通到第一压力或1.5R先止盈一半",
+            "剩余仓位按MA5、前一日低点或资金转弱移动退出",
+            "完整高抛2-of-3触发后全额退出",
+            "使用限价单并评估滑点与折溢价，不假设ETF必然贴近净值",
+        ]
+    else:
+        position_strategy.update(
+            {
+                "suggested_position": f"Single-ETF plan cap {position_cap}% (not the account's actual position)",
+                "entry_plan": "Scale in after right-side confirmation; liquidity affects limit orders and slippage, not eligibility.",
+                "risk_control": "Structure first, 3% maximum hard stop for a simulated entry; reduce on day 2, exit/replan by day 5.",
+            }
+        )
+        battle_plan["action_checklist"] = [
+            "Take half profit at first resistance or 1.5R",
+            "Trail the rest with MA5, the prior-day low, or weakening flow",
+            "Exit fully when the symmetric take-profit 2-of-3 rule is met",
+            "Use limit orders and assess slippage/premium-discount risk",
+        ]
+
+    strategy = {
+        "strategy_version": _ETF_SHORT_TERM_STRATEGY_VERSION,
+        "target_horizon": "1-5_trading_days",
+        "score_semantics": "future_1_5_day_short_term_opportunity",
+        "strategy_state": state,
+        "score_min": score_min,
+        "score_max": score_max,
+        "raw_score": raw_score,
+        "adjusted_score": adjusted_score,
+        "action": action,
+        "position_cap_pct": position_cap,
+        "reason": reason,
+        "oversold_signal_count": oversold_count,
+        "oversold_signals": oversold_signals,
+        "take_profit_signal_count": take_profit_count,
+        "take_profit_signals": take_profit_signals,
+        "stopped_falling": stopped_falling,
+        "reclaimed_ma5": reclaimed_ma5,
+        "daily_capital_flow": flow,
+        "capital_flow_reason": flow_reason,
+        "intraday_flow_display_only": intraday_flow or None,
+        "intraday_flow_used_for_score": False,
+        "risk_reward": risk_plan,
+    }
+    dashboard["etf_short_term_strategy"] = strategy
+    _record_decision_score_calibration(
+        result,
+        raw_score=raw_score,
+        adjusted_score=adjusted_score,
+        final_action=action,
+        guardrail_reason=reason,
+    )
+    dashboard["decision_score_calibration"].update(
+        {
+            "strategy_version": _ETF_SHORT_TERM_STRATEGY_VERSION,
+            "strategy_state": state,
+            "target_horizon": "1-5_trading_days",
+            "score_min": score_min,
+            "score_max": score_max,
+        }
+    )
+    _sync_stability_dashboard_fields(result)
 
 
 def _capital_flow_status_for_stability(reason: str, language: str) -> str:
@@ -3842,6 +4311,11 @@ class GeminiAnalyzer:
             if isinstance(capital_flow_data, dict)
             else {}
         )
+        intraday_flow = (
+            capital_flow_data.get("intraday_flow", {})
+            if isinstance(capital_flow_data, dict)
+            else {}
+        )
         sector_flow = (
             capital_flow_data.get("sector_rankings", {})
             if isinstance(capital_flow_data, dict)
@@ -3849,7 +4323,10 @@ class GeminiAnalyzer:
         )
         has_capital_flow = (
             isinstance(stock_flow, dict)
-            and any(v is not None for v in stock_flow.values())
+            and any(
+                stock_flow.get(field) is not None
+                for field in ("main_net_inflow", "large_net_inflow", "super_large_net_inflow")
+            )
         ) or (
             isinstance(sector_flow, dict)
             and (sector_flow.get("top") or sector_flow.get("bottom"))
@@ -3867,7 +4344,43 @@ class GeminiAnalyzer:
                 for item in bottom_sectors[:3]
                 if isinstance(item, dict) and str(item.get("name", "")).strip()
             ) or "N/A"
-            prompt += f"""
+            if is_cn_etf_symbol(code):
+                phase_context = context.get("market_phase_context", {})
+                effective_daily_bar_date = (
+                    phase_context.get("effective_daily_bar_date", "N/A")
+                    if isinstance(phase_context, dict)
+                    else "N/A"
+                )
+                prompt += f"""
+### 场内 ETF 二级市场交易资金流（1-5日短线过滤器）
+| 指标 | 数值 | 决策含义 |
+|------|------|----------|
+| 日资金流截止日 | {stock_flow.get('as_of', 'N/A')} | 必须与完整日线 {effective_daily_bar_date} 同日才可参与动作 |
+| 主力净流入 / 净占比 | {stock_flow.get('main_net_inflow', 'N/A')} / {stock_flow.get('main_net_inflow_pct', 'N/A')}% | 比例为主、金额为辅 |
+| 前一日主力净流入 / 净占比 | {stock_flow.get('previous_main_net_inflow', 'N/A')} / {stock_flow.get('previous_main_net_inflow_pct', 'N/A')}% | 判断流出收窄或由负转正 |
+| 最近3日 / 前序3日净流入 | {stock_flow.get('inflow_3d', 'N/A')} / {stock_flow.get('previous_inflow_3d', 'N/A')} | 最近3日转正且至少2日流入才是持续确认 |
+| 最近3日流入天数 | {stock_flow.get('positive_days_3d', 'N/A')} | 加仓确认门槛 |
+| 5日 / 10日净流入 | {stock_flow.get('inflow_5d', 'N/A')} / {stock_flow.get('inflow_10d', 'N/A')} | 5日限制仓位，10日仅作背景 |
+| 大单净流入 / 净占比 | {stock_flow.get('large_net_inflow', 'N/A')} / {stock_flow.get('large_net_inflow_pct', 'N/A')}% | 场内成交结构参考 |
+| 超大单净流入 / 净占比 | {stock_flow.get('super_large_net_inflow', 'N/A')} / {stock_flow.get('super_large_net_inflow_pct', 'N/A')}% | 场内成交结构参考 |
+
+> 这是场内 ETF 二级市场成交资金流，不是一级市场申购/赎回。`as_of` 早于完整日线日期时只可展示，不得用于试仓、加仓或高抛；盘中不得把上一交易日数据表述为今日资金流。
+"""
+                if isinstance(intraday_flow, dict) and intraday_flow:
+                    prompt += f"""
+#### 当日盘中主动成交估算（仅展示，不评分）
+| 指标 | 数值 |
+|------|------|
+| 主动买入额 | {intraday_flow.get('active_buy_amount', 'N/A')} |
+| 主动卖出额 | {intraday_flow.get('active_sell_amount', 'N/A')} |
+| 主动净流入估算 | {intraday_flow.get('active_net_inflow', 'N/A')} |
+| 中性成交额 | {intraday_flow.get('neutral_amount', 'N/A')} |
+| 截止时间 / 分类口径 | {intraday_flow.get('as_of', 'N/A')} / {intraday_flow.get('classification', 'N/A')} |
+
+> 盘中值仅来自供应商逐笔买/卖/中性分类，属于估算参考，严禁进入 `sentiment_score` 或替代盘后日主力资金流。只有汇总成交量/成交额时不得按涨跌推断方向。
+"""
+            else:
+                prompt += f"""
 ### 主力资金流向（操作建议过滤器）
 | 指标 | 数值 | 决策含义 |
 |------|------|----------|
@@ -4090,6 +4603,22 @@ class GeminiAnalyzer:
 > - 严禁将基金公司的诉讼、声誉、高管变动纳入风险警报
 > - 业绩预期基于**指数成分股整体表现**，而非基金公司财报
 > - `risk_alerts` 中不得出现基金管理人相关的公司经营风险
+
+"""
+        if is_cn_etf_symbol(code):
+            prompt += """
+> **A股场内 ETF 1-5 日短线计划（强制）**
+> - `sentiment_score` 是未来 1-5 个交易日短线机会分，策略版本 `etf_short_swing_v1`；旧 ETF 分数不可直接同比，非 ETF 评分口径不变。
+> - 核心是高抛低吸与超跌反弹。空头均线、近期下跌或低位本身不能机械低分；多头均线、高位正乖离也不能机械高分追买。
+> - 超跌候选使用 2-of-3：RSI(12)<35、MA5乖离<=-3%、3日跌幅<=-4%且接近支撑。仅超跌只能观察；继续创新低、跌破支撑或日资金未改善不得试仓。
+> - 试仓要求支撑有效、停止创新低，且主力净占比由负转正，或改善至少2个百分点且净流出金额同步收窄；初次只允许20%-30%。
+> - 加仓要求站回MA5/关键位，最近3日净流入>0且至少2日流入；5日累计为负时仓位上限仍为30%，转正后才可提高至40%-60%。单只ETF不建议满仓。
+> - 完整高抛使用对称 2-of-3：RSI(12)>65、MA5乖离>=3%、3日涨幅>=4%且接近压力；命中后全额退出，不保留底仓。
+> - 空仓计划以触发价作模拟成本：结构失效与成本下方3%取更近止损；结构止损距离超过3%放弃交易。T+1跳空越过止损时按首次可执行机会退出。
+> - `R=计划入场价-有效止损价`，并计入手续费与预估滑点；第一压力空间不足1.5R不得入场。到第一压力或1.5R先止盈一半，余仓按MA5、前一日低点或资金转弱退出。
+> - 第2个交易日未走强且资金未继续改善时减仓；第5个交易日必须退出或重新生成计划。
+> - 未提供持仓时仍输出空仓/持仓双分支；不得编造真实成本、盈亏、仓位和持有时间。持仓分支只给结构风控，建议仓位不代表账户真实仓位。
+> - 流动性不作禁入或分数封顶条件，但必须提示限价单、滑点和折溢价风险，不得保证ETF不会偏离净值。
 
 """
         prompt += f"""

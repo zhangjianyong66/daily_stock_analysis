@@ -20,6 +20,7 @@
 | A 股日线 / 技术面 | Efinance、Tencent、AkShare、Tushare、Pytdx、Baostock、YFinance | `DataFetcherManager` 按优先级尝试；配置 `TUSHARE_TOKEN` 后 Tushare 自动进入候选源 | 单源失败后尝试下一个源；连续失败会短期熔断该源 |
 | A 股实时行情 | Tencent、AkShare Sina、Efinance、AkShare EM、Tushare | `REALTIME_SOURCE_PRIORITY` 控制顺序，默认偏向 Tencent / Sina 这类轻量源 | 失败源记录 `fallback_from`，成功源继续返回 |
 | A 股 ETF 实时行情 | Tencent、AkShare Sina、Efinance、AkShare EM | Tencent / Sina 使用单标的独立接口；Efinance / AkShare EM 同属 Eastmoney 物理上游 | 轻量源瞬时错误最多重试 1 次；同一物理上游网络失败后本轮不重复请求 |
+| A 股场内 ETF 资金流 | AkShare / 东方财富 | 按沪深代码路由日主力、大单、超大单净额与占比；逐笔有买卖性质时补充盘中主动成交估算 | 日流失败保持 `not_supported/failed` 并让分析主链 fail-open；盘中失败保留日流并标记 limitations |
 | A 股大盘复盘 | TickFlow、AkShare、Tushare、Efinance | 配置 `TICKFLOW_API_KEY` 后，主指数和市场宽度优先尝试 TickFlow | TickFlow 权限不足或失败时回退 AkShare / Tushare / Efinance 链路 |
 | AlphaSift 选股快照 | Tushare、Sina、Efinance、AkShare EM、EastMoney Datacenter | 有 `TUSHARE_TOKEN` 时自动把 `tushare` 放入快照优先级；否则使用免费源链路 | AlphaSift 维护 source health；DSA 状态接口透出 snapshot/daily health |
 | AlphaSift 日线补特征 | DSA `DataFetcherManager` | AlphaSift 调用 DSA provider context，优先复用 DSA 日线与缓存链路 | DSA 链路失败后才回到 AlphaSift 原始日线源 |

@@ -40,6 +40,7 @@ from src.config import (
     resolve_news_window_days,
 )
 from src.services.run_diagnostics import record_provider_run, record_provider_run_started
+from src.services.market_symbol_utils import CN_ETF_PREFIXES, is_cn_etf_symbol
 from src.services.etf_search_intelligence import (
     ANALYSIS_DAYS,
     ETF_PROFILE_TEMPLATE_VERSION,
@@ -2670,7 +2671,7 @@ class SearchService:
         return {}
 
     # A-share ETF code prefixes (Shanghai 51/52/56/58, Shenzhen 15/16/18)
-    _A_ETF_PREFIXES = ('51', '52', '56', '58', '15', '16', '18')
+    _A_ETF_PREFIXES = CN_ETF_PREFIXES
     _ETF_NAME_KEYWORDS = ('ETF', 'FUND', 'TRUST', 'INDEX', 'TRACKER', 'UNIT')  # US/HK ETF name hints
 
     @staticmethod
@@ -2679,12 +2680,13 @@ class SearchService:
         Judge if symbol is index-tracking ETF or market index.
         For such symbols, analysis focuses on index movement only, not issuer company risks.
         """
-        code = (stock_code or '').strip().split('.')[0]
-        if not code:
+        raw_code = (stock_code or '').strip()
+        if not raw_code:
             return False
         # A-share ETF
-        if code.isdigit() and len(code) == 6 and code.startswith(SearchService._A_ETF_PREFIXES):
+        if is_cn_etf_symbol(raw_code):
             return True
+        code = raw_code.split('.')[0]
         # US index (SPX, DJI, IXIC etc.)
         if is_us_index_code(code):
             return True
@@ -4185,8 +4187,7 @@ class SearchService:
     
     @classmethod
     def _is_etf_search_target(cls, stock_code: str, stock_name: str) -> bool:
-        code = (stock_code or "").strip().split(".")[0]
-        if code.isdigit() and len(code) == 6 and code.startswith(cls._A_ETF_PREFIXES):
+        if is_cn_etf_symbol(stock_code):
             return True
         name_upper = (stock_name or "").upper()
         return "ETF" in name_upper or "交易型开放式指数基金" in (stock_name or "")

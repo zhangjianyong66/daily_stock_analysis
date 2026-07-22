@@ -28,7 +28,7 @@ import pandas as pd
 import numpy as np
 from src.data.stock_index_loader import get_index_stock_name
 from src.data.stock_mapping import STOCK_NAME_MAP, is_meaningful_stock_name
-from src.services.market_symbol_utils import is_suffix_market_symbol
+from src.services.market_symbol_utils import CN_ETF_PREFIXES, is_cn_etf_symbol, is_suffix_market_symbol
 from src.services.run_diagnostics import record_provider_run, record_provider_run_started
 from .fundamental_adapter import AkshareFundamentalAdapter
 from .yfinance_fundamental_adapter import YfinanceFundamentalAdapter
@@ -206,7 +206,8 @@ def normalize_stock_code(stock_code: str) -> str:
     return code
 
 
-ETF_PREFIXES = ("51", "52", "56", "58", "15", "16", "18")
+ETF_PREFIXES = CN_ETF_PREFIXES
+ETF_INTRADAY_FLOW_TIMEOUT_SECONDS = 3.0
 
 
 def _is_us_market(code: str) -> bool:
@@ -256,12 +257,7 @@ def _is_tw_market(code: str) -> bool:
 
 def _is_etf_code(code: str) -> bool:
     """判定 A 股 ETF 基金代码（保守规则）。"""
-    normalized = normalize_stock_code(code)
-    return (
-        normalized.isdigit()
-        and len(normalized) == 6
-        and normalized.startswith(ETF_PREFIXES)
-    )
+    return is_cn_etf_symbol(code)
 
 
 def _coerce_chip_metric(value: Any) -> Optional[float]:
@@ -4060,36 +4056,30 @@ class DataFetcherManager:
             institution_errors,
         )
 
-        # capital flow
+        # CN stocks and exchange-traded ETFs share the secondary-market fund-flow feed.
+        capital_flow_budget = min(fetch_timeout, remaining_seconds)
+        capital_flow_start = time.time()
+        result_ctx["capital_flow"] = self.get_capital_flow_context(
+            stock_code,
+            budget_seconds=capital_flow_budget,
+        )
+        _consume_budget(int((time.time() - capital_flow_start) * 1000))
+
         if is_etf:
-            result_ctx["capital_flow"] = self._build_fundamental_block(
-                "not_supported",
-                {},
-                [{"provider": "fundamental_pipeline", "result": "not_supported", "duration_ms": 0}],
-                ["etf not fully supported"],
-            )
             result_ctx["dragon_tiger"] = self._build_fundamental_block(
                 "not_supported",
                 {},
                 [{"provider": "fundamental_pipeline", "result": "not_supported", "duration_ms": 0}],
-                ["etf not fully supported"],
+                ["dragon tiger data not applicable to etf"],
             )
             result_ctx["boards"] = self._build_fundamental_block(
                 "not_supported",
                 {},
                 [{"provider": "fundamental_pipeline", "result": "not_supported", "duration_ms": 0}],
-                ["etf not fully supported"],
+                ["board membership data unavailable for etf"],
             )
             result_ctx["status"] = "partial"
         else:
-            capital_flow_budget = min(fetch_timeout, remaining_seconds)
-            capital_flow_start = time.time()
-            result_ctx["capital_flow"] = self.get_capital_flow_context(
-                stock_code,
-                budget_seconds=capital_flow_budget,
-            )
-            _consume_budget(int((time.time() - capital_flow_start) * 1000))
-
             dragon_tiger_budget = min(fetch_timeout, remaining_seconds)
             dragon_tiger_start = time.time()
             result_ctx["dragon_tiger"] = self.get_dragon_tiger_context(
@@ -4154,7 +4144,7 @@ class DataFetcherManager:
         config = get_config()
         stock_code = normalize_stock_code(stock_code)
         timeout = float(budget_seconds if budget_seconds is not None else config.fundamental_fetch_timeout_seconds)
-        if _market_tag(stock_code) != "cn" or _is_etf_code(stock_code):
+        if _market_tag(stock_code) != "cn":
             return self._build_fundamental_block(
                 "not_supported",
                 {},
@@ -4169,8 +4159,12 @@ class DataFetcherManager:
                 [{"provider": "fundamental_pipeline", "result": "failed", "duration_ms": 0}],
                 ["fundamental stage timeout"],
             )
+        is_etf = _is_etf_code(stock_code)
         payload, err, cost_ms = self._run_with_retry(
-            lambda: self._fundamental_adapter.get_capital_flow(stock_code),
+            lambda: self._fundamental_adapter.get_capital_flow(
+                stock_code,
+                include_intraday=not is_etf,
+            ),
             timeout,
             "capital_flow",
         )
@@ -4182,17 +4176,53 @@ class DataFetcherManager:
                 [err or "capital_flow failed"],
             )
 
+        payload = dict(payload)
+        if is_etf and str(payload.get("status") or "").strip().lower() != "failed":
+            payload["source_chain"] = list(payload.get("source_chain", []))
+            payload["errors"] = list(payload.get("errors", []))
+            payload["limitations"] = list(payload.get("limitations", []))
+            remaining_seconds = max(0.0, timeout - cost_ms / 1000.0)
+            intraday_budget = min(ETF_INTRADAY_FLOW_TIMEOUT_SECONDS, remaining_seconds)
+            if intraday_budget > 0:
+                intraday_payload, intraday_err, intraday_ms = self._run_with_retry(
+                    lambda: self._fundamental_adapter.get_intraday_capital_flow(stock_code),
+                    intraday_budget,
+                    "capital_flow_intraday",
+                )
+            else:
+                intraday_payload, intraday_err, intraday_ms = None, "intraday flow budget exhausted", 0
+            cost_ms += intraday_ms
+            if isinstance(intraday_payload, dict):
+                payload["intraday_flow"] = intraday_payload.get("intraday_flow", {})
+                payload["source_chain"].extend(intraday_payload.get("source_chain", []))
+                payload["errors"].extend(intraday_payload.get("errors", []))
+                payload["limitations"].extend(intraday_payload.get("limitations", []))
+                if str(intraday_payload.get("status") or "").strip().lower() != "ok":
+                    payload["status"] = "partial"
+            else:
+                payload["intraday_flow"] = {}
+                payload["limitations"].append("intraday_trade_direction_unavailable")
+                if intraday_err:
+                    payload["errors"].append(intraday_err)
+                payload["status"] = "partial"
+        elif is_etf:
+            payload["intraday_flow"] = {}
+            payload["limitations"] = list(payload.get("limitations", []))
+            payload["limitations"].append("intraday_skipped_after_daily_source_failure")
+
         stock_flow = payload.get("stock_flow") or {}
         sector_rankings = payload.get("sector_rankings") or {}
-        has_stock_flow = False
-        if isinstance(stock_flow, dict):
-            has_stock_flow = any(v is not None for v in stock_flow.values())
+        has_stock_flow = isinstance(stock_flow, dict) and stock_flow.get("main_net_inflow") is not None
         has_sector_rankings = bool(sector_rankings.get("top")) or bool(sector_rankings.get("bottom"))
-        adapter_status = str(payload.get("status", "not_supported"))
-        if has_stock_flow or has_sector_rankings:
-            capital_flow_status = "ok"
+        adapter_status = str(payload.get("status", "not_supported")).strip().lower()
+        if has_stock_flow:
+            capital_flow_status = "partial" if adapter_status == "partial" else "ok"
+        elif has_sector_rankings:
+            capital_flow_status = "partial"
         elif adapter_status == "not_supported":
             capital_flow_status = "not_supported"
+        elif adapter_status == "failed":
+            capital_flow_status = "failed"
         else:
             capital_flow_status = "partial"
 
@@ -4200,7 +4230,9 @@ class DataFetcherManager:
             capital_flow_status,
             {
                 "stock_flow": payload.get("stock_flow", {}),
+                "intraday_flow": payload.get("intraday_flow", {}),
                 "sector_rankings": payload.get("sector_rankings", {}),
+                "limitations": payload.get("limitations", []),
             },
             self._normalize_source_chain(
                 payload.get("source_chain", []),

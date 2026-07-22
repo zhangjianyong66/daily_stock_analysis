@@ -12,6 +12,31 @@ from dataclasses import dataclass
 from typing import Optional
 
 
+CN_ETF_PREFIXES: tuple[str, ...] = ("51", "52", "56", "58", "15", "16", "18")
+
+
+def normalize_cn_exchange_code(stock_code: str) -> str:
+    """Normalize common SH/SZ prefix and suffix forms without classifying other markets."""
+
+    code = (stock_code or "").strip().upper()
+    for prefix in ("SH.", "SZ.", "SS.", "SH", "SZ", "SS"):
+        if code.startswith(prefix) and code[len(prefix):].isdigit():
+            code = code[len(prefix):]
+            break
+    if "." in code:
+        base, suffix = code.rsplit(".", 1)
+        if suffix in {"SH", "SZ", "SS"} and base.isdigit():
+            code = base
+    return code
+
+
+def is_cn_etf_symbol(stock_code: str) -> bool:
+    """Return whether a symbol is a conservative Shanghai/Shenzhen ETF code."""
+
+    code = normalize_cn_exchange_code(stock_code)
+    return code.isdigit() and len(code) == 6 and code.startswith(CN_ETF_PREFIXES)
+
+
 @dataclass(frozen=True)
 class SuffixMarketSpec:
     """A suffix-only Yahoo Finance market rule."""

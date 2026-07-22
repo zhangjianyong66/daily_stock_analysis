@@ -649,7 +649,7 @@ def _handle_get_capital_flow(stock_code: str) -> dict:
         return {
             "stock_code": stock_code,
             "status": "not_supported",
-            "note": "Capital flow data is only available for A-share stocks (not ETFs/indices).",
+            "note": "Capital flow data is unavailable for this market or source.",
         }
 
     data = ctx.get("data", {})
@@ -661,8 +661,22 @@ def _handle_get_capital_flow(stock_code: str) -> dict:
         "stock_code": stock_code,
         "status": status,
         "main_net_inflow": stock_flow.get("main_net_inflow"),
+        "main_net_inflow_pct": stock_flow.get("main_net_inflow_pct"),
+        "previous_main_net_inflow": stock_flow.get("previous_main_net_inflow"),
+        "previous_main_net_inflow_pct": stock_flow.get("previous_main_net_inflow_pct"),
+        "inflow_3d": stock_flow.get("inflow_3d"),
+        "previous_inflow_3d": stock_flow.get("previous_inflow_3d"),
+        "positive_days_3d": stock_flow.get("positive_days_3d"),
         "inflow_5d": stock_flow.get("inflow_5d"),
         "inflow_10d": stock_flow.get("inflow_10d"),
+        "large_net_inflow": stock_flow.get("large_net_inflow"),
+        "large_net_inflow_pct": stock_flow.get("large_net_inflow_pct"),
+        "super_large_net_inflow": stock_flow.get("super_large_net_inflow"),
+        "super_large_net_inflow_pct": stock_flow.get("super_large_net_inflow_pct"),
+        "as_of": stock_flow.get("as_of"),
+        "scope": stock_flow.get("scope"),
+        "intraday_flow": data.get("intraday_flow") or None,
+        "limitations": data.get("limitations") or [],
         "sector_rankings": {
             "top_inflow_sectors": sector_rankings.get("top", [])[:3],
             "top_outflow_sectors": sector_rankings.get("bottom", [])[:3],
@@ -674,16 +688,15 @@ def _handle_get_capital_flow(stock_code: str) -> dict:
 get_capital_flow_tool = ToolDefinition(
     name="get_capital_flow",
     description=(
-        "Get main-force (主力) capital flow data for an A-share stock. "
-        "Returns today's net inflow, 5-day and 10-day cumulative inflows, "
-        "and top sector-level capital flow rankings. "
-        "Only supported for A-share individual stocks (not ETFs, indices, HK, or US stocks)."
+        "Get secondary-market main-force (主力) capital flow data for an A-share stock or exchange-traded ETF. "
+        "Returns the latest complete daily flow with 3/5/10-day windows and, when vendor-classified trades exist, "
+        "a display-only intraday active-flow estimate. Not supported for indices, HK, or US stocks."
     ),
     parameters=[
         ToolParameter(
             name="stock_code",
             type="string",
-            description="A-share stock code, e.g., '600519'",
+            description="A-share stock or exchange-traded ETF code, e.g., '600519' or '159865'",
         ),
     ],
     handler=_handle_get_capital_flow,

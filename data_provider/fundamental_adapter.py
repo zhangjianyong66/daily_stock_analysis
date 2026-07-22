@@ -15,6 +15,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
+from src.services.market_symbol_utils import is_cn_etf_symbol
+
 logger = logging.getLogger(__name__)
 
 _DIVIDEND_KEYWORD_MAP: Dict[str, List[str]] = {
@@ -48,6 +50,11 @@ def _safe_float(value: Any) -> Optional[float]:
     """Best-effort float conversion."""
     if value is None:
         return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
     if isinstance(value, (int, float)):
         try:
             return float(value)
@@ -261,6 +268,179 @@ def _extract_latest_row(df: pd.DataFrame, stock_code: str) -> Optional[pd.Series
     return df.iloc[0]
 
 
+def _capital_flow_market(stock_code: str) -> Optional[str]:
+    """Return the AkShare/Eastmoney market argument for a CN symbol."""
+    code = _normalize_code(stock_code)
+    if not code.isdigit() or len(code) != 6:
+        return None
+    if code.startswith(("5", "6")):
+        return "sh"
+    if code.startswith(("0", "1", "2", "3")):
+        return "sz"
+    return None
+
+
+def _normalized_column_name(value: Any) -> str:
+    return re.sub(r"[\s_\-—－()（）%％]", "", str(value)).lower()
+
+
+def _find_column(df: pd.DataFrame, aliases: List[str]) -> Optional[Any]:
+    normalized_aliases = {_normalized_column_name(alias) for alias in aliases}
+    for column in df.columns:
+        if _normalized_column_name(column) in normalized_aliases:
+            return column
+    return None
+
+
+def _sum_complete_window(values: List[Optional[float]], days: int, offset: int = 0) -> Optional[float]:
+    window = values[offset:offset + days]
+    if len(window) != days or any(value is None for value in window):
+        return None
+    return float(sum(value for value in window if value is not None))
+
+
+def _build_daily_capital_flow(df: pd.DataFrame, stock_code: str) -> Dict[str, Any]:
+    """Normalize Eastmoney daily fund-flow rows and calculate complete windows."""
+    work_df = _filter_rows_by_code(df, stock_code)
+    if work_df.empty:
+        return {}
+
+    date_col = _find_column(work_df, ["日期", "交易日期", "交易日", "date"])
+    main_col = _find_column(work_df, ["主力净流入-净额", "主力净流入净额", "主力净流入", "主力净额"])
+    if date_col is None or main_col is None:
+        return {}
+
+    work_df = work_df.copy()
+    work_df["__flow_date"] = pd.to_datetime(work_df[date_col], errors="coerce")
+    work_df = work_df.dropna(subset=["__flow_date"]).sort_values("__flow_date", ascending=False)
+    if work_df.empty:
+        return {}
+
+    main_pct_col = _find_column(work_df, ["主力净流入-净占比", "主力净流入净占比", "主力净占比"])
+    large_col = _find_column(work_df, ["大单净流入-净额", "大单净流入净额", "大单净流入", "大单净额"])
+    large_pct_col = _find_column(work_df, ["大单净流入-净占比", "大单净流入净占比", "大单净占比"])
+    super_large_col = _find_column(
+        work_df,
+        ["超大单净流入-净额", "超大单净流入净额", "超大单净流入", "超大单净额"],
+    )
+    super_large_pct_col = _find_column(
+        work_df,
+        ["超大单净流入-净占比", "超大单净流入净占比", "超大单净占比"],
+    )
+
+    rows = [row for _, row in work_df.iterrows()]
+    main_values = [_safe_float(row.get(main_col)) for row in rows]
+    latest = rows[0]
+    previous = rows[1] if len(rows) > 1 else None
+    latest_date = latest.get("__flow_date")
+    previous_date = previous.get("__flow_date") if previous is not None else None
+
+    return {
+        "main_net_inflow": main_values[0],
+        "main_net_inflow_pct": _safe_float(latest.get(main_pct_col)) if main_pct_col is not None else None,
+        "previous_main_net_inflow": main_values[1] if len(main_values) > 1 else None,
+        "previous_main_net_inflow_pct": (
+            _safe_float(previous.get(main_pct_col))
+            if previous is not None and main_pct_col is not None
+            else None
+        ),
+        "inflow_3d": _sum_complete_window(main_values, 3),
+        "previous_inflow_3d": _sum_complete_window(main_values, 3, offset=3),
+        "positive_days_3d": (
+            sum(1 for value in main_values[:3] if value is not None and value > 0)
+            if len(main_values) >= 3 and all(value is not None for value in main_values[:3])
+            else None
+        ),
+        "inflow_5d": _sum_complete_window(main_values, 5),
+        "inflow_10d": _sum_complete_window(main_values, 10),
+        "large_net_inflow": _safe_float(latest.get(large_col)) if large_col is not None else None,
+        "large_net_inflow_pct": _safe_float(latest.get(large_pct_col)) if large_pct_col is not None else None,
+        "super_large_net_inflow": (
+            _safe_float(latest.get(super_large_col)) if super_large_col is not None else None
+        ),
+        "super_large_net_inflow_pct": (
+            _safe_float(latest.get(super_large_pct_col)) if super_large_pct_col is not None else None
+        ),
+        "as_of": latest_date.date().isoformat() if latest_date is not None else None,
+        "previous_as_of": previous_date.date().isoformat() if previous_date is not None else None,
+        "scope": "daily",
+        "source": "akshare.stock_individual_fund_flow",
+        "data_quality": "complete" if main_values[0] is not None else "partial",
+    }
+
+
+def _aggregate_intraday_capital_flow(df: pd.DataFrame) -> Dict[str, Any]:
+    """Aggregate only vendor-classified buy/sell/neutral intraday trades."""
+    if df is None or df.empty:
+        return {}
+
+    side_col = _find_column(df, ["买卖盘性质", "性质", "方向", "side"])
+    amount_col = _find_column(df, ["成交额", "成交金额", "金额", "amount"])
+    price_col = _find_column(df, ["成交价", "价格", "price"])
+    lots_col = _find_column(df, ["手数", "成交手数", "lots"])
+    volume_col = _find_column(df, ["成交量", "volume"])
+    time_col = _find_column(df, ["时间", "成交时间", "time"])
+    if side_col is None or (amount_col is None and price_col is None):
+        return {}
+
+    totals = {"buy": 0.0, "sell": 0.0, "neutral": 0.0}
+    counts = {"buy": 0, "sell": 0, "neutral": 0}
+    unclassified_count = 0
+    latest_time = ""
+
+    for _, row in df.iterrows():
+        raw_side = _safe_str(row.get(side_col)).strip().lower()
+        if raw_side in {"买盘", "买入", "主动买入", "b", "buy"}:
+            side = "buy"
+        elif raw_side in {"卖盘", "卖出", "主动卖出", "s", "sell"}:
+            side = "sell"
+        elif raw_side in {"中性盘", "中性", "n", "neutral"}:
+            side = "neutral"
+        else:
+            unclassified_count += 1
+            continue
+
+        amount = _safe_float(row.get(amount_col)) if amount_col is not None else None
+        if amount is None:
+            price = _safe_float(row.get(price_col)) if price_col is not None else None
+            if lots_col is not None:
+                quantity = _safe_float(row.get(lots_col))
+                quantity = quantity * 100.0 if quantity is not None else None
+            else:
+                quantity = _safe_float(row.get(volume_col)) if volume_col is not None else None
+            amount = price * quantity if price is not None and quantity is not None else None
+        if amount is None or amount < 0:
+            continue
+
+        totals[side] += amount
+        counts[side] += 1
+        if time_col is not None:
+            latest_time = max(latest_time, _safe_str(row.get(time_col)))
+
+    classified_count = sum(counts.values())
+    if classified_count == 0:
+        return {}
+
+    now = datetime.now().astimezone()
+    as_of = now.isoformat(timespec="seconds")
+    if latest_time and re.fullmatch(r"\d{1,2}:\d{2}(?::\d{2})?", latest_time):
+        as_of = f"{now.date().isoformat()}T{latest_time}{now.strftime('%z')}"
+
+    return {
+        "active_buy_amount": totals["buy"],
+        "active_sell_amount": totals["sell"],
+        "active_net_inflow": totals["buy"] - totals["sell"],
+        "neutral_amount": totals["neutral"],
+        "trade_count": classified_count,
+        "unclassified_trade_count": unclassified_count,
+        "as_of": as_of,
+        "scope": "intraday",
+        "classification": "vendor_classified",
+        "is_estimated": True,
+        "source": "akshare.stock_intraday_em",
+    }
+
+
 class AkshareFundamentalAdapter:
     """AkShare adapter for fundamentals, capital flow and dragon-tiger signals."""
 
@@ -413,61 +593,141 @@ class AkshareFundamentalAdapter:
         result["status"] = "partial" if has_content else "not_supported"
         return result
 
-    def get_capital_flow(self, stock_code: str, top_n: int = 5) -> Dict[str, Any]:
+    def get_intraday_capital_flow(self, stock_code: str) -> Dict[str, Any]:
+        """Return an ETF intraday flow estimate without affecting complete-day flow."""
+        result: Dict[str, Any] = {
+            "status": "not_supported",
+            "intraday_flow": {},
+            "source_chain": [],
+            "errors": [],
+            "limitations": [],
+        }
+        if not is_cn_etf_symbol(stock_code):
+            result["limitations"].append("intraday_trade_direction_not_applicable")
+            return result
+
+        intraday_df, intraday_source, intraday_errors = self._call_df_candidates([
+            ("stock_intraday_em", {"symbol": stock_code}),
+        ])
+        result["errors"].extend(intraday_errors)
+        if intraday_df is not None:
+            result["intraday_flow"] = _aggregate_intraday_capital_flow(intraday_df)
+        if result["intraday_flow"]:
+            result["status"] = "ok"
+            result["source_chain"].append(f"capital_intraday:{intraday_source}")
+        else:
+            result["status"] = "failed" if result["errors"] else "partial"
+            result["limitations"].append("intraday_trade_direction_unavailable")
+        return result
+
+    def get_capital_flow(
+        self,
+        stock_code: str,
+        top_n: int = 5,
+        *,
+        include_intraday: bool = True,
+    ) -> Dict[str, Any]:
         """
         Return stock + sector capital flow.
         """
         result: Dict[str, Any] = {
             "status": "not_supported",
             "stock_flow": {},
+            "intraday_flow": {},
             "sector_rankings": {"top": [], "bottom": []},
             "source_chain": [],
             "errors": [],
+            "limitations": [],
         }
 
-        stock_df, stock_source, stock_errors = self._call_df_candidates([
+        market = _capital_flow_market(stock_code)
+        individual_candidates: List[Tuple[str, Dict[str, Any]]] = []
+        if market is not None:
+            individual_candidates.extend([
+                ("stock_individual_fund_flow", {"stock": stock_code, "market": market}),
+                ("stock_individual_fund_flow", {"symbol": stock_code, "market": market}),
+            ])
+        individual_candidates.extend([
             ("stock_individual_fund_flow", {"stock": stock_code}),
             ("stock_individual_fund_flow", {"symbol": stock_code}),
-            ("stock_individual_fund_flow", {}),
             ("stock_main_fund_flow", {"symbol": stock_code}),
             ("stock_main_fund_flow", {}),
         ])
+        stock_df, stock_source, stock_errors = self._call_df_candidates(individual_candidates)
         result["errors"].extend(stock_errors)
         if stock_df is not None:
-            row = _extract_latest_row(stock_df, stock_code)
-            if row is not None:
-                net_inflow = _safe_float(_pick_by_keywords(row, ["主力净流入", "净流入", "净额"]))
-                inflow_5d = _safe_float(_pick_by_keywords(row, ["5日", "五日"]))
-                inflow_10d = _safe_float(_pick_by_keywords(row, ["10日", "十日"]))
-                result["stock_flow"] = {
-                    "main_net_inflow": net_inflow,
-                    "inflow_5d": inflow_5d,
-                    "inflow_10d": inflow_10d,
-                }
+            daily_flow = _build_daily_capital_flow(stock_df, stock_code)
+            if daily_flow:
+                result["stock_flow"] = daily_flow
                 result["source_chain"].append(f"capital_stock:{stock_source}")
+            else:
+                row = _extract_latest_row(stock_df, stock_code)
+                if row is not None:
+                    result["stock_flow"] = {
+                        "main_net_inflow": _safe_float(_pick_by_keywords(row, ["主力净流入", "净流入", "净额"])),
+                        "inflow_5d": _safe_float(_pick_by_keywords(row, ["5日", "五日"])),
+                        "inflow_10d": _safe_float(_pick_by_keywords(row, ["10日", "十日"])),
+                        "scope": "daily",
+                        "source": stock_source,
+                        "data_quality": "partial",
+                    }
+                    result["source_chain"].append(f"capital_stock:{stock_source}")
 
-        sector_df, sector_source, sector_errors = self._call_df_candidates([
-            ("stock_sector_fund_flow_rank", {}),
-            ("stock_sector_fund_flow_summary", {}),
-        ])
-        result["errors"].extend(sector_errors)
-        if sector_df is not None:
-            name_col = next((c for c in sector_df.columns if any(k in str(c) for k in ("板块", "行业", "名称", "name"))), None)
-            flow_col = next((c for c in sector_df.columns if any(k in str(c) for k in ("净流入", "主力", "flow", "净额"))), None)
-            if name_col and flow_col:
-                work_df = sector_df[[name_col, flow_col]].copy()
-                work_df[flow_col] = pd.to_numeric(work_df[flow_col], errors="coerce")
-                work_df = work_df.dropna(subset=[flow_col])
-                top_df = work_df.nlargest(top_n, flow_col)
-                bottom_df = work_df.nsmallest(top_n, flow_col)
-                result["sector_rankings"] = {
-                    "top": [{"name": _safe_str(r[name_col]), "net_inflow": float(r[flow_col])} for _, r in top_df.iterrows()],
-                    "bottom": [{"name": _safe_str(r[name_col]), "net_inflow": float(r[flow_col])} for _, r in bottom_df.iterrows()],
-                }
-                result["source_chain"].append(f"capital_sector:{sector_source}")
+        intraday_status = "not_requested"
+        if is_cn_etf_symbol(stock_code) and include_intraday:
+            intraday_result = self.get_intraday_capital_flow(stock_code)
+            intraday_status = str(intraday_result.get("status") or "partial")
+            result["intraday_flow"] = intraday_result.get("intraday_flow", {})
+            result["source_chain"].extend(intraday_result.get("source_chain", []))
+            result["errors"].extend(intraday_result.get("errors", []))
+            result["limitations"].extend(intraday_result.get("limitations", []))
 
-        has_content = bool(result["stock_flow"] or result["sector_rankings"]["top"] or result["sector_rankings"]["bottom"])
-        result["status"] = "partial" if has_content else "not_supported"
+        if not is_cn_etf_symbol(stock_code):
+            sector_df, sector_source, sector_errors = self._call_df_candidates([
+                ("stock_sector_fund_flow_rank", {}),
+                ("stock_sector_fund_flow_summary", {}),
+            ])
+            result["errors"].extend(sector_errors)
+            if sector_df is not None:
+                name_col = next(
+                    (c for c in sector_df.columns if any(k in str(c) for k in ("板块", "行业", "名称", "name"))),
+                    None,
+                )
+                flow_col = next(
+                    (c for c in sector_df.columns if any(k in str(c) for k in ("净流入", "主力", "flow", "净额"))),
+                    None,
+                )
+                if name_col and flow_col:
+                    work_df = sector_df[[name_col, flow_col]].copy()
+                    work_df[flow_col] = pd.to_numeric(work_df[flow_col], errors="coerce")
+                    work_df = work_df.dropna(subset=[flow_col])
+                    top_df = work_df.nlargest(top_n, flow_col)
+                    bottom_df = work_df.nsmallest(top_n, flow_col)
+                    result["sector_rankings"] = {
+                        "top": [
+                            {"name": _safe_str(r[name_col]), "net_inflow": float(r[flow_col])}
+                            for _, r in top_df.iterrows()
+                        ],
+                        "bottom": [
+                            {"name": _safe_str(r[name_col]), "net_inflow": float(r[flow_col])}
+                            for _, r in bottom_df.iterrows()
+                        ],
+                    }
+                    result["source_chain"].append(f"capital_sector:{sector_source}")
+
+        has_content = bool(
+            result["stock_flow"]
+            or result["intraday_flow"]
+            or result["sector_rankings"]["top"]
+            or result["sector_rankings"]["bottom"]
+        )
+        if has_content:
+            main_flow = result["stock_flow"].get("main_net_inflow") if result["stock_flow"] else None
+            result["status"] = "ok" if main_flow is not None else "partial"
+            if stock_errors or intraday_status == "partial" or (is_cn_etf_symbol(stock_code) and result["errors"]):
+                result["status"] = "partial"
+        else:
+            result["status"] = "failed" if result["errors"] else "not_supported"
         return result
 
     def get_dragon_tiger_flag(self, stock_code: str, lookback_days: int = 20) -> Dict[str, Any]:

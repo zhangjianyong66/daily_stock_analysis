@@ -18,7 +18,7 @@
 
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from enum import Enum
 
 import pandas as pd
@@ -101,6 +101,8 @@ class TrendAnalysisResult:
     bias_ma5: float = 0.0            # (Close - MA5) / MA5 * 100
     bias_ma10: float = 0.0
     bias_ma20: float = 0.0
+    change_3d: Optional[float] = None  # 最近 3 个交易日累计涨跌幅
+    is_new_low_3d: Optional[bool] = None  # 最新收盘是否跌破此前 3 日收盘低点
     
     # 量能分析
     volume_status: VolumeStatus = VolumeStatus.NORMAL
@@ -147,6 +149,8 @@ class TrendAnalysisResult:
             'bias_ma5': self.bias_ma5,
             'bias_ma10': self.bias_ma10,
             'bias_ma20': self.bias_ma20,
+            'change_3d': self.change_3d,
+            'is_new_low_3d': self.is_new_low_3d,
             'volume_status': self.volume_status.value,
             'volume_ratio_5d': self.volume_ratio_5d,
             'volume_trend': self.volume_trend,
@@ -238,6 +242,11 @@ class StockTrendAnalyzer:
         result.ma10 = float(latest['MA10'])
         result.ma20 = float(latest['MA20'])
         result.ma60 = float(latest.get('MA60', 0))
+        if len(df) >= 4:
+            base_close = float(df.iloc[-4]['close'])
+            if base_close > 0:
+                result.change_3d = (result.current_price - base_close) / base_close * 100
+            result.is_new_low_3d = result.current_price < float(df['close'].iloc[-4:-1].min())
 
         # 1. 趋势判断
         self._analyze_trend(df, result)
