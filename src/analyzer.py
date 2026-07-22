@@ -1476,6 +1476,199 @@ def _etf_risk_reward_plan(
     }
 
 
+def _format_etf_sniper_price(value: Any) -> Optional[str]:
+    """Format a positive ETF price without losing sub-cent quote precision."""
+    numeric = _coerce_numeric_value(value)
+    if numeric is None or numeric <= 0:
+        return None
+    return f"{numeric:.4f}".rstrip("0").rstrip(".")
+
+
+def _format_etf_sniper_value(
+    value: Any,
+    *,
+    language: str,
+    label: str,
+    detail: str,
+    missing: str,
+) -> str:
+    price = _format_etf_sniper_price(value)
+    if price is None:
+        return missing
+    if language == "zh":
+        return f"{label}：{price}元（{detail}）"
+    return f"{label}: {price} CNY ({detail})"
+
+
+def _build_etf_sniper_points(
+    *,
+    state: str,
+    language: str,
+    entry_price: Any,
+    ma5: Any,
+    effective_stop: Any,
+    minimum_target: Any,
+) -> Dict[str, str]:
+    """Build state-aware display text while preserving one parseable price per field."""
+    is_entry = state in {"starter_entry", "add_on_confirmation", "strong_entry"}
+    is_confirmed_entry = state in {"add_on_confirmation", "strong_entry"}
+    is_watch = state in {"oversold_watch", "neutral_watch"}
+
+    if language == "zh":
+        if state == "starter_entry":
+            ideal_label = "计划试仓触发价"
+            ideal_detail = "右侧止跌确认后仅按20%-30%试仓"
+        elif is_confirmed_entry:
+            ideal_label = "确认入场参考价"
+            ideal_detail = "条件已满足，按计划分批执行"
+        elif is_watch:
+            ideal_label = "观察触发参考价"
+            ideal_detail = "当前不执行买入，等待右侧确认"
+        else:
+            ideal_label = "暂停买入参考价"
+            ideal_detail = "当前按退出状态处理"
+
+        if state == "starter_entry":
+            secondary_label = "确认加仓参考位"
+            secondary_detail = "站回MA5且资金持续流入后再提高仓位"
+        elif is_confirmed_entry:
+            secondary_label = "确认加仓参考位"
+            secondary_detail = "已站回MA5，资金确认后仓位上限40%-60%"
+        elif is_watch:
+            secondary_label = "确认加仓观察位"
+            secondary_detail = "站回MA5且资金改善后再评估"
+        else:
+            secondary_label = "暂停加仓参考位"
+            secondary_detail = "当前不执行加仓，按退出状态处理"
+
+        if state == "take_profit_exit":
+            stop_label = "原计划有效止损"
+            stop_detail = "当前高抛退出优先，不再等待止损"
+            target_label = "原计划最低目标"
+            target_detail = "高抛条件已触发，当前按全额退出执行"
+        elif state == "invalidated":
+            stop_label = "结构失效参考位"
+            stop_detail = "结构已失效，按首次可执行机会退出"
+            target_label = "原计划最低目标"
+            target_detail = "结构已失效，目标作废并执行退出"
+        elif is_watch:
+            stop_label = "计划止损参考位"
+            stop_detail = "仅在确认入场后生效，结构失效优先且模拟硬止损不超过3%"
+            target_label = "目标观察位"
+            target_detail = "仅在确认入场且满足至少1.5R后使用"
+        else:
+            stop_label = "有效止损位"
+            stop_detail = "结构失效优先，模拟硬止损不超过3%"
+            target_label = "第一止盈位"
+            target_detail = "达到至少1.5R后先止盈一半，剩余仓位移动退出"
+
+        return {
+            "ideal_buy": _format_etf_sniper_value(
+                entry_price,
+                language=language,
+                label=ideal_label,
+                detail=ideal_detail,
+                missing="暂无入场参考价（缺少有效行情数据）",
+            ),
+            "secondary_buy": _format_etf_sniper_value(
+                ma5,
+                language=language,
+                label=secondary_label,
+                detail=secondary_detail,
+                missing="暂无确认加仓参考位（缺少短期均线数据）",
+            ),
+            "stop_loss": _format_etf_sniper_value(
+                effective_stop,
+                language=language,
+                label=stop_label,
+                detail=stop_detail,
+                missing="暂无有效止损位（缺少入场价或支撑数据）",
+            ),
+            "take_profit": _format_etf_sniper_value(
+                minimum_target,
+                language=language,
+                label=target_label,
+                detail=target_detail,
+                missing="暂无有效止盈位（缺少完整风险收益数据）",
+            ),
+        }
+
+    if state == "starter_entry":
+        ideal_label = "Starter trigger"
+        ideal_detail = "enter only after right-side stabilization and keep the starter position small"
+    elif is_confirmed_entry:
+        ideal_label = "Confirmed entry reference"
+        ideal_detail = "conditions are confirmed; scale in according to the plan"
+    elif is_watch:
+        ideal_label = "Watch trigger reference"
+        ideal_detail = "do not enter until right-side confirmation"
+    else:
+        ideal_label = "Entry suspended reference"
+        ideal_detail = "follow the current exit state"
+
+    if is_entry:
+        secondary_label = "MA5 add-on confirmation"
+        secondary_detail = "add only after MA5 and daily flow confirm"
+    elif is_watch:
+        secondary_label = "MA5 confirmation watch"
+        secondary_detail = "reassess only after MA5 and daily flow improve"
+    else:
+        secondary_label = "Add-on suspended reference"
+        secondary_detail = "do not add while the exit state is active"
+
+    if state == "take_profit_exit":
+        stop_label = "Original effective stop"
+        stop_detail = "the take-profit exit takes priority now"
+        target_label = "Original minimum target"
+        target_detail = "the take-profit rule is active; execute the full exit"
+    elif state == "invalidated":
+        stop_label = "Invalidation reference"
+        stop_detail = "the structure has failed; exit at the first executable opportunity"
+        target_label = "Original minimum target"
+        target_detail = "the structure failed; cancel the target and exit"
+    elif is_watch:
+        stop_label = "Planned stop reference"
+        stop_detail = "active only after entry; structure first with a capped simulated hard stop"
+        target_label = "Target watch level"
+        target_detail = "use only after entry confirmation and sufficient reward-to-risk"
+    else:
+        stop_label = "Effective stop"
+        stop_detail = "structure first with a capped simulated hard stop"
+        target_label = "First profit target"
+        target_detail = "take half after the minimum reward threshold and trail the rest"
+
+    return {
+        "ideal_buy": _format_etf_sniper_value(
+            entry_price,
+            language=language,
+            label=ideal_label,
+            detail=ideal_detail,
+            missing="No entry reference (valid quote unavailable)",
+        ),
+        "secondary_buy": _format_etf_sniper_value(
+            ma5,
+            language=language,
+            label=secondary_label,
+            detail=secondary_detail,
+            missing="No add-on confirmation level (short-term average unavailable)",
+        ),
+        "stop_loss": _format_etf_sniper_value(
+            effective_stop,
+            language=language,
+            label=stop_label,
+            detail=stop_detail,
+            missing="No effective stop (entry or support data unavailable)",
+        ),
+        "take_profit": _format_etf_sniper_value(
+            minimum_target,
+            language=language,
+            label=target_label,
+            detail=target_detail,
+            missing="No valid profit target (complete reward-to-risk data unavailable)",
+        ),
+    }
+
+
 def _clamp_etf_score(raw_score: Any, state: str) -> tuple[int, int, int]:
     score_min, score_max = _ETF_SCORE_RANGES[state]
     try:
@@ -1693,12 +1886,14 @@ def _apply_etf_short_term_strategy(
     sniper_points = battle_plan.get("sniper_points") if isinstance(battle_plan.get("sniper_points"), dict) else {}
     battle_plan["sniper_points"] = sniper_points
     sniper_points.update(
-        {
-            "ideal_buy": risk_plan.get("entry_price"),
-            "secondary_buy": ma5,
-            "stop_loss": risk_plan.get("effective_stop_price") or support,
-            "take_profit": risk_plan.get("minimum_target_price") or resistance,
-        }
+        _build_etf_sniper_points(
+            state=state,
+            language=language,
+            entry_price=risk_plan.get("entry_price"),
+            ma5=ma5,
+            effective_stop=risk_plan.get("effective_stop_price"),
+            minimum_target=risk_plan.get("minimum_target_price"),
+        )
     )
     position_strategy = (
         battle_plan.get("position_strategy")

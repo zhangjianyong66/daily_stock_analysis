@@ -26,6 +26,7 @@
 - `etf_short_swing_v1` 使用超跌/高抛 2-of-3、右侧止跌、MA5、5 日资金和至少 1.5R 生成确定性状态。状态区间为：`take_profit_exit/invalidated=0-19`、`oversold_watch/neutral_watch=40-59`、`starter_entry=60-69`、`add_on_confirmation=70-79`、`strong_entry=80-100`。
 - 结构止损与计划价下方 3% 取更近边界；结构止损距离超过 3% 或第一压力不足含 0.1% 费用/滑点后的 1.5R 时不得入场。
 - 状态机生成后，`daily_market_context_guardrail` 不得再改写其动作或分数，否则 dashboard 状态与最终结论会矛盾。市场阶段护栏仍可限制“立即盘中执行”的表述。
+- ETF `dashboard.battle_plan.sniper_points` 保持四字段字符串契约，但必须由状态机输出“说明 + 唯一价格”：入场、观察和退出状态使用不同语义，MA5 表述为确认加仓参考位，止损只显示最终有效止损，止盈只显示最低 1.5R 目标。有效字段必须可由 `parse_sniper_value` 还原同一价格；缺失字段显示不含歧义数字的原因，不得回退为孤立数字或伪造点位。
 - 不新增环境变量或密钥；ETF 流动性只产生限价单、滑点和折溢价提示，不作为禁入或分数封顶条件。
 
 ## 4. Validation & Error Matrix

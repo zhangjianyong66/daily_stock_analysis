@@ -9,6 +9,7 @@ from src.analyzer import (
     _etf_risk_reward_plan,
     stabilize_decision_with_structure,
 )
+from src.utils.sniper_points import parse_sniper_value
 
 
 def _result(
@@ -432,6 +433,15 @@ def test_etf_oversold_with_improving_flow_allows_only_starter_position() -> None
     assert strategy["position_cap_pct"] == 30
     assert "20%-30%试仓" in result.operation_advice
     assert "未提供真实成本" in result.dashboard["core_conclusion"]["position_advice"]["has_position"]
+    sniper = result.dashboard["battle_plan"]["sniper_points"]
+    assert sniper["ideal_buy"].startswith("计划试仓触发价：10.1元")
+    assert "确认加仓参考位：10.5元" in sniper["secondary_buy"]
+    assert "有效止损位" in sniper["stop_loss"]
+    assert "第一止盈位" in sniper["take_profit"]
+    assert parse_sniper_value(sniper["ideal_buy"]) == strategy["risk_reward"]["entry_price"]
+    assert parse_sniper_value(sniper["secondary_buy"]) == 10.5
+    assert parse_sniper_value(sniper["stop_loss"]) == strategy["risk_reward"]["effective_stop_price"]
+    assert parse_sniper_value(sniper["take_profit"]) == strategy["risk_reward"]["minimum_target_price"]
 
 
 def test_etf_oversold_but_new_low_and_outflow_stays_watch_only() -> None:
@@ -474,6 +484,9 @@ def test_etf_oversold_but_new_low_and_outflow_stays_watch_only() -> None:
     assert result.decision_type == "hold"
     assert result.sentiment_score == 59
     assert strategy["intraday_flow_used_for_score"] is False
+    sniper = result.dashboard["battle_plan"]["sniper_points"]
+    assert "当前不执行买入" in sniper["ideal_buy"]
+    assert "确认加仓观察位" in sniper["secondary_buy"]
 
 
 def test_etf_single_oversold_indicator_cannot_trigger_starter_entry() -> None:
@@ -595,6 +608,10 @@ def test_etf_confirmed_flow_and_ma5_reclaim_allows_add_on() -> None:
     assert 70 <= result.sentiment_score <= 79
     assert result.action == "add"
     assert strategy["position_cap_pct"] == 60
+    sniper = result.dashboard["battle_plan"]["sniper_points"]
+    assert "确认入场参考价" in sniper["ideal_buy"]
+    assert "确认加仓参考位" in sniper["secondary_buy"]
+    assert "仓位上限40%-60%" in sniper["secondary_buy"]
 
 
 def test_etf_high_bias_overbought_near_resistance_forces_full_exit() -> None:
@@ -624,6 +641,120 @@ def test_etf_high_bias_overbought_near_resistance_forces_full_exit() -> None:
     assert result.decision_type == "sell"
     assert strategy["position_cap_pct"] == 0
     assert "全额退出" in result.operation_advice
+    sniper = result.dashboard["battle_plan"]["sniper_points"]
+    assert "暂停买入参考价" in sniper["ideal_buy"]
+    assert "当前不执行加仓" in sniper["secondary_buy"]
+    assert "当前高抛退出优先" in sniper["stop_loss"]
+    assert "当前按全额退出执行" in sniper["take_profit"]
+
+
+def test_etf_invalidated_sniper_points_cancel_entry_and_target() -> None:
+    result = _result(
+        code="159865",
+        decision_type="buy",
+        operation_advice="买入",
+        score=82,
+        current_price=9.7,
+    )
+    trend = SimpleNamespace(
+        current_price=9.7,
+        ma5=10.1,
+        bias_ma5=-3.96,
+        rsi_12=42.0,
+        change_3d=-2.0,
+        is_new_low_3d=True,
+        support_levels=[10.0],
+        resistance_levels=[11.0],
+    )
+
+    stabilize_decision_with_structure(result, trend, _unsupported_fund_flow(), _phase())
+
+    strategy = result.dashboard["etf_short_term_strategy"]
+    sniper = result.dashboard["battle_plan"]["sniper_points"]
+    assert strategy["strategy_state"] == "invalidated"
+    assert "暂停买入参考价" in sniper["ideal_buy"]
+    assert "结构已失效" in sniper["stop_loss"]
+    assert "目标作废" in sniper["take_profit"]
+
+
+def test_etf_sniper_points_explain_missing_levels_without_fake_prices() -> None:
+    result = _result(
+        code="159865",
+        decision_type="hold",
+        operation_advice="观望",
+        score=50,
+        current_price=1.23456,
+    )
+    price_position = result.dashboard["data_perspective"]["price_position"]
+    price_position["support_level"] = None
+    price_position["resistance_level"] = None
+    trend = SimpleNamespace(
+        current_price=1.23456,
+        ma5=None,
+        bias_ma5=0.0,
+        rsi_12=50.0,
+        change_3d=0.0,
+        is_new_low_3d=False,
+        support_levels=[],
+        resistance_levels=[],
+    )
+
+    stabilize_decision_with_structure(result, trend, _unsupported_fund_flow(), _phase())
+
+    sniper = result.dashboard["battle_plan"]["sniper_points"]
+    assert sniper["ideal_buy"].startswith("观察触发参考价：1.2346元")
+    assert parse_sniper_value(sniper["ideal_buy"]) == 1.2346
+    assert "暂无确认加仓参考位" in sniper["secondary_buy"]
+    assert "暂无有效止损位" in sniper["stop_loss"]
+    assert "暂无有效止盈位" in sniper["take_profit"]
+    assert parse_sniper_value(sniper["secondary_buy"]) is None
+    assert parse_sniper_value(sniper["stop_loss"]) is None
+    assert parse_sniper_value(sniper["take_profit"]) is None
+
+
+def test_etf_sniper_points_preserve_parseable_prices_in_english_report() -> None:
+    result = _result(
+        code="159865",
+        decision_type="hold",
+        operation_advice="Watch",
+        score=35,
+        current_price=10.1,
+    )
+    result.report_language = "en"
+    trend = SimpleNamespace(
+        current_price=10.1,
+        ma5=10.5,
+        bias_ma5=-3.81,
+        rsi_12=31.0,
+        change_3d=-5.0,
+        is_new_low_3d=False,
+        support_levels=[10.0],
+        resistance_levels=[11.0],
+    )
+
+    stabilize_decision_with_structure(
+        result,
+        trend,
+        _etf_fund_flow(
+            latest=-500_000,
+            previous=-1_000_000,
+            latest_pct=-2.0,
+            previous_pct=-4.2,
+            inflow_3d=-1_200_000,
+            positive_days_3d=1,
+            inflow_5d=-2_000_000,
+        ),
+        _phase(),
+    )
+
+    strategy = result.dashboard["etf_short_term_strategy"]
+    sniper = result.dashboard["battle_plan"]["sniper_points"]
+    assert sniper["ideal_buy"].startswith("Starter trigger: 10.1 CNY")
+    assert "MA5 add-on confirmation: 10.5 CNY" in sniper["secondary_buy"]
+    assert parse_sniper_value(sniper["ideal_buy"]) == strategy["risk_reward"]["entry_price"]
+    assert parse_sniper_value(sniper["secondary_buy"]) == 10.5
+    assert parse_sniper_value(sniper["stop_loss"]) == strategy["risk_reward"]["effective_stop_price"]
+    assert parse_sniper_value(sniper["take_profit"]) == strategy["risk_reward"]["minimum_target_price"]
 
 
 def test_etf_stale_daily_flow_cannot_trigger_starter_entry() -> None:
