@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 23
-- **Last Active**: 2026-07-21
+- **Total Sessions**: 24
+- **Last Active**: 2026-07-22
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~781 | Active |
+| `journal-1.md` | ~814 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 24 | 2026-07-22 | 完成场内 ETF 资金流与短线规则 | `71af690` | `main` |
 | 23 | 2026-07-21 | 恢复移动端首页原版 UI | `b8abcbc` | `main` |
 | 22 | 2026-07-21 | 完成移动端首页 UI 与交互优化 | `2cd093e` | `main` |
 | 21 | 2026-07-21 | 完成首页个股栏置顶功能 | `0bcead9` | `main` |

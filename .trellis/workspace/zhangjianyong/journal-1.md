@@ -779,3 +779,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 24: 完成场内 ETF 资金流与短线规则
+
+**Date**: 2026-07-22
+**Task**: 完成场内 ETF 资金流与短线规则
+**Branch**: `main`
+
+### Summary
+
+接入沪深场内 ETF 日资金流和盘中主动成交估算，落地 etf_short_swing_v1 高抛低吸与超跌反弹状态机，补齐测试、文档和运行契约；完整后端门禁通过，在线 smoke 因代理失败未取得东方财富数据。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `71af690` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
