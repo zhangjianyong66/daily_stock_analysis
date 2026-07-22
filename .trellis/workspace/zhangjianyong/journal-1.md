@@ -812,3 +812,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 25: 恢复 ETF 狙击点位说明
+
+**Date**: 2026-07-22
+**Task**: 恢复 ETF 狙击点位说明
+**Branch**: `main`
+
+### Summary
+
+修复 ETF 短线状态机覆盖狙击点位说明的问题，恢复状态化说明与唯一可解析价格，覆盖中英文、缺失点位、历史、通知和决策信号，并通过完整后端门禁。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `47a642b` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
