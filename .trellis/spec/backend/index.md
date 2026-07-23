@@ -31,7 +31,7 @@
 | 日志初始化、级别、敏感信息 | [Logging Guidelines](./logging-guidelines.md) |
 | 每日大盘上下文日期、历史复用、锁与 fail-open | [Daily Market Context](./daily-market-context.md) |
 | 持仓/成交截图、Vision、`trade_time` 跨层改动 | [Portfolio Image Import](./portfolio-image-import.md) |
-| A 股场内 ETF 资金流、盘中主动流、1-5 日状态机 | [ETF Capital Flow and Short Swing](./etf-capital-flow-short-swing.md) |
+| A 股场内 ETF 日资金流与盘中主动流 | [ETF Capital Flow](./etf-capital-flow.md) |
 
 ## 开发前检查
 

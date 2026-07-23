@@ -232,7 +232,7 @@ class AnalyzerNewsPromptTestCase(unittest.TestCase):
         self.assertIn("接近压力且主力流出时不得追买", prompt)
         self.assertIn("洗盘观察", prompt)
 
-    def test_etf_prompt_uses_exchange_flow_and_one_to_five_day_plan(self) -> None:
+    def test_etf_prompt_keeps_exchange_flow_without_forced_short_swing_plan(self) -> None:
         with patch.object(GeminiAnalyzer, "_init_litellm", return_value=None):
             analyzer = GeminiAnalyzer()
 
@@ -291,10 +291,7 @@ class AnalyzerNewsPromptTestCase(unittest.TestCase):
         self.assertIn("大单净流入", prompt)
         self.assertIn("盘中主动成交估算（仅展示，不评分）", prompt)
         self.assertIn("盘中值仅来自供应商逐笔买/卖/中性分类", prompt)
-        self.assertIn("A股场内 ETF 1-5 日短线计划（强制）", prompt)
-        self.assertIn("etf_short_swing_v1", prompt)
-        self.assertIn("第5个交易日必须退出或重新生成计划", prompt)
-        self.assertIn("流动性不作禁入或分数封顶条件", prompt)
+        self.assertNotIn("短线", prompt)
 
     def test_prompt_prefers_context_news_window_days(self) -> None:
         with patch.object(GeminiAnalyzer, "_init_litellm", return_value=None):

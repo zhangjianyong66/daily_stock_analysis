@@ -750,12 +750,7 @@ class StockAnalysisPipeline:
             if result:
                 fill_price_position_if_needed(result, trend_result, realtime_quote)
                 action_source_advice = getattr(result, "operation_advice", None)
-                stabilize_decision_with_structure(
-                    result,
-                    trend_result,
-                    fundamental_context,
-                    market_phase_summary,
-                )
+                stabilize_decision_with_structure(result, trend_result, fundamental_context)
                 adjustments = apply_phase_decision_guardrails(
                     result,
                     market_phase_summary=market_phase_summary,
@@ -1392,12 +1387,7 @@ class StockAnalysisPipeline:
                     result.current_price = realtime_data.get("price")
                     result.change_pct = realtime_data.get("change_pct")
                 action_source_advice = getattr(result, "operation_advice", None)
-                stabilize_decision_with_structure(
-                    result,
-                    trend_result,
-                    fundamental_context,
-                    market_phase_summary,
-                )
+                stabilize_decision_with_structure(result, trend_result, fundamental_context)
                 adjustments = apply_phase_decision_guardrails(
                     result,
                     market_phase_summary=market_phase_summary,

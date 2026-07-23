@@ -12,7 +12,6 @@ from data_provider.fundamental_adapter import (
     _build_daily_capital_flow,
 )
 from data_provider.base import DataFetcherManager
-from src.stock_analyzer import StockTrendAnalyzer
 from src.services.market_symbol_utils import is_cn_etf_symbol
 
 
@@ -193,24 +192,3 @@ def test_manager_skips_intraday_after_daily_source_failure() -> None:
     assert run_with_retry.call_count == 1
     assert context["status"] == "failed"
     assert "intraday_skipped_after_daily_source_failure" in context["data"]["limitations"]
-
-
-def test_trend_analysis_exposes_three_day_change_and_new_low_confirmation() -> None:
-    closes = [12.0 - index * 0.05 for index in range(30)]
-    frame = pd.DataFrame(
-        {
-            "date": pd.date_range("2026-06-01", periods=30, freq="D"),
-            "open": closes,
-            "high": [value + 0.1 for value in closes],
-            "low": [value - 0.1 for value in closes],
-            "close": closes,
-            "volume": [1_000_000 + index * 1_000 for index in range(30)],
-        }
-    )
-
-    result = StockTrendAnalyzer().analyze(frame, "159865")
-
-    expected_change = (closes[-1] - closes[-4]) / closes[-4] * 100
-    assert result.change_3d == pytest.approx(expected_change)
-    assert result.is_new_low_3d is True
-    assert result.to_dict()["change_3d"] == pytest.approx(expected_change)

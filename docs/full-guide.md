@@ -1387,7 +1387,6 @@ python main.py --debug
 
 个股报告的操作建议会结合支撑位、压力位、量能/筹码、主力资金流向和风险事件进行校准，避免仅因单日涨跌或评分跨线在“买入/卖出”之间剧烈切换。若价格处在支撑与压力之间且资金流不明确，报告会优先给出“持有、震荡观望、洗盘观察”等中性可执行建议；只有接近支撑确认、有效突破压力且量价/资金配合时才给出买入，跌破关键支撑或主力资金持续流出时才给出卖出/减仓。
 
-A 股场内 ETF 采用独立的 `etf_short_swing_v1` 口径：`sentiment_score` 衡量未来 1-5 个交易日短线机会，而非中期趋势强弱。超跌与高抛均按 RSI(12)、MA5 乖离、3 日涨跌及支撑/压力的 2-of-3 判定；超跌只形成候选，必须等支撑止跌且日主力资金改善后才允许 20%-30% 试仓，站回 MA5、3 日资金确认且 5 日累计转正后才允许提高到 40%-60%。结构止损和模拟成本下方 3% 取更近边界，第一压力不足 1.5R 时不入场；普通到 1.5R 止盈一半，完整高抛全额退出，第 2 日未走强减仓，第 5 日退出或重评。盘中主动流估算仅展示，不参与评分。
 该项调整会影响可操作决策的运行时落盘与提示词约束链路，但不变更 LLM 模型、LiteLLM 路由、Provider/Key 及其兼容边界，不影响配置保存/清理语义。
 兼容性核验结论：除配置和模型侧语义外，该决策稳定性链路覆盖 `src/analyzer.py`、`src/core/pipeline.py`、`src/core/backtest_engine.py`、`src/report_language.py` 及 `src/agent` 决策路径的运行时行为，建议复核报告决策类型映射与回测入口联动。
 核验路径：相关逻辑在上述运行时路径与对应测试（`tests/test_backtest_engine.py`、`tests/test_analyzer_news_prompt.py`、`tests/test_decision_stability.py`、`tests/test_agent_pipeline.py` 等）中生效；未在 `src/config.py`、`src/report.py`、存储/持久化链路新增配置字段或清理逻辑。

@@ -8,8 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
-- [修复] ETF 狙击点位恢复状态化价格说明，明确试仓、确认加仓、止损、止盈和观望/退出条件，同时保留历史与决策信号的价格解析能力。
-- [新功能] A 股场内 ETF 接入东方财富日主力/大单/超大单资金流与可选逐笔主动成交估算，并按 1-5 个交易日高抛低吸、超跌反弹、3% 止损和至少 1.5R 风险收益生成确定性短线计划。
+- [新功能] A 股场内 ETF 接入东方财富日主力/大单/超大单资金流与可选逐笔主动成交估算，作为通用分析参考并保持失败降级。
 - [修复] Web 移动端首页恢复原版连续布局，移除割裂的快捷栏、底部操作面板和报告折叠，并优化窄屏控件尺寸、间距与换行。
 - [新功能] Web 首页个股栏支持在当前浏览器中置顶常看的股票或 ETF，置顶项会在现有排序结果中优先展示。
 - [改进] Web 首页个股栏提供最近分析、情绪分高低和名称/代码排序，并在浏览器中保留用户选择。

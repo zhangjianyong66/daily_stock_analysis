@@ -67,11 +67,7 @@ def apply_daily_market_context_guardrail(
 ) -> List[str]:
     """Soften aggressive buy advice when daily market context is conservative."""
 
-    if (
-        result is None
-        or _uses_deterministic_etf_short_term_strategy(result)
-        or not _is_conservative_context(daily_market_context)
-    ):
+    if result is None or not _is_conservative_context(daily_market_context):
         return []
 
     language = normalize_report_language(report_language or getattr(result, "report_language", "zh"))
@@ -114,18 +110,6 @@ def apply_daily_market_context_guardrail(
     _append_softening_limitation(phase_decision, language=language)
 
     return adjustments
-
-
-def _uses_deterministic_etf_short_term_strategy(result: Any) -> bool:
-    dashboard = getattr(result, "dashboard", None)
-    if not isinstance(dashboard, Mapping):
-        return False
-    strategy = dashboard.get("etf_short_term_strategy")
-    return (
-        isinstance(strategy, Mapping)
-        and strategy.get("strategy_version") == "etf_short_swing_v1"
-        and bool(strategy.get("strategy_state"))
-    )
 
 
 def _sync_softened_dashboard_fields(
@@ -299,6 +283,7 @@ def _cap_conservative_sentiment_score(value: Any) -> int:
     except (TypeError, ValueError):
         return _GUARDRAIL_SENTIMENT_SCORE
     return min(_GUARDRAIL_SENTIMENT_SCORE, max(0, score))
+
 
 def _is_high_confidence(value: Any) -> bool:
     return str(value or "").strip().lower() in {"高", "high", "높음"}
