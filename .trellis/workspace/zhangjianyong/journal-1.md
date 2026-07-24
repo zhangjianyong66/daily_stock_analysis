@@ -911,3 +911,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 28: 支持配置默认分析策略
+
+**Date**: 2026-07-24
+**Task**: 支持配置默认分析策略
+**Branch**: `main`
+
+### Summary
+
+新增部署级默认分析策略配置，统一后端解析与异步任务快照，并在首页、问股和设置页支持显示、选择、快捷设为默认及恢复系统默认；同步测试、文档和策略执行规范。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b8daef2` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
