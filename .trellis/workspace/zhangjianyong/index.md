@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 26
-- **Last Active**: 2026-07-22
+- **Total Sessions**: 27
+- **Last Active**: 2026-07-24
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~880 | Active |
+| `journal-1.md` | ~913 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 27 | 2026-07-24 | 合并上游 v3.27.0 | `61bf8dfe9cd139916653e49f71fb3137b0dd1eae` | `integrate/upstream-v3.27` |
 | 26 | 2026-07-22 | 优化本地测试验证策略 | `9fdc48d` | `main` |
 | 25 | 2026-07-22 | 恢复 ETF 狙击点位说明 | `47a642b` | `main` |
 | 24 | 2026-07-22 | 完成场内 ETF 资金流与短线规则 | `71af690` | `main` |

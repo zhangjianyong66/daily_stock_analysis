@@ -878,3 +878,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 27: 合并上游 v3.27.0
+
+**Date**: 2026-07-24
+**Task**: 合并上游 v3.27.0
+**Branch**: `integrate/upstream-v3.27`
+
+### Summary
+
+将正式上游 v3.27.0 合入独立集成分支，保留本地 ETF、实时行情、搜索审计、Vision、Docker 与首页能力，解决三处直接冲突和两项语义重叠问题，并完成定向回归验证。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `61bf8dfe9cd139916653e49f71fb3137b0dd1eae` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
