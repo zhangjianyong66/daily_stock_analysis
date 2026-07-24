@@ -34,6 +34,9 @@ from api.v1.schemas.history import (
     ReportSummary,
     ReportStrategy,
     ReportDetails,
+    StrategyExecution,
+    StrategyExecutionItem,
+    StrategyExecutionRejectedItem,
 )
 from api.v1.schemas.stocks import (
     StockQuote,
@@ -163,6 +166,9 @@ __all__ = [
     "ReportSummary",
     "ReportStrategy",
     "ReportDetails",
+    "StrategyExecution",
+    "StrategyExecutionItem",
+    "StrategyExecutionRejectedItem",
     # stocks
     "StockQuote",
     "StockHistoryResponse",

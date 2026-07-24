@@ -19,6 +19,62 @@ const baseSummary = {
 };
 
 describe('ReportOverview', () => {
+  it('renders the effective strategy and source in report metadata', () => {
+    render(
+      <ReportOverview
+        meta={{
+          ...baseMeta,
+          strategyExecution: {
+            schemaVersion: 1,
+            status: 'normal',
+            source: 'request',
+            requested: [{ id: 'box_oscillation', displayName: '箱体震荡', status: 'selected' }],
+            effective: [{ id: 'box_oscillation', displayName: '箱体震荡', status: 'selected' }],
+            rejected: [],
+          },
+        }}
+        summary={baseSummary}
+      />,
+    );
+
+    expect(screen.getByText(/分析策略: 箱体震荡/)).toBeVisible();
+    expect(screen.getAllByText(/本次指定/).length).toBeGreaterThan(0);
+  });
+
+  it('shows additional strategies and fallback details without overflowing the header', () => {
+    render(
+      <ReportOverview
+        meta={{
+          ...baseMeta,
+          strategyExecution: {
+            schemaVersion: 1,
+            status: 'fallback',
+            source: 'fallback',
+            requested: [{ id: 'removed_skill', displayName: '已删除策略', status: 'selected' }],
+            effective: [
+              { id: 'bull_trend', displayName: '趋势策略', status: 'selected' },
+              { id: 'box_oscillation', displayName: '箱体震荡', status: 'selected' },
+            ],
+            rejected: [{ id: 'removed_skill', reason: 'unavailable' }],
+            message: '请求策略不可用，已使用系统默认策略。',
+          },
+        }}
+        summary={baseSummary}
+      />,
+    );
+
+    expect(screen.getByText(/分析策略: 趋势策略 \+1/)).toBeVisible();
+    expect(screen.getAllByText('系统回退').length).toBeGreaterThan(0);
+    expect(screen.getByRole('status')).toHaveTextContent('系统回退');
+  });
+
+  it('marks legacy reports as having no recorded strategy metadata', () => {
+    render(<ReportOverview meta={baseMeta} summary={baseSummary} />);
+
+    expect(screen.getByText('分析策略: 未记录')).toBeVisible();
+    expect(screen.getByTitle('该报告生成时未保存策略信息')).toBeVisible();
+  });
+
   it('renders final market phase and partial-bar labels from report metadata', () => {
     render(
       <ReportOverview

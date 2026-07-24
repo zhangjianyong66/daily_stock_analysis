@@ -1,4 +1,5 @@
 import type React from 'react';
+import { AlertTriangle, ChevronDown, CircleHelp, Layers3 } from 'lucide-react';
 import type {
   ReportDetails as ReportDetailsType,
   ReportMeta,
@@ -40,6 +41,27 @@ type PreparedBoard = {
   name: string;
   signal?: BoardSignal;
 };
+
+const STRATEGY_TEXT = {
+  zh: {
+    label: '分析策略', unrecorded: '未记录', unrecordedHelp: '该报告生成时未保存策略信息',
+    source: { request: '本次指定', default: '系统默认', config: '固定配置', auto: '自动路由', fallback: '系统回退', unknown: '未记录' },
+    status: { normal: '', partial: '部分执行', fallback: '系统回退', degraded: '执行降级', unrecorded: '未记录' },
+    requested: '原请求', effective: '实际执行', rejected: '未执行', details: '查看完整策略',
+  },
+  en: {
+    label: 'Strategy', unrecorded: 'Not recorded', unrecordedHelp: 'This report was created before strategy metadata was saved',
+    source: { request: 'Selected this time', default: 'System default', config: 'Fixed configuration', auto: 'Auto routing', fallback: 'System fallback', unknown: 'Not recorded' },
+    status: { normal: '', partial: 'Partial execution', fallback: 'System fallback', degraded: 'Execution degraded', unrecorded: 'Not recorded' },
+    requested: 'Requested', effective: 'Executed', rejected: 'Not executed', details: 'View all strategies',
+  },
+  ko: {
+    label: '분석 전략', unrecorded: '기록되지 않음', unrecordedHelp: '이 보고서 생성 당시 전략 정보가 저장되지 않았습니다',
+    source: { request: '이번에 지정', default: '시스템 기본값', config: '고정 설정', auto: '자동 라우팅', fallback: '시스템 대체', unknown: '기록되지 않음' },
+    status: { normal: '', partial: '일부 실행', fallback: '시스템 대체', degraded: '실행 저하', unrecorded: '기록되지 않음' },
+    requested: '요청', effective: '실제 실행', rejected: '미실행', details: '전체 전략 보기',
+  },
+} as const;
 
 const normalizeBoardName = (value?: string): string =>
   (value || '').trim().replace(/\s+/g, ' ');
@@ -178,6 +200,32 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
     .filter((board) => normalizeBoardName(board?.name).length > 0);
   const boardSignals = buildBoardSignalMaps(details);
   const preparedRelatedBoards = buildPreparedRelatedBoards(relatedBoards, boardSignals);
+  const strategyText = STRATEGY_TEXT[reportLanguage];
+  const strategyExecution = meta.strategyExecution;
+  const effectiveStrategies = strategyExecution?.effective || [];
+  const firstStrategy = effectiveStrategies[0];
+  const additionalStrategyCount = Math.max(0, effectiveStrategies.length - 1);
+  const strategySource = strategyExecution?.source || 'unknown';
+  const strategyStatus = strategyExecution?.status || 'unrecorded';
+  const showStrategyDetails = effectiveStrategies.length > 1
+    || Boolean(strategyExecution?.rejected?.length)
+    || ['partial', 'fallback', 'degraded'].includes(strategyStatus);
+  const strategyVariant = ['fallback', 'partial'].includes(strategyStatus)
+    ? 'warning'
+    : strategyStatus === 'degraded'
+      ? 'danger'
+      : 'info';
+  const renderStrategyBadge = (expandable: boolean) => (
+    <Badge variant={strategyVariant} className="max-w-full flex-wrap shadow-none">
+      <Layers3 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+      <span className="min-w-0 max-w-44 truncate sm:max-w-64">
+        {strategyText.label}: {firstStrategy?.displayName}
+        {additionalStrategyCount > 0 ? ` +${additionalStrategyCount}` : ''}
+      </span>
+      <span className="max-w-28 shrink-0 truncate opacity-75">· {strategyText.source[strategySource]}</span>
+      {expandable ? <ChevronDown className="h-3 w-3 shrink-0 transition-transform group-open:rotate-180" aria-hidden="true" /> : null}
+    </Badge>
+  );
 
   const getPriceChangeStyle = (changePct: number | undefined): React.CSSProperties | undefined => {
     if (changePct === undefined || changePct === null) {
@@ -281,6 +329,51 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
                     <Badge variant="warning" className="shrink-0 shadow-none" aria-label={partialBarLabel}>
                       {partialBarLabel}
                     </Badge>
+                  ) : null}
+                  {firstStrategy && showStrategyDetails ? (
+                    <details className="group min-w-0 max-w-full">
+                      <summary
+                        className="flex max-w-full cursor-pointer list-none items-center gap-1 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan/30"
+                        aria-label={strategyText.details}
+                      >
+                        {renderStrategyBadge(true)}
+                      </summary>
+                      <div className="mt-2 w-[min(20rem,calc(100vw-3rem))] max-w-full rounded-md border border-border bg-card p-3 text-xs shadow-lg">
+                        <p className="font-medium text-foreground">
+                          {strategyText.source[strategySource]}
+                          {strategyText.status[strategyStatus] ? ` · ${strategyText.status[strategyStatus]}` : ''}
+                        </p>
+                        <div className="mt-2 space-y-1 text-secondary-text">
+                          {effectiveStrategies.map((item) => (
+                            <p key={item.id}>{strategyText.effective}: {item.displayName}{item.status === 'degraded' ? ` · ${strategyText.status.degraded}` : ''}</p>
+                          ))}
+                          {(strategyExecution?.requested || []).map((item) => (
+                            <p key={`requested-${item.id}`}>{strategyText.requested}: {item.displayName}</p>
+                          ))}
+                          {(strategyExecution?.rejected || []).map((item) => (
+                            <p key={`rejected-${item.id}`}>{strategyText.rejected}: {item.id}</p>
+                          ))}
+                        </div>
+                        {strategyExecution?.message ? <p className="mt-2 text-muted-text">{strategyExecution.message}</p> : null}
+                      </div>
+                    </details>
+                  ) : firstStrategy ? (
+                    renderStrategyBadge(false)
+                  ) : (
+                    <Badge
+                      variant="default"
+                      className="shrink-0 gap-1.5 font-normal opacity-75 shadow-none"
+                      title={strategyText.unrecordedHelp}
+                    >
+                      <CircleHelp className="h-3.5 w-3.5" aria-hidden="true" />
+                      {strategyText.label}: {strategyText.unrecorded}
+                    </Badge>
+                  )}
+                  {['partial', 'fallback', 'degraded'].includes(strategyStatus) ? (
+                    <span className="inline-flex items-center gap-1 text-xs text-warning" role="status">
+                      <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+                      {strategyText.status[strategyStatus]}
+                    </span>
                   ) : null}
                   <span className="text-xs text-muted-text flex items-center gap-1">
                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

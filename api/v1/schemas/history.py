@@ -122,6 +122,33 @@ class NewsIntelResponse(BaseModel):
     })
 
 
+class StrategyExecutionItem(BaseModel):
+    """一次分析实际选择或请求的策略快照。"""
+
+    id: str
+    display_name: str
+    status: Literal["selected", "degraded", "not_executed"] = "selected"
+
+
+class StrategyExecutionRejectedItem(BaseModel):
+    """未能执行的请求策略。"""
+
+    id: str
+    reason: str = "unavailable"
+
+
+class StrategyExecution(BaseModel):
+    """服务端最终策略执行快照。"""
+
+    schema_version: int = 1
+    status: Literal["normal", "partial", "fallback", "degraded", "unrecorded"]
+    source: Literal["request", "default", "config", "auto", "fallback", "unknown"]
+    requested: List[StrategyExecutionItem] = Field(default_factory=list)
+    effective: List[StrategyExecutionItem] = Field(default_factory=list)
+    rejected: List[StrategyExecutionRejectedItem] = Field(default_factory=list)
+    message: Optional[str] = None
+
+
 class ReportMeta(BaseModel):
     """报告元信息"""
 
@@ -143,6 +170,10 @@ class ReportMeta(BaseModel):
     market_phase_summary: Optional[MarketPhaseSummary] = Field(
         None,
         description="本次分析市场阶段低敏摘要",
+    )
+    strategy_execution: Optional[StrategyExecution] = Field(
+        None,
+        description="本次分析由服务端记录的实际策略执行快照；旧报告可能为空",
     )
 
 

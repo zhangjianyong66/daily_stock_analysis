@@ -219,6 +219,7 @@ const HomePage: React.FC = () => {
   const [marketReviewPayload, setMarketReviewPayload] = useState<MarketReviewPayload | null>(null);
   const [analysisSkills, setAnalysisSkills] = useState<SkillInfo[]>([]);
   const [selectedStrategyId, setSelectedStrategyId] = useState('');
+  const [strategySelectionTouched, setStrategySelectionTouched] = useState(false);
   const [strategyMenuOpen, setStrategyMenuOpen] = useState(false);
   const [runFlowDrawer, setRunFlowDrawer] = useState<RunFlowDrawerState>({ open: false });
   const [duplicateBannerVisible, setDuplicateBannerVisible] = useState(false);
@@ -450,6 +451,7 @@ const HomePage: React.FC = () => {
   }, []);
   const selectStrategy = useCallback((strategyId: string) => {
     setSelectedStrategyId(strategyId);
+    setStrategySelectionTouched(true);
     setStrategyMenuOpen(false);
   }, []);
   const focusStrategyItem = useCallback((index: number) => {
@@ -770,15 +772,24 @@ const HomePage: React.FC = () => {
       return;
     }
 
+    const recordedStrategyIds = selectedReport.meta.strategyExecution?.effective
+      .map((item) => item.id.trim())
+      .filter(Boolean);
+    const reanalysisSkills = strategySelectionTouched
+      ? selectedAnalysisSkills
+      : recordedStrategyIds?.length
+        ? recordedStrategyIds
+        : undefined;
+
     void submitAnalysis({
       stockCode: selectedReport.meta.stockCode,
       stockName: selectedReport.meta.stockName,
       originalQuery: selectedReport.meta.stockCode,
       selectionSource: 'manual',
       forceRefresh: true,
-      skills: selectedAnalysisSkills,
+      skills: reanalysisSkills,
     });
-  }, [selectedAnalysisSkills, selectedReport, submitAnalysis]);
+  }, [selectedAnalysisSkills, selectedReport, strategySelectionTouched, submitAnalysis]);
 
   const openTaskRunFlow = useCallback((task: TaskInfo) => {
     const stock = task.stockName || task.stockCode || task.taskId;

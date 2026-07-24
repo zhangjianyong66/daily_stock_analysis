@@ -56,6 +56,7 @@ from src.analysis_context_pack_overview import (
     sanitize_context_snapshot_for_api,
 )
 from src.market_phase_summary import extract_market_phase_summary
+from src.schemas.strategy_execution import localize_strategy_execution
 
 logger = logging.getLogger(__name__)
 
@@ -522,6 +523,15 @@ def get_history_detail(
             change_pct=change_pct,
             model_used=normalize_model_used(result.get("model_used")),
             market_phase_summary=market_phase_summary,
+            strategy_execution=(
+                localize_strategy_execution(raw_result.get("strategy_execution"), report_language)
+                or localize_strategy_execution(
+                    context_snapshot.get("strategy_execution")
+                    if isinstance(context_snapshot, dict)
+                    else None,
+                    report_language,
+                )
+            ),
         )
         
         summary = ReportSummary(

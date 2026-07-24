@@ -41,6 +41,7 @@ from src.schemas.decision_action import (
     display_operation_advice_for_result,
     localize_action_label,
 )
+from src.schemas.strategy_execution import format_strategy_execution_text
 from src.utils.data_processing import (
     normalize_model_used,
     signal_attribution_has_content,
@@ -241,6 +242,7 @@ def render(
         "localize_conflict_severity": localize_conflict_severity,
         "normalize_strategy_synthesis_payload": normalize_strategy_synthesis_payload,
         "strategy_invalid_opinion_count": strategy_invalid_opinion_count,
+        "format_strategy_execution_text": format_strategy_execution_text,
         "signal_attribution_has_content": signal_attribution_has_content,
         "signal_attribution_weight_items": signal_attribution_weight_items,
     }

@@ -2117,6 +2117,87 @@ describe('HomePage', () => {
     expect(vi.mocked(analysisApi.analyzeAsync).mock.calls[0]?.[0]).not.toHaveProperty('reportLanguage');
   });
 
+  it('reuses the effective strategy recorded by the historical report when reanalyzing', async () => {
+    vi.mocked(historyApi.getList).mockResolvedValue({
+      total: 1,
+      page: 1,
+      limit: 20,
+      items: [historyItem],
+    });
+    vi.mocked(historyApi.getDetail).mockResolvedValue({
+      ...historyReport,
+      meta: {
+        ...historyReport.meta,
+        strategyExecution: {
+          schemaVersion: 1,
+          status: 'normal',
+          source: 'auto',
+          requested: [],
+          effective: [{ id: 'box_oscillation', displayName: '箱体震荡', status: 'selected' }],
+          rejected: [],
+        },
+      },
+    });
+    vi.mocked(analysisApi.analyzeAsync).mockResolvedValue({ taskId: 'task-re-strategy', status: 'pending' });
+
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: '重新分析' }));
+
+    expect(analysisApi.analyzeAsync).toHaveBeenCalledWith(expect.objectContaining({
+      stockCode: '600519',
+      skills: ['box_oscillation'],
+    }));
+  });
+
+  it('lets an explicit homepage strategy selection override the historical strategy', async () => {
+    vi.mocked(agentApi.getSkills).mockResolvedValue({
+      default_skill_id: 'bull_trend',
+      skills: [{ id: 'growth_quality', name: '成长质量', description: '成长股分析' }],
+    });
+    vi.mocked(historyApi.getList).mockResolvedValue({
+      total: 1,
+      page: 1,
+      limit: 20,
+      items: [historyItem],
+    });
+    vi.mocked(historyApi.getDetail).mockResolvedValue({
+      ...historyReport,
+      meta: {
+        ...historyReport.meta,
+        strategyExecution: {
+          schemaVersion: 1,
+          status: 'normal',
+          source: 'auto',
+          requested: [],
+          effective: [{ id: 'box_oscillation', displayName: '箱体震荡', status: 'selected' }],
+          rejected: [],
+        },
+      },
+    });
+    vi.mocked(analysisApi.analyzeAsync).mockResolvedValue({ taskId: 'task-re-override', status: 'pending' });
+
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('趋势维持强势');
+    fireEvent.click(screen.getByRole('button', { name: '策略' }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /成长质量/ }));
+    fireEvent.click(screen.getByRole('button', { name: '重新分析' }));
+
+    expect(analysisApi.analyzeAsync).toHaveBeenCalledWith(expect.objectContaining({
+      stockCode: '600519',
+      skills: ['growth_quality'],
+    }));
+  });
+
   it('passes the selected strategy when submitting stock analysis', async () => {
     vi.mocked(agentApi.getSkills).mockResolvedValue({
       default_skill_id: 'bull_trend',

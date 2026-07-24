@@ -60,6 +60,7 @@ from src.schemas.decision_action import (
     display_decision_type_for_result,
     display_operation_advice_for_result,
 )
+from src.schemas.strategy_execution import format_strategy_execution_text
 from bot.models import BotMessage
 from src.utils.sanitize import sanitize_diagnostic_text
 from src.utils.data_processing import (
@@ -935,6 +936,9 @@ class NotificationService(
                     f"{labels['score_label']} {r.sentiment_score} | "
                     f"{localize_trend_prediction(r.trend_prediction, report_language)}"
                 )
+                report_lines.append(
+                    f"  - {format_strategy_execution_text(getattr(r, 'strategy_execution', None), report_language)}"
+                )
         else:
             report_lines.extend([f"## 📈 {labels['report_title']}", ""])
             # 逐个股票的详细分析
@@ -944,6 +948,8 @@ class NotificationService(
 
                 report_lines.extend([
                     f"### {emoji} {self._get_display_name(result, report_language)} ({result.code})",
+                    "",
+                    f"> {format_strategy_execution_text(getattr(result, 'strategy_execution', None), report_language)}",
                     "",
                     f"**{labels['action_advice_label']}：{signal_text}** | "
                     f"**{labels['score_label']}：{result.sentiment_score}** | "
@@ -1318,6 +1324,8 @@ class NotificationService(
                 report_lines.extend([
                     f"## {signal_emoji} {stock_name} ({result.code})",
                     "",
+                    f"> {format_strategy_execution_text(getattr(result, 'strategy_execution', None), report_language)}",
+                    "",
                 ])
                 # ========== 舆情与基本面概览（放在最前面）==========
                 intel = dashboard.get('intelligence', {}) if dashboard else {}
@@ -1648,6 +1656,8 @@ class NotificationService(
                 # 标题行：信号等级 + 股票名称
                 lines.append(f"### {signal_emoji} **{signal_text}** | {stock_name}({result.code})")
                 lines.append("")
+                lines.append(format_strategy_execution_text(getattr(result, 'strategy_execution', None), report_language))
+                lines.append("")
 
                 # 核心决策（一句话）
                 one_sentence = core.get('one_sentence', result.analysis_summary) if core else result.analysis_summary
@@ -1891,6 +1901,7 @@ class NotificationService(
                 f"{signal_text} | "
                 f"{labels['score_label']} {r.sentiment_score} | {one}"
             )
+            lines.append(f"- {format_strategy_execution_text(getattr(r, 'strategy_execution', None), report_language)}")
         lines.append("")
         lines.append(f"*{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*")
         models = self._collect_models_used(results)
@@ -1926,6 +1937,8 @@ class NotificationService(
             f"## {signal_emoji} {stock_name} ({result.code})",
             "",
             f"> {report_date} | {labels['score_label']}: **{result.sentiment_score}** | {localize_trend_prediction(result.trend_prediction, report_language)}",
+            "",
+            f"> {format_strategy_execution_text(getattr(result, 'strategy_execution', None), report_language)}",
             "",
         ]
 

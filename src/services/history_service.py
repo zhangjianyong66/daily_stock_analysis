@@ -47,6 +47,7 @@ from src.schemas.decision_action import (
     display_action_fields_for_result,
     display_operation_advice_for_result,
 )
+from src.schemas.strategy_execution import format_strategy_execution_text
 from src.schemas.decision_scale import extract_decision_guardrail_reason
 from src.utils.sniper_points import find_sniper_points
 from src.utils.data_processing import (
@@ -890,6 +891,7 @@ class HistoryService:
                 current_price=raw_result.get("current_price"),
                 change_pct=raw_result.get("change_pct"),
                 model_used=raw_result.get("model_used"),
+                strategy_execution=raw_result.get("strategy_execution"),
             )
             guardrail_reason = extract_decision_guardrail_reason(raw_result)
             if guardrail_reason:
@@ -951,6 +953,8 @@ class HistoryService:
             f"# 📊 {name_escaped} ({result.code}) {labels['report_title']}",
             "",
             f"> {analysis_date_label}: **{report_date}** | {report_time_label}: {report_time}",
+            "",
+            f"> {format_strategy_execution_text(getattr(result, 'strategy_execution', None), report_language)}",
             "",
             "---",
             "",

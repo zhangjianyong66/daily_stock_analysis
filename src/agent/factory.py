@@ -27,9 +27,10 @@ Usage::
 import copy
 import logging
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from src.config import AGENT_MAX_STEPS_DEFAULT
+from src.schemas.strategy_execution import build_strategy_execution_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,7 @@ class SkillPromptState:
     skill_instructions: str
     default_skill_policy: str
     technical_skill_policy: str
+    strategy_execution: dict[str, Any]
 
 
 def _coerce_config_int(raw_value: object, default: int, *, field_name: str | None = None) -> int:
@@ -117,7 +119,7 @@ def _resolve_selected_skill_ids(
     configured_skills: Optional[List[str]],
     default_skills: List[str],
     available_skill_ids: set[str],
-) -> tuple[List[str], bool]:
+) -> tuple[List[str], bool, List[str]]:
     """Resolve active skill ids and whether they came from a valid explicit selection."""
     selection_source = None
     raw_skill_ids = None
@@ -128,7 +130,7 @@ def _resolve_selected_skill_ids(
         selection_source = "config"
         raw_skill_ids = configured_skills
     else:
-        return list(default_skills), False
+        return list(default_skills), False, []
 
     selected_skill_ids, unknown_skill_ids = _normalize_skill_ids(
         raw_skill_ids,
@@ -141,7 +143,7 @@ def _resolve_selected_skill_ids(
             unknown_skill_ids,
         )
     if selected_skill_ids:
-        return selected_skill_ids, True
+        return selected_skill_ids, True, unknown_skill_ids
 
     if raw_skill_ids:
         logger.warning(
@@ -149,7 +151,21 @@ def _resolve_selected_skill_ids(
             selection_source,
             default_skills,
         )
-    return list(default_skills), False
+    return list(default_skills), False, unknown_skill_ids
+
+
+def _strategy_snapshot_items(skill_ids: List[str], skill_catalog: List[object]) -> List[dict[str, str]]:
+    names = {
+        str(getattr(skill, "name", "")).strip(): str(
+            getattr(skill, "display_name", "") or getattr(skill, "name", "")
+        ).strip()
+        for skill in skill_catalog
+        if str(getattr(skill, "name", "")).strip()
+    }
+    return [
+        {"id": skill_id, "display_name": names.get(skill_id, skill_id)}
+        for skill_id in skill_ids
+    ]
 
 
 def _should_use_legacy_default_prompt(
@@ -263,7 +279,7 @@ def resolve_skill_prompt_state(config=None, skills: Optional[List[str]] = None) 
         skill_catalog,
         available_skill_ids=available_skill_ids or None,
     )
-    skills_to_activate, explicit_skill_selection = _resolve_selected_skill_ids(
+    skills_to_activate, explicit_skill_selection, unknown_skill_ids = _resolve_selected_skill_ids(
         requested_skills=skills,
         configured_skills=configured_skills,
         default_skills=default_skills,
@@ -279,6 +295,42 @@ def resolve_skill_prompt_state(config=None, skills: Optional[List[str]] = None) 
     skill_manager.activate(skills_to_activate)
     logger.info("[AgentFactory] Activated skills: %s", skills_to_activate)
 
+    requested_ids = [
+        str(skill_id).strip()
+        for skill_id in (skills if skills is not None else configured_skills or [])
+        if isinstance(skill_id, str) and str(skill_id).strip()
+    ]
+    if skills is not None and requested_ids:
+        source = "request"
+    elif skills is None and configured_skills:
+        source = "config"
+    else:
+        source = "default"
+    if requested_ids and unknown_skill_ids and not explicit_skill_selection:
+        status = "fallback"
+        source = "fallback"
+        message = "Requested strategies were unavailable; system defaults were used."
+    elif unknown_skill_ids:
+        status = "partial"
+        message = "Some requested strategies were unavailable and were not executed."
+    else:
+        status = "normal"
+        message = None
+
+    requested_items = _strategy_snapshot_items(requested_ids, skill_catalog)
+    for item in requested_items:
+        if item["id"] in unknown_skill_ids:
+            item["status"] = "not_executed"
+
+    strategy_execution = build_strategy_execution_snapshot(
+        requested=requested_items,
+        effective=_strategy_snapshot_items(skills_to_activate, skill_catalog),
+        source=source,
+        status=status,
+        rejected=[{"id": skill_id, "reason": "unavailable"} for skill_id in unknown_skill_ids],
+        message=message,
+    )
+
     return SkillPromptState(
         skill_manager=skill_manager,
         skills_to_activate=skills_to_activate,
@@ -291,6 +343,7 @@ def resolve_skill_prompt_state(config=None, skills: Optional[List[str]] = None) 
         technical_skill_policy=get_default_technical_skill_policy(
             explicit_skill_selection=not use_legacy_default_prompt,
         ),
+        strategy_execution=strategy_execution,
     )
 
 
@@ -339,6 +392,7 @@ def build_agent_executor(config=None, skills: Optional[List[str]] = None):
             llm_adapter,
             skill_manager,
             technical_skill_policy=prompt_state.technical_skill_policy,
+            strategy_execution=prompt_state.strategy_execution,
         )
 
     from src.agent.executor import AgentExecutor
@@ -362,6 +416,7 @@ def build_agent_executor(config=None, skills: Optional[List[str]] = None):
             0,
             field_name="agent_orchestrator_timeout_s",
         ),
+        strategy_execution=prompt_state.strategy_execution,
     )
 
 
@@ -423,7 +478,15 @@ def build_agent_chat_executor(config=None, skills: Optional[List[str]] = None):
     )
 
 
-def _build_orchestrator(config, registry, llm_adapter, skill_manager, *, technical_skill_policy: str = ""):
+def _build_orchestrator(
+    config,
+    registry,
+    llm_adapter,
+    skill_manager,
+    *,
+    technical_skill_policy: str = "",
+    strategy_execution: Optional[dict[str, Any]] = None,
+):
     """Build and return an :class:`AgentOrchestrator` (multi-agent mode).
 
     The orchestrator presents the same ``run()`` / ``chat()`` interface as
@@ -447,6 +510,7 @@ def _build_orchestrator(config, registry, llm_adapter, skill_manager, *, technic
         mode=mode,
         skill_manager=skill_manager,
         config=config,
+        strategy_execution=strategy_execution,
     )
 
 

@@ -218,6 +218,7 @@ class AnalysisService:
                 "change_pct": result.change_pct,
                 "model_used": getattr(result, "model_used", None),
                 "market_phase_summary": market_phase_summary,
+                "strategy_execution": getattr(result, "strategy_execution", None),
             },
             "summary": {
                 "analysis_summary": result.analysis_summary,

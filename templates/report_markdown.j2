@@ -24,6 +24,8 @@
 
 ## {{ e.signal_emoji }} {{ e.stock_name }} ({{ result.code }})
 
+> {{ format_strategy_execution_text(result.strategy_execution, report_language) }}
+
 {% if intel %}
 ### 📰 {{ labels.info_heading }}
 

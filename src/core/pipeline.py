@@ -765,6 +765,13 @@ class StockAnalysisPipeline:
 
             # Step 7.6: chip_structure fallback (Issue #589) and unavailable collapse
             if result:
+                if getattr(result, "strategy_execution", None) is None:
+                    from src.agent.factory import resolve_skill_prompt_state
+
+                    result.strategy_execution = resolve_skill_prompt_state(
+                        self.config,
+                        skills=self.analysis_skills,
+                    ).strategy_execution
                 normalize_chip_structure_availability(result, chip_data)
 
             # Step 7.7: price_position fallback
@@ -818,6 +825,9 @@ class StockAnalysisPipeline:
                         analysis_context_pack_overview=analysis_context_pack_overview,
                         market_phase_summary=market_phase_summary,
                     )
+                    strategy_execution = getattr(result, "strategy_execution", None)
+                    if strategy_execution is not None:
+                        context_snapshot["strategy_execution"] = strategy_execution
                     result.diagnostic_context_snapshot = context_snapshot
                     saved_history_id = self.db.save_analysis_history(
                         result=result,
@@ -1544,6 +1554,9 @@ class StockAnalysisPipeline:
                         analysis_context_pack_overview=analysis_context_pack_overview,
                         market_phase_summary=market_phase_summary,
                     )
+                    strategy_execution = getattr(result, "strategy_execution", None)
+                    if strategy_execution is not None:
+                        agent_context_snapshot["strategy_execution"] = strategy_execution
                     result.diagnostic_context_snapshot = agent_context_snapshot
                     agent_context_snapshot["stock_name"] = resolved_stock_name
                     saved_history_id = self.db.save_analysis_history(
@@ -1810,6 +1823,7 @@ class StockAnalysisPipeline:
             error_message=agent_result.error or None,
             data_sources=f"agent:{agent_result.provider}",
             model_used=agent_result.model or None,
+            strategy_execution=getattr(agent_result, "strategy_execution", None),
         )
 
         if agent_result.success and agent_result.dashboard:
@@ -2447,6 +2461,9 @@ class StockAnalysisPipeline:
             snapshot["diagnostics"] = diagnostic_snapshot
         if self.analysis_skills is not None:
             snapshot["skills"] = list(self.analysis_skills)
+        strategy_execution = enhanced_context.get("strategy_execution")
+        if strategy_execution is not None:
+            snapshot["strategy_execution"] = strategy_execution
         return snapshot
 
     def _extract_decision_signal_after_history_save(

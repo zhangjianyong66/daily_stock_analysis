@@ -59,6 +59,7 @@ class AgentResult:
     backend: str = ""
     error_code: Optional[str] = None
     usage: Optional[Dict[str, Any]] = None
+    strategy_execution: Optional[Dict[str, Any]] = None
 
 
 # ============================================================
@@ -656,6 +657,7 @@ class AgentExecutor:
         use_legacy_default_prompt: bool = False,
         max_steps: int = 10,
         timeout_seconds: Optional[float] = None,
+        strategy_execution: Optional[Dict[str, Any]] = None,
     ):
         self.tool_registry = tool_registry
         self.llm_adapter = llm_adapter
@@ -664,6 +666,7 @@ class AgentExecutor:
         self.use_legacy_default_prompt = use_legacy_default_prompt
         self.max_steps = max_steps
         self.timeout_seconds = timeout_seconds
+        self.strategy_execution = dict(strategy_execution) if isinstance(strategy_execution, dict) else None
 
     def run(self, task: str, context: Optional[Dict[str, Any]] = None) -> AgentResult:
         """Execute the agent loop for a given task.
@@ -838,6 +841,7 @@ class AgentExecutor:
                 model=model_str,
                 error=None if dashboard else "Failed to parse dashboard JSON from agent response",
                 messages=loop_result.messages,
+                strategy_execution=self.strategy_execution,
             )
 
         return AgentResult(
@@ -851,6 +855,7 @@ class AgentExecutor:
             model=model_str,
             error=loop_result.error,
             messages=loop_result.messages,
+            strategy_execution=self.strategy_execution,
         )
 
     def _build_user_message(self, task: str, context: Optional[Dict[str, Any]] = None) -> str:

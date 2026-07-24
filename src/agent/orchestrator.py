@@ -66,6 +66,7 @@ from src.agent.stream_events import stream_event
 from src.agent.tools.registry import ToolRegistry
 from src.config import AGENT_MAX_STEPS_DEFAULT, get_config
 from src.report_language import normalize_report_language
+from src.schemas.strategy_execution import build_strategy_execution_snapshot, normalize_strategy_execution
 
 if TYPE_CHECKING:
     from src.agent.executor import AgentResult
@@ -120,6 +121,7 @@ class AgentOrchestrator:
         mode: str = "standard",
         skill_manager=None,
         config=None,
+        strategy_execution: Optional[Dict[str, Any]] = None,
     ):
         self.tool_registry = tool_registry
         self.llm_adapter = llm_adapter
@@ -131,6 +133,7 @@ class AgentOrchestrator:
         self.skill_manager = skill_manager
         self.config = config
         self.strategy_engine = StrategyEngine()
+        self.strategy_execution = normalize_strategy_execution(strategy_execution)
 
     def _get_timeout_seconds(self) -> int:
         """Return the pipeline timeout in seconds.
@@ -361,6 +364,7 @@ class AgentOrchestrator:
             model=orch_result.model,
             error=orch_result.error,
             runtime_facts=orch_result.runtime_facts,
+            strategy_execution=self.strategy_execution,
         )
 
     def chat(
@@ -453,6 +457,7 @@ class AgentOrchestrator:
             model=orch_result.model,
             error=orch_result.error,
             runtime_facts=orch_result.runtime_facts,
+            strategy_execution=self.strategy_execution,
         )
 
     # -----------------------------------------------------------------
@@ -631,6 +636,8 @@ class AgentOrchestrator:
             #   - intel / risk (standard support stages)
             #   - skill agents (specialist evaluation, optional)
             if result.status == StageStatus.FAILED:
+                if agent.agent_name in getattr(self, "_skill_agent_names", set()):
+                    self._mark_strategy_degraded(agent.agent_name)
                 if not self._is_non_critical_stage(agent.agent_name):
                     logger.error("[Orchestrator] critical stage '%s' failed: %s", agent.agent_name, result.error)
                     return OrchestratorResult(
@@ -778,6 +785,8 @@ class AgentOrchestrator:
             if not selected:
                 return []
 
+            self._record_routed_strategies(ctx, selected[:3])
+
             from src.agent.skills.skill_agent import SkillAgent
             agents = []
             for skill_id in selected[:3]:  # cap at 3 concurrent skills
@@ -790,6 +799,51 @@ class AgentOrchestrator:
         except Exception as exc:
             logger.warning("[Orchestrator] failed to build skill agents: %s", exc)
             return []
+
+    def _record_routed_strategies(self, ctx: AgentContext, selected: List[str]) -> None:
+        """Replace factory defaults with the strategies selected after technical routing."""
+        current = normalize_strategy_execution(self.strategy_execution) or {}
+        requested = current.get("requested") or []
+        source = current.get("source", "default")
+        if not requested and str(getattr(self.config, "agent_skill_routing", "auto")).lower() == "auto":
+            source = "auto"
+        names = {}
+        if self.skill_manager is not None:
+            names = {
+                str(getattr(skill, "name", "")).strip(): str(
+                    getattr(skill, "display_name", "") or getattr(skill, "name", "")
+                ).strip()
+                for skill in self.skill_manager.list_skills()
+            }
+        self.strategy_execution = build_strategy_execution_snapshot(
+            requested=requested,
+            effective=[{"id": skill_id, "display_name": names.get(skill_id, skill_id)} for skill_id in selected],
+            source=source,
+            status=current.get("status", "normal"),
+            rejected=current.get("rejected") or [],
+            message=current.get("message"),
+        )
+        ctx.meta["strategy_execution"] = self.strategy_execution
+
+    def _mark_strategy_degraded(self, agent_name: str) -> None:
+        snapshot = normalize_strategy_execution(self.strategy_execution)
+        if snapshot is None:
+            return
+        skill_id = str(agent_name or "").removeprefix("skill_").removeprefix("strategy_")
+        effective = []
+        for item in snapshot.get("effective") or []:
+            normalized = dict(item)
+            if normalized.get("id") == skill_id:
+                normalized["status"] = "degraded"
+            effective.append(normalized)
+        self.strategy_execution = build_strategy_execution_snapshot(
+            requested=snapshot.get("requested") or [],
+            effective=effective,
+            source=snapshot.get("source", "unknown"),
+            status="degraded",
+            rejected=snapshot.get("rejected") or [],
+            message="A selected strategy agent failed or timed out; no replacement strategy was claimed.",
+        )
 
     def _build_skill_agents(self, ctx: AgentContext) -> list:
         """Compatibility wrapper for legacy imports."""

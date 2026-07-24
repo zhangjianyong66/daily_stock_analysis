@@ -52,6 +52,7 @@ from api.v1.schemas.history import (
     ReportSummary,
     ReportStrategy,
     ReportDetails,
+    StrategyExecution,
 )
 from api.v1.schemas.run_flow import RunFlowSnapshot
 from data_provider.base import canonical_stock_code, normalize_stock_code
@@ -93,6 +94,7 @@ from src.utils.data_processing import (
     extract_market_structure_detail_field,
     extract_realtime_detail_fields,
 )
+from src.schemas.strategy_execution import localize_strategy_execution
 
 logger = logging.getLogger(__name__)
 
@@ -1209,6 +1211,10 @@ def get_analysis_status(task_id: str) -> TaskStatus:
                     current_price=current_price,
                     change_pct=change_pct,
                     market_phase_summary=market_phase_summary,
+                    strategy_execution=localize_strategy_execution(
+                        raw_dict.get("strategy_execution"),
+                        report_language,
+                    ),
                 ),
                 summary=ReportSummary(
                     sentiment_score=record.sentiment_score,
@@ -1371,6 +1377,10 @@ def _build_analysis_report(
         change_pct=change_pct,
         model_used=normalize_model_used(meta_data.get("model_used")),
         market_phase_summary=market_phase_summary,
+        strategy_execution=localize_strategy_execution(
+            meta_data.get("strategy_execution"),
+            report_language,
+        ),
     )
 
     def _looks_like_raw_result_payload(candidate: Any) -> bool:
@@ -1385,6 +1395,7 @@ def _build_analysis_report(
                 or "model_used" in candidate
                 or "dashboard" in candidate
                 or "action" in candidate
+                or "strategy_execution" in candidate
             )
         )
 
@@ -1415,6 +1426,13 @@ def _build_analysis_report(
         guardrail_reason=_extract_guardrail_reason(raw_result_data),
         align_with_score=True,
     )
+    if meta.strategy_execution is None:
+        localized_strategy_execution = localize_strategy_execution(
+            raw_result_data.get("strategy_execution"),
+            report_language,
+        )
+        if localized_strategy_execution is not None:
+            meta.strategy_execution = StrategyExecution.model_validate(localized_strategy_execution)
 
     summary = ReportSummary(
         analysis_summary=summary_data.get("analysis_summary"),

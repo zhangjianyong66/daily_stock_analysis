@@ -66,6 +66,30 @@ export interface MarketPhaseSummary {
   warnings: string[];
 }
 
+export type StrategyExecutionStatus = 'normal' | 'partial' | 'fallback' | 'degraded' | 'unrecorded';
+export type StrategyExecutionSource = 'request' | 'default' | 'config' | 'auto' | 'fallback' | 'unknown';
+
+export interface StrategyExecutionItem {
+  id: string;
+  displayName: string;
+  status: 'selected' | 'degraded' | 'not_executed';
+}
+
+export interface StrategyExecutionRejectedItem {
+  id: string;
+  reason: string;
+}
+
+export interface StrategyExecution {
+  schemaVersion: number;
+  status: StrategyExecutionStatus;
+  source: StrategyExecutionSource;
+  requested: StrategyExecutionItem[];
+  effective: StrategyExecutionItem[];
+  rejected: StrategyExecutionRejectedItem[];
+  message?: string;
+}
+
 /** Report metadata */
 export interface ReportMeta {
   id?: number;  // Analysis history record ID, present for persisted reports
@@ -79,6 +103,7 @@ export interface ReportMeta {
   changePct?: number;
   modelUsed?: string;  // 历史元数据快照，仅用于展示，不用于运行时模型选择
   marketPhaseSummary?: MarketPhaseSummary | null;
+  strategyExecution?: StrategyExecution | null;
 }
 
 /** Sentiment label */
