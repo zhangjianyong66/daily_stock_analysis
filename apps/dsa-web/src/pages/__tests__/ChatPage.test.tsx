@@ -813,6 +813,25 @@ describe('ChatPage', () => {
     expect(screen.getByRole('checkbox', { name: '通用分析' })).not.toBeChecked();
   });
 
+  it('does not send the visually selected default until the user changes the skill selection', async () => {
+    render(
+      <MemoryRouter initialEntries={['/chat']}>
+        <ChatPage />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole('checkbox', { name: '趋势分析' })).toBeChecked();
+    fireEvent.change(screen.getByPlaceholderText(/分析 600519/), {
+      target: { value: '分析 600519' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+
+    await waitFor(() => expect(mockStartStream).toHaveBeenCalled());
+    const request = mockStartStream.mock.calls.at(-1)?.[0];
+    expect(request).toEqual(expect.objectContaining({ message: '分析 600519' }));
+    expect(request).not.toHaveProperty('skills');
+  });
+
   it('sends multiple selected skills in order', async () => {
     mockGetSkills.mockResolvedValue({
       skills: [
@@ -926,7 +945,7 @@ describe('ChatPage', () => {
     expect(skillPanel).toHaveClass('hidden');
   });
 
-  it('omits skills when all concrete skills are cleared', async () => {
+  it('sends an explicit empty skill list when all concrete skills are cleared', async () => {
     render(
       <MemoryRouter initialEntries={['/chat']}>
         <ChatPage />
@@ -946,7 +965,7 @@ describe('ChatPage', () => {
     });
     const lastCall = mockStartStream.mock.calls[mockStartStream.mock.calls.length - 1];
     expect(lastCall[0]).toEqual(expect.objectContaining({ message: '分析 AAPL' }));
-    expect(lastCall[0]).not.toHaveProperty('skills');
+    expect(lastCall[0]).toEqual(expect.objectContaining({ skills: [] }));
     expect(lastCall[1]).toEqual(expect.objectContaining({
       skillNames: ['通用'],
       skillName: '通用',

@@ -185,6 +185,7 @@ class StockAnalysisPipeline:
         save_context_snapshot: Optional[bool] = None,
         progress_callback: Optional[Callable[[int, str], None]] = None,
         analysis_skills: Optional[List[str]] = None,
+        skill_prompt_state: Optional[Any] = None,
         analysis_phase: str = "auto",
         portfolio_context: Optional[Dict[str, Any]] = None,
         daily_market_context_enabled: Optional[bool] = None,
@@ -208,6 +209,14 @@ class StockAnalysisPipeline:
         )
         self.progress_callback = progress_callback
         self.analysis_skills = list(analysis_skills) if analysis_skills is not None else None
+        if skill_prompt_state is None:
+            from src.agent.factory import resolve_skill_prompt_state
+
+            skill_prompt_state = resolve_skill_prompt_state(
+                self.config,
+                skills=self.analysis_skills,
+            )
+        self.skill_prompt_state = skill_prompt_state
         self.analysis_phase = analysis_phase or "auto"
         self.portfolio_context = dict(portfolio_context) if isinstance(portfolio_context, dict) else None
         self.daily_market_context_enabled = (
@@ -222,7 +231,13 @@ class StockAnalysisPipeline:
         self.fetcher_manager = DataFetcherManager()
         # 不再单独创建 akshare_fetcher，统一使用 fetcher_manager 获取增强数据
         self.trend_analyzer = StockTrendAnalyzer()  # 技术分析器
-        self.analyzer = GeminiAnalyzer(config=self.config, skills=self.analysis_skills)
+        self.analyzer = GeminiAnalyzer(
+            config=self.config,
+            skills=self.analysis_skills,
+            skill_instructions=self.skill_prompt_state.skill_instructions,
+            default_skill_policy=self.skill_prompt_state.default_skill_policy,
+            use_legacy_default_prompt=self.skill_prompt_state.use_legacy_default_prompt,
+        )
         self.notifier = NotificationService(source_message=source_message)
         self.market_structure_service = MarketStructureService(fetcher_manager=self.fetcher_manager)
         self.market_hotspot_service: Optional[MarketHotspotService] = None
@@ -472,13 +487,16 @@ class StockAnalysisPipeline:
             # switched to Agent mode (which is slower and more expensive).
             use_agent = getattr(self.config, 'agent_mode', False)
             if not use_agent:
-                if self.analysis_skills:
+                if self.analysis_skills and self.skill_prompt_state.selection_source == "request":
                     use_agent = True
                     logger.info(f"{stock_name}({code}) Auto-enabled agent mode due to request skills: {self.analysis_skills}")
             if not use_agent:
-                # Auto-enable agent mode when specific skills are configured (e.g., scheduled task with strategy)
-                configured_skills = getattr(self.config, 'agent_skills', [])
-                if configured_skills and configured_skills != ['all']:
+                configured_skills = self.skill_prompt_state.skills_to_activate
+                if (
+                    self.skill_prompt_state.selection_source in {"saved", "agent_skills"}
+                    and configured_skills
+                    and configured_skills != ["all"]
+                ):
                     use_agent = True
                     logger.info(f"{stock_name}({code}) Auto-enabled agent mode due to configured skills: {configured_skills}")
 
@@ -766,12 +784,7 @@ class StockAnalysisPipeline:
             # Step 7.6: chip_structure fallback (Issue #589) and unavailable collapse
             if result:
                 if getattr(result, "strategy_execution", None) is None:
-                    from src.agent.factory import resolve_skill_prompt_state
-
-                    result.strategy_execution = resolve_skill_prompt_state(
-                        self.config,
-                        skills=self.analysis_skills,
-                    ).strategy_execution
+                    result.strategy_execution = self.skill_prompt_state.strategy_execution
                 normalize_chip_structure_availability(result, chip_data)
 
             # Step 7.7: price_position fallback
@@ -1311,13 +1324,12 @@ class StockAnalysisPipeline:
             from src.agent.factory import build_agent_executor
             report_language = normalize_report_language(getattr(self.config, "report_language", "zh"))
 
-            requested_skills = (
-                self.analysis_skills
-                if self.analysis_skills is not None
-                else (getattr(self.config, 'agent_skills', None) or None)
-            )
             # Build executor from shared factory (ToolRegistry and SkillManager prototype are cached)
-            executor = build_agent_executor(self.config, requested_skills)
+            executor = build_agent_executor(
+                self.config,
+                self.analysis_skills,
+                prompt_state=self.skill_prompt_state,
+            )
 
             # Build initial context to avoid redundant tool calls
             initial_context = {

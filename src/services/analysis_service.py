@@ -57,6 +57,7 @@ class AnalysisService:
         send_notification: bool = True,
         progress_callback: Optional[Callable[[int, str], None]] = None,
         skills: Optional[List[str]] = None,
+        skill_prompt_state: Optional[Any] = None,
         analysis_phase: str = "auto",
         query_source: str = "api",
         portfolio_context: Optional[Dict[str, Any]] = None,
@@ -114,6 +115,7 @@ class AnalysisService:
                 query_source=query_source or "api",
                 progress_callback=progress_callback,
                 analysis_skills=skills,
+                skill_prompt_state=skill_prompt_state,
                 analysis_phase=analysis_phase,
                 portfolio_context=portfolio_context,
             )

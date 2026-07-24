@@ -54,6 +54,8 @@ vi.mock('../../api/systemConfig', () => ({
   systemConfigApi: {
     getSetupStatus: vi.fn(),
     getWatchlist: vi.fn().mockResolvedValue([]),
+    getConfig: vi.fn(),
+    update: vi.fn(),
   },
 }));
 
@@ -216,6 +218,20 @@ describe('HomePage', () => {
       tasks: [],
     });
     vi.mocked(systemConfigApi.getWatchlist).mockResolvedValue([]);
+    vi.mocked(systemConfigApi.getConfig).mockResolvedValue({
+      configVersion: 'config-v1',
+      maskToken: '******',
+      items: [],
+    });
+    vi.mocked(systemConfigApi.update).mockResolvedValue({
+      success: true,
+      configVersion: 'config-v2',
+      appliedCount: 1,
+      skippedMaskedCount: 0,
+      reloadTriggered: true,
+      updatedKeys: ['DEFAULT_ANALYSIS_SKILL'],
+      warnings: [],
+    });
     vi.mocked(agentApi.getSkills).mockResolvedValue({ skills: [], default_skill_id: '' });
     vi.mocked(historyApi.getDiagnostics).mockResolvedValue({
       status: 'unknown',
@@ -2238,6 +2254,156 @@ describe('HomePage', () => {
     });
   });
 
+  it('shows the effective default without sending it as an explicit homepage selection', async () => {
+    vi.mocked(agentApi.getSkills).mockResolvedValue({
+      default_skill_id: 'bull_trend',
+      default_skill_source: 'saved',
+      saved_default_skill_id: 'bull_trend',
+      default_skill_warning: null,
+      skills: [
+        { id: 'bull_trend', name: '默认多头趋势', description: '趋势分析' },
+        { id: 'growth_quality', name: '成长质量', description: '成长股分析' },
+      ],
+    });
+    vi.mocked(historyApi.getList).mockResolvedValue({
+      total: 0,
+      page: 1,
+      limit: 20,
+      items: [],
+    });
+    vi.mocked(analysisApi.analyzeAsync).mockResolvedValue({
+      taskId: 'task-default-1',
+      status: 'pending',
+    });
+
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('button', { name: '策略' })).toHaveTextContent('默认多头趋势');
+    const input = screen.getByPlaceholderText('输入股票代码或名称，如 600519、贵州茅台、AAPL');
+    fireEvent.change(input, { target: { value: '600519' } });
+    fireEvent.click(screen.getByRole('button', { name: '分析' }));
+
+    await waitFor(() => expect(analysisApi.analyzeAsync).toHaveBeenCalled());
+    const request = vi.mocked(analysisApi.analyzeAsync).mock.calls.at(-1)?.[0];
+    expect(request).toEqual(expect.objectContaining({ stockCode: '600519' }));
+    expect(request).not.toHaveProperty('skills');
+  });
+
+  it('sets a strategy as the server default and refreshes the default marker', async () => {
+    vi.mocked(agentApi.getSkills)
+      .mockResolvedValueOnce({
+        default_skill_id: 'bull_trend',
+        default_skill_source: 'builtin',
+        saved_default_skill_id: '',
+        default_skill_warning: null,
+        skills: [
+          { id: 'bull_trend', name: '默认多头趋势', description: '趋势分析' },
+          { id: 'growth_quality', name: '成长质量', description: '成长股分析' },
+        ],
+      })
+      .mockResolvedValueOnce({
+        default_skill_id: 'growth_quality',
+        default_skill_source: 'saved',
+        saved_default_skill_id: 'growth_quality',
+        default_skill_warning: null,
+        skills: [
+          { id: 'bull_trend', name: '默认多头趋势', description: '趋势分析' },
+          { id: 'growth_quality', name: '成长质量', description: '成长股分析' },
+        ],
+      });
+
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: '策略' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '将“成长质量”设为默认策略' }));
+
+    await waitFor(() => {
+      expect(systemConfigApi.update).toHaveBeenCalledWith({
+        configVersion: 'config-v1',
+        maskToken: '******',
+        reloadNow: true,
+        items: [{ key: 'DEFAULT_ANALYSIS_SKILL', value: 'growth_quality' }],
+      });
+    });
+    expect(await screen.findByText('默认策略已更新')).toBeInTheDocument();
+    expect(screen.getByRole('menuitemradio', { name: /成长质量.*默认/ })).toBeInTheDocument();
+  });
+
+  it('restores following the system default from the homepage menu', async () => {
+    vi.mocked(agentApi.getSkills)
+      .mockResolvedValueOnce({
+        default_skill_id: 'growth_quality',
+        default_skill_source: 'saved',
+        saved_default_skill_id: 'growth_quality',
+        default_skill_warning: null,
+        skills: [
+          { id: 'bull_trend', name: '默认多头趋势', description: '趋势分析' },
+          { id: 'growth_quality', name: '成长质量', description: '成长股分析' },
+        ],
+      })
+      .mockResolvedValueOnce({
+        default_skill_id: 'bull_trend',
+        default_skill_source: 'builtin',
+        saved_default_skill_id: '',
+        default_skill_warning: null,
+        skills: [
+          { id: 'bull_trend', name: '默认多头趋势', description: '趋势分析' },
+          { id: 'growth_quality', name: '成长质量', description: '成长股分析' },
+        ],
+      });
+
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: '策略' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '恢复跟随系统默认' }));
+
+    await waitFor(() => {
+      expect(systemConfigApi.update).toHaveBeenCalledWith(expect.objectContaining({
+        items: [{ key: 'DEFAULT_ANALYSIS_SKILL', value: '' }],
+      }));
+    });
+    expect(await screen.findByText('默认策略已更新')).toBeInTheDocument();
+  });
+
+  it('keeps the existing default marker when quick-save fails', async () => {
+    vi.mocked(agentApi.getSkills).mockResolvedValue({
+      default_skill_id: 'bull_trend',
+      default_skill_source: 'saved',
+      saved_default_skill_id: 'bull_trend',
+      default_skill_warning: null,
+      skills: [
+        { id: 'bull_trend', name: '默认多头趋势', description: '趋势分析' },
+        { id: 'growth_quality', name: '成长质量', description: '成长股分析' },
+      ],
+    });
+    vi.mocked(systemConfigApi.update).mockRejectedValue(new Error('保存失败'));
+
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: '策略' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '将“成长质量”设为默认策略' }));
+
+    expect(await screen.findByText('默认策略未保存')).toBeInTheDocument();
+    expect(agentApi.getSkills).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('menuitemradio', { name: /默认多头趋势.*默认/ })).toBeInTheDocument();
+  });
+
   it('supports keyboard navigation in the strategy menu', async () => {
     vi.mocked(agentApi.getSkills).mockResolvedValue({
       default_skill_id: 'bull_trend',
@@ -2262,7 +2428,7 @@ describe('HomePage', () => {
     const trigger = await screen.findByRole('button', { name: '策略' });
     fireEvent.keyDown(trigger, { key: 'ArrowDown' });
 
-    const defaultOption = await screen.findByRole('menuitemradio', { name: /默认策略/ });
+    const defaultOption = await screen.findByRole('menuitemradio', { name: /跟随系统默认/ });
     await waitFor(() => {
       expect(defaultOption).toHaveFocus();
     });

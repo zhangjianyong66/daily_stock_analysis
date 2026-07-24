@@ -59,6 +59,25 @@ class SkillPromptState:
     default_skill_policy: str
     technical_skill_policy: str
     strategy_execution: dict[str, Any]
+    selection_source: str
+    default_skill_id: str
+    default_skill_source: str
+    saved_default_skill_id: str
+    default_skill_warning: Optional[str]
+
+
+@dataclass
+class DefaultSkillResolution:
+    """Resolved deployment default before an optional per-request override."""
+
+    effective_ids: List[str]
+    selection_source: str
+    public_source: str
+    saved_default_skill_id: str
+    rejected_ids: List[str]
+    warning: Optional[str]
+    explicit_config_selection: bool
+    default_skill_id: str
 
 
 def _coerce_config_int(raw_value: object, default: int, *, field_name: str | None = None) -> int:
@@ -111,47 +130,6 @@ def _normalize_skill_ids(
             unknown.append(cleaned)
 
     return normalized, unknown
-
-
-def _resolve_selected_skill_ids(
-    *,
-    requested_skills: Optional[List[str]],
-    configured_skills: Optional[List[str]],
-    default_skills: List[str],
-    available_skill_ids: set[str],
-) -> tuple[List[str], bool, List[str]]:
-    """Resolve active skill ids and whether they came from a valid explicit selection."""
-    selection_source = None
-    raw_skill_ids = None
-    if requested_skills is not None:
-        selection_source = "request"
-        raw_skill_ids = requested_skills
-    elif configured_skills is not None:
-        selection_source = "config"
-        raw_skill_ids = configured_skills
-    else:
-        return list(default_skills), False, []
-
-    selected_skill_ids, unknown_skill_ids = _normalize_skill_ids(
-        raw_skill_ids,
-        available_skill_ids=available_skill_ids,
-    )
-    if unknown_skill_ids:
-        logger.warning(
-            "[AgentFactory] Ignoring unknown %s skill ids: %s",
-            selection_source,
-            unknown_skill_ids,
-        )
-    if selected_skill_ids:
-        return selected_skill_ids, True, unknown_skill_ids
-
-    if raw_skill_ids:
-        logger.warning(
-            "[AgentFactory] No valid %s skills remain after validation; falling back to default skills: %s",
-            selection_source,
-            default_skills,
-        )
-    return list(default_skills), False, unknown_skill_ids
 
 
 def _strategy_snapshot_items(skill_ids: List[str], skill_catalog: List[object]) -> List[dict[str, str]]:
@@ -211,6 +189,34 @@ def get_tool_registry():
     return _TOOL_REGISTRY
 
 
+def load_skill_manager(config=None):
+    """Load a fresh SkillManager for the supplied runtime configuration."""
+    if config is None:
+        from src.config import get_config
+
+        config = get_config()
+
+    from src.agent.skills.base import SkillManager
+
+    skill_manager = SkillManager()
+    skill_manager.load_builtin_skills()
+    custom_dir = getattr(config, "agent_skill_dir", None)
+    if custom_dir:
+        try:
+            skill_manager.load_custom_skills(custom_dir)
+        except Exception as exc:
+            logger.warning("[AgentFactory] Failed to load custom skills from %s: %s", custom_dir, exc)
+    return skill_manager
+
+
+def reset_skill_manager_cache() -> None:
+    """Drop the cached catalog after a runtime configuration reload."""
+    global _SKILL_MANAGER_PROTOTYPE, _SKILL_MANAGER_CUSTOM_DIR
+
+    _SKILL_MANAGER_PROTOTYPE = None
+    _SKILL_MANAGER_CUSTOM_DIR = _SENTINEL
+
+
 def get_skill_manager(config=None):
     """Return a deepcopy-clone of the cached SkillManager prototype.
 
@@ -232,25 +238,110 @@ def get_skill_manager(config=None):
     if _SKILL_MANAGER_PROTOTYPE is not None and current_custom_dir == _SKILL_MANAGER_CUSTOM_DIR:
         return copy.deepcopy(_SKILL_MANAGER_PROTOTYPE)
 
-    from src.agent.skills.base import SkillManager
-
     if _SKILL_MANAGER_PROTOTYPE is not None:
         logger.info("[AgentFactory] SkillManager prototype invalidated (agent_skill_dir changed: %r -> %r)",
                     _SKILL_MANAGER_CUSTOM_DIR, current_custom_dir)
 
-    skill_manager = SkillManager()
-    skill_manager.load_builtin_skills()
-
-    if current_custom_dir:
-        try:
-            skill_manager.load_custom_skills(current_custom_dir)
-        except Exception as exc:
-            logger.warning("[AgentFactory] Failed to load custom skills from %s: %s", current_custom_dir, exc)
+    skill_manager = load_skill_manager(config)
 
     _SKILL_MANAGER_PROTOTYPE = skill_manager
     _SKILL_MANAGER_CUSTOM_DIR = current_custom_dir
     logger.info("[AgentFactory] SkillManager prototype cached (%d skills)", len(skill_manager._skills))
     return copy.deepcopy(_SKILL_MANAGER_PROTOTYPE)
+
+
+def resolve_default_skill_selection(
+    config=None,
+    *,
+    skill_catalog: Optional[List[object]] = None,
+) -> DefaultSkillResolution:
+    """Resolve DEFAULT_ANALYSIS_SKILL > AGENT_SKILLS > metadata default."""
+    if config is None:
+        from src.config import get_config
+
+        config = get_config()
+
+    from src.agent.skills.defaults import get_default_active_skill_ids, get_primary_default_skill_id
+
+    catalog = list(skill_catalog) if skill_catalog is not None else list(get_skill_manager(config).list_skills())
+    available_skill_ids = {
+        str(getattr(skill, "name", "")).strip()
+        for skill in catalog
+        if str(getattr(skill, "name", "")).strip()
+    }
+    invocable_skill_ids = {
+        str(getattr(skill, "name", "")).strip()
+        for skill in catalog
+        if str(getattr(skill, "name", "")).strip() and getattr(skill, "user_invocable", True)
+    }
+    builtin_defaults = get_default_active_skill_ids(
+        catalog,
+        available_skill_ids=available_skill_ids or None,
+    )
+    primary_default_id = get_primary_default_skill_id(
+        catalog,
+        available_skill_ids=available_skill_ids or None,
+    )
+
+    saved_default = str(getattr(config, "default_analysis_skill", "") or "").strip()
+    rejected_ids: List[str] = []
+    warning = None
+    if saved_default:
+        if saved_default in invocable_skill_ids:
+            return DefaultSkillResolution(
+                effective_ids=[saved_default],
+                selection_source="saved",
+                public_source="saved",
+                saved_default_skill_id=saved_default,
+                rejected_ids=[],
+                warning=None,
+                explicit_config_selection=True,
+                default_skill_id=saved_default,
+            )
+        rejected_ids.append(saved_default)
+        warning = f"Saved default strategy '{saved_default}' is unavailable; a fallback default is in use."
+        logger.warning("[AgentFactory] Saved default strategy is unavailable: %s", saved_default)
+
+    configured_skills = getattr(config, "agent_skills", None) or []
+    normalized_config, unknown_config = _normalize_skill_ids(
+        configured_skills,
+        available_skill_ids=available_skill_ids,
+    )
+    for skill_id in unknown_config:
+        if skill_id not in rejected_ids:
+            rejected_ids.append(skill_id)
+    if unknown_config:
+        logger.warning("[AgentFactory] Ignoring unknown AGENT_SKILLS ids: %s", unknown_config)
+
+    if normalized_config:
+        displayed_default_id = next(
+            (skill_id for skill_id in normalized_config if skill_id != "all"),
+            primary_default_id,
+        )
+        return DefaultSkillResolution(
+            effective_ids=normalized_config,
+            selection_source="agent_skills",
+            public_source="fallback" if rejected_ids else "agent_skills",
+            saved_default_skill_id=saved_default,
+            rejected_ids=rejected_ids,
+            warning=warning,
+            explicit_config_selection=True,
+            default_skill_id=displayed_default_id,
+        )
+
+    if configured_skills and warning is None:
+        warning = "Configured AGENT_SKILLS are unavailable; the built-in default is in use."
+
+    return DefaultSkillResolution(
+        effective_ids=builtin_defaults,
+        selection_source="builtin",
+        public_source="fallback" if rejected_ids else "builtin",
+        saved_default_skill_id=saved_default,
+        rejected_ids=rejected_ids,
+        warning=warning,
+        explicit_config_selection=False,
+        default_skill_id=primary_default_id or next(iter(builtin_defaults), ""),
+    )
 
 
 def resolve_skill_prompt_state(config=None, skills: Optional[List[str]] = None) -> SkillPromptState:
@@ -260,7 +351,6 @@ def resolve_skill_prompt_state(config=None, skills: Optional[List[str]] = None) 
         config = get_config()
 
     from src.agent.skills.defaults import (
-        get_default_active_skill_ids,
         get_default_technical_skill_policy,
         get_default_trading_skill_policy,
     )
@@ -272,19 +362,32 @@ def resolve_skill_prompt_state(config=None, skills: Optional[List[str]] = None) 
         for skill in skill_catalog
         if str(getattr(skill, "name", "")).strip()
     }
-    configured_skills = getattr(config, "agent_skills", None)
-    if configured_skills == []:
-        configured_skills = None
-    default_skills = get_default_active_skill_ids(
-        skill_catalog,
-        available_skill_ids=available_skill_ids or None,
-    )
-    skills_to_activate, explicit_skill_selection, unknown_skill_ids = _resolve_selected_skill_ids(
-        requested_skills=skills,
-        configured_skills=configured_skills,
-        default_skills=default_skills,
+    default_resolution = resolve_default_skill_selection(config, skill_catalog=skill_catalog)
+    requested_ids = [
+        str(skill_id).strip()
+        for skill_id in (skills or [])
+        if isinstance(skill_id, str) and str(skill_id).strip()
+    ]
+    requested_valid, requested_unknown = _normalize_skill_ids(
+        skills,
         available_skill_ids=available_skill_ids,
     )
+    if requested_unknown:
+        logger.warning("[AgentFactory] Ignoring unknown request skill ids: %s", requested_unknown)
+
+    if requested_valid:
+        skills_to_activate = requested_valid
+        explicit_skill_selection = True
+        selection_source = "request"
+        unknown_skill_ids = requested_unknown
+    else:
+        skills_to_activate = list(default_resolution.effective_ids)
+        explicit_skill_selection = default_resolution.explicit_config_selection
+        selection_source = default_resolution.selection_source
+        unknown_skill_ids = list(default_resolution.rejected_ids)
+        for skill_id in requested_unknown:
+            if skill_id not in unknown_skill_ids:
+                unknown_skill_ids.append(skill_id)
 
     use_legacy_default_prompt = _should_use_legacy_default_prompt(
         skills_to_activate=skills_to_activate,
@@ -295,27 +398,41 @@ def resolve_skill_prompt_state(config=None, skills: Optional[List[str]] = None) 
     skill_manager.activate(skills_to_activate)
     logger.info("[AgentFactory] Activated skills: %s", skills_to_activate)
 
-    requested_ids = [
-        str(skill_id).strip()
-        for skill_id in (skills if skills is not None else configured_skills or [])
-        if isinstance(skill_id, str) and str(skill_id).strip()
-    ]
-    if skills is not None and requested_ids:
+    if not requested_ids:
+        if default_resolution.saved_default_skill_id:
+            requested_ids = [default_resolution.saved_default_skill_id]
+        elif default_resolution.selection_source == "agent_skills":
+            requested_ids = [
+                str(skill_id).strip()
+                for skill_id in (getattr(config, "agent_skills", None) or [])
+                if isinstance(skill_id, str) and str(skill_id).strip()
+            ]
+
+    if requested_valid:
         source = "request"
-    elif skills is None and configured_skills:
-        source = "config"
+        if requested_unknown:
+            status = "partial"
+            message = "Some requested strategies were unavailable and were not executed."
+        else:
+            status = "normal"
+            message = None
     else:
-        source = "default"
-    if requested_ids and unknown_skill_ids and not explicit_skill_selection:
-        status = "fallback"
-        source = "fallback"
-        message = "Requested strategies were unavailable; system defaults were used."
-    elif unknown_skill_ids:
-        status = "partial"
-        message = "Some requested strategies were unavailable and were not executed."
-    else:
-        status = "normal"
-        message = None
+        if default_resolution.public_source in {"saved", "agent_skills"}:
+            source = "config"
+        elif default_resolution.public_source == "fallback" or requested_unknown:
+            source = "fallback"
+        else:
+            source = "default"
+        if requested_unknown or default_resolution.public_source == "fallback":
+            status = "fallback"
+            source = "fallback"
+            message = default_resolution.warning or "Requested strategies were unavailable; system defaults were used."
+        elif unknown_skill_ids:
+            status = "partial"
+            message = "Some configured strategies were unavailable and were not executed."
+        else:
+            status = "normal"
+            message = None
 
     requested_items = _strategy_snapshot_items(requested_ids, skill_catalog)
     for item in requested_items:
@@ -344,10 +461,20 @@ def resolve_skill_prompt_state(config=None, skills: Optional[List[str]] = None) 
             explicit_skill_selection=not use_legacy_default_prompt,
         ),
         strategy_execution=strategy_execution,
+        selection_source=selection_source,
+        default_skill_id=default_resolution.default_skill_id,
+        default_skill_source=default_resolution.public_source,
+        saved_default_skill_id=default_resolution.saved_default_skill_id,
+        default_skill_warning=default_resolution.warning,
     )
 
 
-def build_agent_executor(config=None, skills: Optional[List[str]] = None):
+def build_agent_executor(
+    config=None,
+    skills: Optional[List[str]] = None,
+    *,
+    prompt_state: Optional[SkillPromptState] = None,
+):
     """Build and return a configured AgentExecutor (or future orchestrator).
 
     When ``AGENT_ARCH=multi``, this returns an orchestrator that manages
@@ -373,7 +500,11 @@ def build_agent_executor(config=None, skills: Optional[List[str]] = None):
     from src.agent.llm_adapter import LLMToolAdapter
 
     registry = get_tool_registry()
-    prompt_state = resolve_skill_prompt_state(config, skills=skills)
+    prompt_state = (
+        copy.deepcopy(prompt_state)
+        if prompt_state is not None
+        else resolve_skill_prompt_state(config, skills=skills)
+    )
     skill_manager = prompt_state.skill_manager
     logger.info(
         "[AgentFactory] Resolved skill prompt state: skills=%s (arch=%s, explicit=%s, legacy_default_prompt=%s)",
@@ -393,6 +524,11 @@ def build_agent_executor(config=None, skills: Optional[List[str]] = None):
             skill_manager,
             technical_skill_policy=prompt_state.technical_skill_policy,
             strategy_execution=prompt_state.strategy_execution,
+            fixed_default_skills=(
+                prompt_state.skills_to_activate
+                if prompt_state.saved_default_skill_id
+                else None
+            ),
         )
 
     from src.agent.executor import AgentExecutor
@@ -486,6 +622,7 @@ def _build_orchestrator(
     *,
     technical_skill_policy: str = "",
     strategy_execution: Optional[dict[str, Any]] = None,
+    fixed_default_skills: Optional[List[str]] = None,
 ):
     """Build and return an :class:`AgentOrchestrator` (multi-agent mode).
 
@@ -511,6 +648,7 @@ def _build_orchestrator(
         skill_manager=skill_manager,
         config=config,
         strategy_execution=strategy_execution,
+        fixed_default_skills=fixed_default_skills,
     )
 
 

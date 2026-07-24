@@ -881,6 +881,7 @@ class Config:
     agent_mode: bool = False
     _agent_mode_explicit: bool = False  # True when AGENT_MODE was explicitly set in env
     agent_max_steps: int = AGENT_MAX_STEPS_DEFAULT
+    default_analysis_skill: str = ""
     agent_skills: List[str] = field(default_factory=list)
     agent_skill_dir: Optional[str] = None
     agent_nl_routing: bool = False  # Enable natural language routing in bot dispatcher
@@ -1795,6 +1796,7 @@ class Config:
                 field_name='AGENT_MAX_STEPS',
                 minimum=1,
             ),
+            default_analysis_skill=(os.getenv('DEFAULT_ANALYSIS_SKILL') or '').strip(),
             agent_skills=[s.strip() for s in os.getenv('AGENT_SKILLS', '').split(',') if s.strip()],
             agent_skill_dir=os.getenv('AGENT_SKILL_DIR') or os.getenv('AGENT_STRATEGY_DIR'),
             agent_nl_routing=os.getenv('AGENT_NL_ROUTING', 'false').lower() == 'true',

@@ -319,6 +319,7 @@ gh run view <run_id> --log-failed
   - 修改 `src/services/image_stock_extractor.py` 中 `EXTRACT_PROMPT` 时，要在 PR 描述中附完整最新 prompt。
   - 个股分析实际策略以 `AnalysisResult.strategy_execution` 为唯一事实源，并通过 `raw_result` JSON 持久化；Web 实时/历史报告、Markdown 和通知只能读取该快照，不得从当前配置或 LLM 报告文字反推旧报告策略。
   - 策略快照须区分系统默认、固定配置、手动请求、自动路由、系统回退、部分执行和执行降级；旧报告缺失快照时明确显示“策略未记录”，不得伪造默认值。
+  - 个股默认策略统一按“单次明确选择 > `DEFAULT_ANALYSIS_SKILL` > `AGENT_SKILLS` > 内置 metadata 默认”解析；保存默认只接受当前可调用单值，失效时可解释回退。异步任务在入队时冻结解析结果，首页/问股首次视觉选中默认值时不得伪造显式 `skills`，大盘复盘不读取该配置。
 
 - 工作流 / 发布 / 打包：
   - 修改自动 tag、Release、Docker 发布、日常分析或桌面端打包流程时，要评估触发条件、产物路径、权限边界和回滚方式。

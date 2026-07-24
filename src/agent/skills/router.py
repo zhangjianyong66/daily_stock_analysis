@@ -4,8 +4,9 @@ SkillRouter — rule-based skill selection.
 
 Selects which trading skills to apply based on:
 1. User-explicit request (highest priority)
-2. Market regime detection from technical data in ``AgentContext``
-3. Centralised default fallback
+2. Saved deployment default strategy
+3. Market regime detection from technical data in ``AgentContext``
+4. Centralised default fallback
 """
 
 from __future__ import annotations
@@ -25,6 +26,13 @@ logger = logging.getLogger(__name__)
 class SkillRouter:
     """Select applicable skills for a given analysis context."""
 
+    def __init__(self, fixed_default_skills: Optional[List[str]] = None):
+        self.fixed_default_skills = (
+            list(fixed_default_skills)
+            if fixed_default_skills is not None
+            else None
+        )
+
     def select_skills(
         self,
         ctx: AgentContext,
@@ -34,6 +42,22 @@ class SkillRouter:
         if requested_skills:
             logger.info("[SkillRouter] user-requested skills: %s", requested_skills)
             return requested_skills[:max_count]
+
+        if self.fixed_default_skills is not None:
+            saved_default = [skill_id for skill_id in self.fixed_default_skills if skill_id != "all"][:max_count]
+            if not saved_default:
+                available_skills = self._get_available_skills()
+                available_ids = {skill.name for skill in available_skills}
+                saved_default = get_default_router_skill_ids(
+                    available_skills or None,
+                    max_count=max_count,
+                    available_skill_ids=available_ids or None,
+                )
+        else:
+            saved_default = self._get_saved_default_skills(max_count=max_count)
+        if saved_default is not None:
+            logger.info("[SkillRouter] using saved default strategy resolution: %s", saved_default)
+            return saved_default
 
         routing_mode = self._get_routing_mode()
         if routing_mode == "manual":
@@ -128,6 +152,35 @@ class SkillRouter:
         except Exception:
             logger.warning("Failed to get available skills", exc_info=True)
             return []
+
+    @classmethod
+    def _get_saved_default_skills(cls, max_count: int) -> Optional[List[str]]:
+        """Pin routing when a saved default exists, including its fallback."""
+        try:
+            from src.agent.factory import resolve_default_skill_selection
+            from src.config import get_config
+
+            config = get_config()
+            if not str(getattr(config, "default_analysis_skill", "") or "").strip():
+                return None
+
+            available_skills = cls._get_available_skills()
+            resolution = resolve_default_skill_selection(
+                config,
+                skill_catalog=available_skills or None,
+            )
+            selected = [skill_id for skill_id in resolution.effective_ids if skill_id != "all"][:max_count]
+            if selected:
+                return selected
+            available_ids = {skill.name for skill in available_skills}
+            return get_default_router_skill_ids(
+                available_skills or None,
+                max_count=max_count,
+                available_skill_ids=available_ids or None,
+            )
+        except Exception:
+            logger.warning("Failed to resolve saved default strategy", exc_info=True)
+            return None
 
     @classmethod
     def _get_manual_skills(cls, max_count: int) -> List[str]:

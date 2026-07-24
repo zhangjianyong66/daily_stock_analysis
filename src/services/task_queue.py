@@ -84,6 +84,7 @@ class TaskInfo:
     query_source: str = "api"
     portfolio_context: Optional[Dict[str, Any]] = None
     skills: Optional[List[str]] = None
+    skill_prompt_state: Optional[Any] = field(default=None, repr=False, compare=False)
     report_language: Optional[str] = None
     trace_id: Optional[str] = None
     flow_events: List[Dict[str, Any]] = field(default_factory=list)
@@ -480,6 +481,14 @@ class AnalysisTaskQueue:
             if normalized
         ]
 
+        from src.agent.factory import resolve_skill_prompt_state
+        from src.config import get_config
+
+        task_prompt_state_template = resolve_skill_prompt_state(
+            get_config(),
+            skills=list(skills) if skills is not None else None,
+        )
+
         expired: List[TaskInfo] = []
         with self._data_lock:
             expired = self._expire_stale_tasks_locked()
@@ -492,6 +501,7 @@ class AnalysisTaskQueue:
 
                 task_id = uuid.uuid4().hex
                 task_skills = list(skills) if skills is not None else None
+                task_prompt_state = copy.deepcopy(task_prompt_state_template)
                 task_info = TaskInfo(
                     task_id=task_id,
                     trace_id=task_id,
@@ -506,6 +516,7 @@ class AnalysisTaskQueue:
                     query_source=query_source or "api",
                     portfolio_context=dict(portfolio_context) if isinstance(portfolio_context, dict) else None,
                     skills=task_skills,
+                    skill_prompt_state=task_prompt_state,
                     report_language=report_language,
                 )
                 self._tasks[task_id] = task_info
@@ -521,6 +532,7 @@ class AnalysisTaskQueue:
                         notify,
                         task_skills,
                         report_language,
+                        task_prompt_state,
                     )
                 except Exception:
                     # Roll back the current batch to avoid partial submission.
@@ -785,6 +797,7 @@ class AnalysisTaskQueue:
         notify: bool = True,
         skills: Optional[List[str]] = None,
         report_language: Optional[str] = None,
+        skill_prompt_state: Optional[Any] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         执行分析任务（在线程池中运行）
@@ -843,6 +856,7 @@ class AnalysisTaskQueue:
                 send_notification=notify,
                 progress_callback=_on_progress,
                 skills=skills,
+                skill_prompt_state=skill_prompt_state,
                 analysis_phase=analysis_phase,
                 query_source=query_source,
                 portfolio_context=portfolio_context,

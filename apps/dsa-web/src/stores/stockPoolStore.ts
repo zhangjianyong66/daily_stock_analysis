@@ -915,7 +915,7 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
         selectionSource,
         notify,
         forceRefresh,
-        skills,
+        ...(skills !== undefined && { skills }),
         ...(options?.reportLanguage !== undefined && { reportLanguage: options.reportLanguage }),
       });
 

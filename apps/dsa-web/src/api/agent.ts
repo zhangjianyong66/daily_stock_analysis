@@ -49,6 +49,9 @@ export interface SkillInfo {
 export interface SkillsResponse {
   skills: SkillInfo[];
   default_skill_id: string;
+  default_skill_source?: 'saved' | 'agent_skills' | 'builtin' | 'fallback';
+  saved_default_skill_id?: string;
+  default_skill_warning?: string | null;
 }
 
 export interface ChatSessionItem {

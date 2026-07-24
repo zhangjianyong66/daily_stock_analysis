@@ -306,7 +306,46 @@ class AgentSkillsEndpointTestCase(unittest.TestCase):
             payload = asyncio.run(agent.get_skills()).model_dump()
 
         self.assertEqual(payload["default_skill_id"], "bull_trend")
+        self.assertEqual(payload["default_skill_source"], "builtin")
+        self.assertEqual(payload["saved_default_skill_id"], "")
+        self.assertIsNone(payload["default_skill_warning"])
         self.assertEqual([item["id"] for item in payload["skills"]], ["bull_trend", "chan_theory"])
+
+    def test_skills_endpoint_reports_saved_default_and_unavailable_fallback(self) -> None:
+        config = _build_config()
+        config.default_analysis_skill = "removed_skill"
+        config.agent_skills = ["chan_theory"]
+        skill_manager = SimpleNamespace(
+            list_skills=lambda: [
+                SimpleNamespace(
+                    name="bull_trend",
+                    display_name="多头趋势",
+                    description="趋势跟随",
+                    user_invocable=True,
+                    default_priority=20,
+                    default_active=True,
+                ),
+                SimpleNamespace(
+                    name="chan_theory",
+                    display_name="缠论",
+                    description="结构分析",
+                    user_invocable=True,
+                    default_priority=40,
+                    default_active=False,
+                ),
+            ]
+        )
+
+        with patch("api.v1.endpoints.agent.get_config", return_value=config), patch(
+            "src.agent.factory.get_skill_manager",
+            return_value=skill_manager,
+        ):
+            payload = asyncio.run(agent.get_skills()).model_dump()
+
+        self.assertEqual(payload["default_skill_id"], "chan_theory")
+        self.assertEqual(payload["default_skill_source"], "fallback")
+        self.assertEqual(payload["saved_default_skill_id"], "removed_skill")
+        self.assertIn("unavailable", payload["default_skill_warning"])
 
     def test_legacy_strategies_endpoint_preserves_legacy_field_names(self) -> None:
         config = _build_config()

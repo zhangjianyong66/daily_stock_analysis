@@ -194,6 +194,42 @@ class TaskQueueConfigSyncTestCase(unittest.TestCase):
 
         self.assertEqual(queue.analysis_task_timeout_seconds, 7)
 
+    def test_submitted_task_keeps_frozen_default_strategy_resolution(self) -> None:
+        queue = AnalysisTaskQueue(max_workers=1)
+        runtime_config = SimpleNamespace(default_analysis_skill="box_oscillation")
+        resolved_state = SimpleNamespace(
+            selection_source="saved",
+            skills_to_activate=["box_oscillation"],
+            strategy_execution={
+                "source": "config",
+                "effective": [{"id": "box_oscillation"}],
+            },
+        )
+        captured = {}
+
+        def submit_stub(_callable, *args):
+            captured["prompt_state"] = args[-1]
+            return SimpleNamespace(cancel=lambda: None)
+
+        queue.executor.submit = submit_stub
+        with patch("src.config.get_config", return_value=runtime_config), patch(
+            "src.agent.factory.resolve_skill_prompt_state",
+            return_value=resolved_state,
+        ):
+            queue.submit_task("600519")
+
+        runtime_config.default_analysis_skill = "bull_trend"
+        resolved_state.skills_to_activate[0] = "bull_trend"
+        resolved_state.strategy_execution["effective"][0]["id"] = "bull_trend"
+
+        frozen = captured["prompt_state"]
+        self.assertEqual(frozen.selection_source, "saved")
+        self.assertEqual(frozen.skills_to_activate, ["box_oscillation"])
+        self.assertEqual(
+            frozen.strategy_execution["effective"][0]["id"],
+            "box_oscillation",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

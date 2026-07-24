@@ -369,6 +369,7 @@ class TestSettingsHelpMetadata(unittest.TestCase):
         # PR3 Phase 1: Agent + Event Alert
         "AGENT_MODE",
         "AGENT_MAX_STEPS",
+        "DEFAULT_ANALYSIS_SKILL",
         "AGENT_SKILLS",
         "AGENT_SKILL_DIR",
         "AGENT_NL_ROUTING",

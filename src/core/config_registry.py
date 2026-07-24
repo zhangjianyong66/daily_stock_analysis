@@ -3973,6 +3973,32 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         ],
         "warning_codes": [],
     },
+    "DEFAULT_ANALYSIS_SKILL": {
+        "title": "Default Analysis Strategy",
+        "description": "Single default strategy for analyses that do not explicitly choose one. Leave empty to follow AGENT_SKILLS and the built-in default.",
+        "category": "agent",
+        "data_type": "string",
+        "ui_control": "select",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": "",
+        "options": [],
+        "validation": {},
+        "display_order": 29,
+        "help_key": "settings.agent.DEFAULT_ANALYSIS_SKILL",
+        "examples": [
+            "DEFAULT_ANALYSIS_SKILL=",
+            "DEFAULT_ANALYSIS_SKILL=chan_theory",
+        ],
+        "docs": [
+            {
+                "label": "完整指南：Agent 配置",
+                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/full-guide.md#环境变量完整列表",
+            },
+        ],
+        "warning_codes": [],
+    },
     "AGENT_SKILLS": {
         "title": "Agent Strategies",
         "description": "Comma-separated list of active agent strategy skills. Leave empty to use the primary default strategy skill declared in metadata (built-in default: bull_trend). When set to specific skills (not 'all'), scheduled tasks will automatically use the Agent pipeline.",

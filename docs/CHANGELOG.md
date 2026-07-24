@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [新功能] 新增可配置的部署级默认分析策略，支持设置页动态选择、首页策略菜单一键设为默认或恢复系统默认，并统一应用于新建个股分析和问股任务。
 - [改进] 个股报告顶部展示服务端实际执行的策略、来源与回退/降级状态，Web 历史、Markdown 和通知保持一致，重新分析默认复用原报告策略。
 - [新功能] A 股场内 ETF 接入东方财富日主力/大单/超大单资金流与可选逐笔主动成交估算，作为通用分析参考并保持失败降级。
 - [修复] Web 移动端首页恢复原版连续布局，移除割裂的快捷栏、底部操作面板和报告折叠，并优化窄屏控件尺寸、间距与换行。

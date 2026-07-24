@@ -7,7 +7,9 @@ import {
   ListChecks,
   MessageSquareQuote,
   RefreshCw,
+  RotateCcw,
   SlidersHorizontal,
+  Star,
   TrendingUp,
   X,
 } from 'lucide-react';
@@ -56,6 +58,12 @@ type MarketReviewNotice = {
 } | null;
 
 type BatchConfiguredNotice = MarketReviewNotice;
+
+type StrategyDefaultNotice = {
+  variant: 'success' | 'danger';
+  title: string;
+  message: string;
+} | null;
 
 type RunFlowDrawerState =
   | { open: false }
@@ -220,6 +228,11 @@ const HomePage: React.FC = () => {
   const [analysisSkills, setAnalysisSkills] = useState<SkillInfo[]>([]);
   const [selectedStrategyId, setSelectedStrategyId] = useState('');
   const [strategySelectionTouched, setStrategySelectionTouched] = useState(false);
+  const [effectiveDefaultStrategyId, setEffectiveDefaultStrategyId] = useState('');
+  const [savedDefaultStrategyId, setSavedDefaultStrategyId] = useState('');
+  const [defaultStrategyWarning, setDefaultStrategyWarning] = useState<string | null>(null);
+  const [savingDefaultStrategyId, setSavingDefaultStrategyId] = useState<string | null>(null);
+  const [strategyDefaultNotice, setStrategyDefaultNotice] = useState<StrategyDefaultNotice>(null);
   const [strategyMenuOpen, setStrategyMenuOpen] = useState(false);
   const [runFlowDrawer, setRunFlowDrawer] = useState<RunFlowDrawerState>({ open: false });
   const [duplicateBannerVisible, setDuplicateBannerVisible] = useState(false);
@@ -245,6 +258,7 @@ const HomePage: React.FC = () => {
   const strategyButtonRef = useRef<HTMLButtonElement | null>(null);
   const strategyItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const strategyInitialFocusIndexRef = useRef<number | null>(null);
+  const strategySelectionTouchedRef = useRef(false);
 
   const stopMarketReviewPolling = useCallback(() => {
     if (marketReviewPollTimer.current !== null) {
@@ -370,24 +384,33 @@ const HomePage: React.FC = () => {
     };
   }, []);
 
+  const loadAnalysisSkills = useCallback(async () => {
+    const response = await agentApi.getSkills();
+    setAnalysisSkills(response.skills);
+    setEffectiveDefaultStrategyId(response.default_skill_id || '');
+    setSavedDefaultStrategyId(response.saved_default_skill_id || '');
+    setDefaultStrategyWarning(response.default_skill_warning || null);
+    if (!strategySelectionTouchedRef.current) {
+      setSelectedStrategyId(response.default_skill_id || '');
+    }
+    return response;
+  }, []);
+
   useEffect(() => {
     let active = true;
-    agentApi.getSkills()
-      .then((response) => {
-        if (active) {
-          setAnalysisSkills(response.skills);
-        }
-      })
-      .catch(() => {
-        if (active) {
-          setAnalysisSkills([]);
-        }
-      });
+    void loadAnalysisSkills().catch(() => {
+      if (active) {
+        setAnalysisSkills([]);
+        setEffectiveDefaultStrategyId('');
+        setSavedDefaultStrategyId('');
+        setDefaultStrategyWarning(null);
+      }
+    });
 
     return () => {
       active = false;
     };
-  }, []);
+  }, [loadAnalysisSkills]);
 
   useEffect(() => {
     if (!strategyMenuOpen) {
@@ -429,8 +452,8 @@ const HomePage: React.FC = () => {
     [analysisSkills, selectedStrategyId],
   );
   const selectedAnalysisSkills = useMemo(
-    () => (selectedStrategyId ? [selectedStrategyId] : undefined),
-    [selectedStrategyId],
+    () => (strategySelectionTouched && selectedStrategyId ? [selectedStrategyId] : undefined),
+    [selectedStrategyId, strategySelectionTouched],
   );
   const strategyOptions = useMemo(
     () => [
@@ -451,9 +474,46 @@ const HomePage: React.FC = () => {
   }, []);
   const selectStrategy = useCallback((strategyId: string) => {
     setSelectedStrategyId(strategyId);
+    strategySelectionTouchedRef.current = true;
     setStrategySelectionTouched(true);
     setStrategyMenuOpen(false);
   }, []);
+  const saveDefaultStrategy = useCallback(async (strategyId: string) => {
+    if (savingDefaultStrategyId !== null) {
+      return;
+    }
+
+    const saveKey = strategyId || '__follow_system__';
+    setSavingDefaultStrategyId(saveKey);
+    setStrategyDefaultNotice(null);
+    try {
+      const config = await systemConfigApi.getConfig(false);
+      await systemConfigApi.update({
+        configVersion: config.configVersion,
+        maskToken: config.maskToken,
+        reloadNow: true,
+        items: [{ key: 'DEFAULT_ANALYSIS_SKILL', value: strategyId }],
+      });
+      const refreshed = await loadAnalysisSkills();
+      const defaultName = refreshed.skills.find((skill) => skill.id === refreshed.default_skill_id)?.name
+        || t('home.defaultStrategyName');
+      setStrategyDefaultNotice({
+        variant: 'success',
+        title: t('home.defaultStrategySavedTitle'),
+        message: strategyId
+          ? t('home.defaultStrategySavedMessage', { strategy: defaultName })
+          : t('home.defaultStrategyFollowMessage', { strategy: defaultName }),
+      });
+    } catch (error: unknown) {
+      setStrategyDefaultNotice({
+        variant: 'danger',
+        title: t('home.defaultStrategySaveFailedTitle'),
+        message: getParsedApiError(error).message,
+      });
+    } finally {
+      setSavingDefaultStrategyId(null);
+    }
+  }, [loadAnalysisSkills, savingDefaultStrategyId, t]);
   const focusStrategyItem = useCallback((index: number) => {
     const itemCount = strategyOptions.length;
     if (itemCount === 0) {
@@ -1380,7 +1440,7 @@ const HomePage: React.FC = () => {
       <div className="flex-1 flex flex-col min-h-0 min-w-0 max-w-full lg:max-w-6xl mx-auto w-full">
         <header className="relative z-30 flex min-w-0 flex-shrink-0 items-center overflow-visible px-3 py-2.5 md:px-4 md:py-4">
           <div className="flex min-w-0 flex-1 flex-col gap-2 md:flex-row md:items-center md:gap-2.5">
-            <div className="grid min-w-0 flex-1 grid-cols-[2.75rem_minmax(0,1fr)] items-center gap-2 min-[360px]:grid-cols-[2.75rem_minmax(0,1fr)_auto] md:flex md:gap-2.5">
+            <div className="grid min-w-0 flex-1 grid-cols-[2.75rem_minmax(0,1fr)] items-center gap-2 min-[360px]:grid-cols-[2.75rem_minmax(0,1fr)_auto] lg:flex lg:gap-2.5">
               <button
                 onClick={() => setSidebarOpen(true)}
                 className="-ml-1 inline-flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-lg text-secondary-text transition-colors hover:bg-hover hover:text-foreground md:hidden"
@@ -1405,18 +1465,19 @@ const HomePage: React.FC = () => {
                 />
               </div>
               {analysisSkills.length > 0 ? (
-                <div ref={strategyMenuRef} className="relative col-start-2 min-w-0 min-[360px]:col-start-auto md:flex-shrink-0">
+                <div ref={strategyMenuRef} className="relative col-start-2 min-w-0 min-[360px]:col-start-auto lg:flex-shrink-0">
                   <button
                     ref={strategyButtonRef}
                     id="strategy-menu-button"
                     type="button"
+                    aria-label={t('home.strategy')}
                     aria-haspopup="menu"
                     aria-expanded={strategyMenuOpen}
                     aria-controls={strategyMenuOpen ? 'strategy-menu' : undefined}
                     onClick={() => setStrategyMenuOpen((open) => !open)}
                     onKeyDown={handleStrategyButtonKeyDown}
                     disabled={isAnalyzing}
-                    className="home-surface-button flex h-11 w-full min-w-0 items-center gap-1.5 rounded-xl px-3 text-xs text-foreground disabled:cursor-not-allowed disabled:opacity-60 min-[360px]:max-w-[8.5rem] md:h-10 sm:max-w-[11rem]"
+                    className="home-surface-button flex h-11 w-full min-w-0 items-center gap-1.5 rounded-xl px-3 text-xs text-foreground disabled:cursor-not-allowed disabled:opacity-60 min-[360px]:max-w-[8.5rem] sm:max-w-[11rem] lg:h-10"
                   >
                     <SlidersHorizontal className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
                     <span className="truncate">{selectedStrategy?.name || t('home.strategy')}</span>
@@ -1429,27 +1490,82 @@ const HomePage: React.FC = () => {
                       onKeyDown={handleStrategyMenuKeyDown}
                       className="absolute right-0 top-11 z-[120] max-h-80 w-[min(18rem,calc(100vw-1.5rem))] overflow-y-auto rounded-xl border border-subtle bg-elevated p-1.5 text-sm text-foreground shadow-2xl"
                     >
+                      {defaultStrategyWarning ? (
+                        <div className="mb-1 rounded-lg bg-warning/10 px-2.5 py-2 text-xs leading-5 text-warning">
+                          {savedDefaultStrategyId
+                            ? t('home.defaultStrategyUnavailable', { strategy: savedDefaultStrategyId })
+                            : defaultStrategyWarning}
+                        </div>
+                      ) : null}
                       {strategyOptions.map((option, index) => {
                         const selected = selectedStrategyId === option.id;
+                        const isEffectiveDefault = Boolean(option.id) && effectiveDefaultStrategyId === option.id;
+                        const isSaving = savingDefaultStrategyId === (option.id || '__follow_system__');
                         return (
-                          <button
+                          <div
                             key={option.id || 'default'}
-                            ref={(node) => {
-                              strategyItemRefs.current[index] = node;
-                            }}
-                            type="button"
-                            role="menuitemradio"
-                            aria-checked={selected}
-                            tabIndex={-1}
-                            onClick={() => selectStrategy(option.id)}
-                            className="flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-hover"
+                            className="flex items-stretch gap-1 rounded-lg transition-colors hover:bg-hover"
                           >
-                            <Check className={`mt-0.5 h-4 w-4 flex-shrink-0 ${selected ? 'opacity-100' : 'opacity-0'}`} aria-hidden="true" />
-                            <span className="min-w-0">
-                              <span className="block font-medium">{option.name}</span>
-                              <span className="mt-0.5 line-clamp-2 block text-xs leading-5 text-muted-text">{option.description}</span>
-                            </span>
-                          </button>
+                            <button
+                              ref={(node) => {
+                                strategyItemRefs.current[index] = node;
+                              }}
+                              type="button"
+                              role="menuitemradio"
+                              aria-checked={selected}
+                              tabIndex={-1}
+                              onClick={() => selectStrategy(option.id)}
+                              className="flex min-w-0 flex-1 items-start gap-2 px-2.5 py-2 text-left"
+                            >
+                              <Check className={`mt-0.5 h-4 w-4 flex-shrink-0 ${selected ? 'opacity-100' : 'opacity-0'}`} aria-hidden="true" />
+                              <span className="min-w-0">
+                                <span className="flex min-w-0 items-center gap-1.5 font-medium">
+                                  <span className="truncate">{option.name}</span>
+                                  {isEffectiveDefault ? (
+                                    <span className="inline-flex flex-shrink-0 items-center gap-1 text-[11px] font-normal text-warning">
+                                      <Star className="h-3 w-3 fill-current" aria-hidden="true" />
+                                      {t('home.defaultStrategyBadge')}
+                                    </span>
+                                  ) : null}
+                                </span>
+                                <span className="mt-0.5 line-clamp-2 block text-xs leading-5 text-muted-text">{option.description}</span>
+                              </span>
+                            </button>
+                            {option.id && !isEffectiveDefault ? (
+                              <button
+                                type="button"
+                                role="menuitem"
+                                title={t('home.setAsDefaultStrategy')}
+                                aria-label={t('home.setAsDefaultStrategyNamed', { strategy: option.name })}
+                                disabled={savingDefaultStrategyId !== null}
+                                onClick={() => void saveDefaultStrategy(option.id)}
+                                className="flex w-9 flex-shrink-0 items-center justify-center rounded-lg text-muted-text transition-colors hover:bg-warning/10 hover:text-warning disabled:cursor-wait disabled:opacity-50"
+                              >
+                                {isSaving ? (
+                                  <RefreshCw className="h-4 w-4 animate-spin" aria-hidden="true" />
+                                ) : (
+                                  <Star className="h-4 w-4" aria-hidden="true" />
+                                )}
+                              </button>
+                            ) : null}
+                            {!option.id && savedDefaultStrategyId ? (
+                              <button
+                                type="button"
+                                role="menuitem"
+                                title={t('home.followSystemDefault')}
+                                aria-label={t('home.followSystemDefault')}
+                                disabled={savingDefaultStrategyId !== null}
+                                onClick={() => void saveDefaultStrategy('')}
+                                className="flex w-9 flex-shrink-0 items-center justify-center rounded-lg text-muted-text transition-colors hover:bg-primary/10 hover:text-primary disabled:cursor-wait disabled:opacity-50"
+                              >
+                                {isSaving ? (
+                                  <RefreshCw className="h-4 w-4 animate-spin" aria-hidden="true" />
+                                ) : (
+                                  <RotateCcw className="h-4 w-4" aria-hidden="true" />
+                                )}
+                              </button>
+                            ) : null}
+                          </div>
                         );
                       })}
                     </div>
@@ -1457,7 +1573,7 @@ const HomePage: React.FC = () => {
                 </div>
               ) : null}
             </div>
-            <div className="grid min-w-0 flex-shrink-0 grid-cols-2 items-center gap-2 sm:grid-cols-4 md:flex md:gap-2.5">
+            <div className="grid min-w-0 flex-shrink-0 grid-cols-2 items-center gap-2 lg:flex lg:gap-2.5">
               <label className="flex h-11 min-w-0 cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-subtle bg-surface/60 px-2 text-xs text-secondary-text select-none transition-colors hover:border-subtle-hover hover:text-foreground md:h-10 md:flex-shrink-0 md:px-3">
                 <input
                   type="checkbox"
@@ -1512,6 +1628,27 @@ const HomePage: React.FC = () => {
             </div>
           </div>
         </header>
+
+        {strategyDefaultNotice ? (
+          <div className="px-3 pb-2 md:px-4">
+            <InlineAlert
+              variant={strategyDefaultNotice.variant}
+              title={strategyDefaultNotice.title}
+              message={strategyDefaultNotice.message}
+              action={(
+                <button
+                  type="button"
+                  onClick={() => setStrategyDefaultNotice(null)}
+                  aria-label={t('common.close')}
+                  className="-my-1 -mr-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg opacity-70 transition-colors hover:bg-hover hover:opacity-100"
+                >
+                  <X className="h-4 w-4" aria-hidden="true" />
+                </button>
+              )}
+              className="rounded-xl px-3 py-2 text-xs shadow-none"
+            />
+          </div>
+        ) : null}
 
         {inputError || (duplicateError && duplicateBannerVisible) ? (
           <div className="px-3 pb-2 md:px-4">

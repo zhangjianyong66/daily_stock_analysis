@@ -77,11 +77,17 @@ class SkillInfo(BaseModel):
 class SkillsResponse(BaseModel):
     skills: List[SkillInfo]
     default_skill_id: str = ""
+    default_skill_source: str = "builtin"
+    saved_default_skill_id: str = ""
+    default_skill_warning: Optional[str] = None
 
 
 class StrategiesResponse(BaseModel):
     strategies: List[SkillInfo]
     default_strategy_id: str = ""
+    default_strategy_source: str = "builtin"
+    saved_default_strategy_id: str = ""
+    default_strategy_warning: Optional[str] = None
 
 
 class AgentModelDeployment(BaseModel):
@@ -135,8 +141,7 @@ def _agent_status_response(payload: Dict[str, Any]) -> AgentBackendStatusRespons
 
 
 def _build_skills_response(config) -> SkillsResponse:
-    from src.agent.factory import get_skill_manager
-    from src.agent.skills.defaults import get_primary_default_skill_id
+    from src.agent.factory import get_skill_manager, resolve_default_skill_selection
 
     skill_manager = get_skill_manager(config)
     available_skills = sorted(
@@ -155,9 +160,16 @@ def _build_skills_response(config) -> SkillsResponse:
         SkillInfo(id=skill.name, name=skill.display_name, description=skill.description)
         for skill in available_skills
     ]
+    default_resolution = resolve_default_skill_selection(
+        config,
+        skill_catalog=list(skill_manager.list_skills()),
+    )
     return SkillsResponse(
         skills=skills,
-        default_skill_id=get_primary_default_skill_id(available_skills),
+        default_skill_id=default_resolution.default_skill_id,
+        default_skill_source=default_resolution.public_source,
+        saved_default_skill_id=default_resolution.saved_default_skill_id,
+        default_skill_warning=default_resolution.warning,
     )
 
 
@@ -176,6 +188,9 @@ async def get_strategies():
     return StrategiesResponse(
         strategies=payload.skills,
         default_strategy_id=payload.default_skill_id,
+        default_strategy_source=payload.default_skill_source,
+        saved_default_strategy_id=payload.saved_default_skill_id,
+        default_strategy_warning=payload.default_skill_warning,
     )
 
 @router.post("/chat", response_model=ChatResponse)

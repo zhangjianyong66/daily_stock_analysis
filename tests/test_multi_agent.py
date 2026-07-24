@@ -544,6 +544,20 @@ class TestStrategyRouter(unittest.TestCase):
         result = router.select_strategies(ctx, max_count=2)
         self.assertEqual(len(result), 2)
 
+    def test_saved_default_precedes_market_regime_routing(self):
+        from src.agent.strategies.router import StrategyRouter
+
+        router = StrategyRouter(fixed_default_skills=["box_oscillation"])
+        ctx = AgentContext()
+        ctx.add_opinion(AgentOpinion(
+            agent_name="technical",
+            signal="buy",
+            confidence=0.8,
+            raw_data={"ma_alignment": "bullish", "trend_score": 80},
+        ))
+
+        self.assertEqual(router.select_strategies(ctx), ["box_oscillation"])
+
     @patch("src.agent.skills.router.StrategyRouter._get_routing_mode", return_value="manual")
     @patch(
         "src.agent.skills.router.StrategyRouter._get_available_skills",

@@ -63,6 +63,55 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         message = SimpleNamespace(content=content, tool_calls=tool_calls or [])
         return SimpleNamespace(choices=[SimpleNamespace(message=message)])
 
+    def test_default_analysis_skill_schema_uses_runtime_strategy_options(self) -> None:
+        options = [
+            {"label": "跟随系统默认 / Follow system default", "value": ""},
+            {"label": "箱体震荡", "value": "box_oscillation"},
+        ]
+        with patch.object(SystemConfigService, "_default_skill_options", return_value=options):
+            schema = self.service.get_schema()
+
+        agent_category = next(item for item in schema["categories"] if item["category"] == "agent")
+        field = next(item for item in agent_category["fields"] if item["key"] == "DEFAULT_ANALYSIS_SKILL")
+        self.assertEqual(field["ui_control"], "select")
+        self.assertEqual(field["options"], options)
+        self.assertEqual(field["validation"]["enum"], ["", "box_oscillation"])
+
+    def test_validate_rejects_unavailable_default_analysis_skill(self) -> None:
+        options = [
+            {"label": "跟随系统默认 / Follow system default", "value": ""},
+            {"label": "箱体震荡", "value": "box_oscillation"},
+        ]
+        with patch.object(SystemConfigService, "_default_skill_options", return_value=options):
+            validation = self.service.validate(
+                items=[{"key": "DEFAULT_ANALYSIS_SKILL", "value": "removed_skill"}]
+            )
+
+        self.assertFalse(validation["valid"])
+        self.assertTrue(
+            any(
+                issue["key"] == "DEFAULT_ANALYSIS_SKILL"
+                and issue["code"] == "unavailable_strategy"
+                for issue in validation["issues"]
+            )
+        )
+
+    def test_validate_accepts_available_default_and_follow_system_default(self) -> None:
+        options = [
+            {"label": "跟随系统默认 / Follow system default", "value": ""},
+            {"label": "箱体震荡", "value": "box_oscillation"},
+        ]
+        with patch.object(SystemConfigService, "_default_skill_options", return_value=options):
+            saved = self.service.validate(
+                items=[{"key": "DEFAULT_ANALYSIS_SKILL", "value": "box_oscillation"}]
+            )
+            cleared = self.service.validate(
+                items=[{"key": "DEFAULT_ANALYSIS_SKILL", "value": ""}]
+            )
+
+        self.assertTrue(saved["valid"])
+        self.assertTrue(cleared["valid"])
+
     def test_get_config_keeps_regular_sensitive_values_unmasked(self) -> None:
         payload = self.service.get_config(include_schema=True)
         items = {item["key"]: item for item in payload["items"]}

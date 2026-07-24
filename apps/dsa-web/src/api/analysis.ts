@@ -32,7 +32,7 @@ export const analysisApi = {
       stock_name: data.stockName,
       original_query: data.originalQuery,
       selection_source: data.selectionSource,
-      skills: data.skills,
+      ...(data.skills !== undefined && { skills: data.skills }),
       report_language: data.reportLanguage,
       ...(data.notify !== undefined && { notify: data.notify }),
     };
@@ -68,7 +68,7 @@ export const analysisApi = {
       stock_name: data.stockName,
       original_query: data.originalQuery,
       selection_source: data.selectionSource,
-      skills: data.skills,
+      ...(data.skills !== undefined && { skills: data.skills }),
       report_language: data.reportLanguage,
       ...(data.notify !== undefined && { notify: data.notify }),
     };

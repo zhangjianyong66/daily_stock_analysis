@@ -122,6 +122,7 @@ class AgentOrchestrator:
         skill_manager=None,
         config=None,
         strategy_execution: Optional[Dict[str, Any]] = None,
+        fixed_default_skills: Optional[List[str]] = None,
     ):
         self.tool_registry = tool_registry
         self.llm_adapter = llm_adapter
@@ -134,6 +135,11 @@ class AgentOrchestrator:
         self.config = config
         self.strategy_engine = StrategyEngine()
         self.strategy_execution = normalize_strategy_execution(strategy_execution)
+        self.fixed_default_skills = (
+            list(fixed_default_skills)
+            if fixed_default_skills is not None
+            else None
+        )
 
     def _get_timeout_seconds(self) -> int:
         """Return the pipeline timeout in seconds.
@@ -780,7 +786,7 @@ class AgentOrchestrator:
                 skill_instructions=self.skill_instructions,
                 technical_skill_policy=self.technical_skill_policy,
             )
-            router = SkillRouter()
+            router = SkillRouter(fixed_default_skills=self.fixed_default_skills)
             selected = router.select_skills(ctx)
             if not selected:
                 return []

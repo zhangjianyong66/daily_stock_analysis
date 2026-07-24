@@ -12,6 +12,7 @@ import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 from urllib.parse import urlparse, urlunparse
 
@@ -307,16 +308,81 @@ class SystemConfigService:
 
     def get_schema(self) -> Dict[str, Any]:
         """Return grouped schema metadata for UI rendering."""
-        return build_schema_response()
+        saved_config_map = self._build_display_config_map(self._manager.read_config_map())
+        runtime_config_map = self._build_runtime_display_config_map(saved_config_map)
+        return self._enrich_default_skill_schema(
+            build_schema_response(),
+            {**runtime_config_map, **saved_config_map},
+        )
 
     @staticmethod
     def _reload_runtime_singletons() -> None:
         """Reset runtime singleton services after config reload."""
+        from src.agent.factory import reset_skill_manager_cache
         from src.agent.tools.data_tools import reset_fetcher_manager
         from src.search_service import reset_search_service
 
+        reset_skill_manager_cache()
         reset_fetcher_manager()
         reset_search_service()
+
+    @staticmethod
+    def _default_skill_options(config_map: Dict[str, str]) -> List[Dict[str, str]]:
+        """Build the setting options from the current built-in/custom catalog."""
+        from src.agent.factory import load_skill_manager
+
+        config = SimpleNamespace(
+            agent_skill_dir=(config_map.get("AGENT_SKILL_DIR") or config_map.get("AGENT_STRATEGY_DIR") or None),
+        )
+        skills = sorted(
+            [
+                skill
+                for skill in load_skill_manager(config).list_skills()
+                if getattr(skill, "user_invocable", True)
+            ],
+            key=lambda skill: (
+                int(getattr(skill, "default_priority", 100)),
+                str(getattr(skill, "display_name", "")),
+                str(getattr(skill, "name", "")),
+            ),
+        )
+        return [
+            {"label": "跟随系统默认 / Follow system default", "value": ""},
+            *[
+                {
+                    "label": str(getattr(skill, "display_name", "") or getattr(skill, "name", "")),
+                    "value": str(getattr(skill, "name", "")),
+                }
+                for skill in skills
+                if str(getattr(skill, "name", "")).strip()
+            ],
+        ]
+
+    @classmethod
+    def _enrich_default_skill_field(
+        cls,
+        field_schema: Dict[str, Any],
+        config_map: Dict[str, str],
+    ) -> Dict[str, Any]:
+        if field_schema.get("key") != "DEFAULT_ANALYSIS_SKILL":
+            return field_schema
+        options = cls._default_skill_options(config_map)
+        field_schema["options"] = options
+        validation = dict(field_schema.get("validation") or {})
+        validation["enum"] = [option["value"] for option in options]
+        field_schema["validation"] = validation
+        return field_schema
+
+    @classmethod
+    def _enrich_default_skill_schema(
+        cls,
+        schema: Dict[str, Any],
+        config_map: Dict[str, str],
+    ) -> Dict[str, Any]:
+        for category in schema.get("categories", []):
+            for field_schema in category.get("fields", []):
+                cls._enrich_default_skill_field(field_schema, config_map)
+        return schema
 
     @classmethod
     def _normalize_display_value(cls, key: str, value: str) -> str:
@@ -463,7 +529,10 @@ class SystemConfigService:
         }
 
         schema_by_key: Dict[str, Dict[str, Any]] = {
-            key: get_field_definition(key, config_map.get(key, ""))
+            key: self._enrich_default_skill_field(
+                get_field_definition(key, config_map.get(key, "")),
+                config_map,
+            )
             for key in all_keys
         }
 
@@ -4531,6 +4600,22 @@ class SystemConfigService:
     def _validate_cross_field(effective_map: Dict[str, str], updated_keys: Set[str]) -> List[Dict[str, Any]]:
         """Validate dependencies across multiple keys."""
         issues: List[Dict[str, Any]] = []
+
+        default_skill = (effective_map.get("DEFAULT_ANALYSIS_SKILL") or "").strip()
+        if default_skill and ({"DEFAULT_ANALYSIS_SKILL", "AGENT_SKILL_DIR", "AGENT_STRATEGY_DIR"} & updated_keys):
+            options = SystemConfigService._default_skill_options(effective_map)
+            available_ids = {option["value"] for option in options if option["value"]}
+            if default_skill not in available_ids:
+                issues.append(
+                    {
+                        "key": "DEFAULT_ANALYSIS_SKILL",
+                        "code": "unavailable_strategy",
+                        "message": "默认分析策略当前不可用，请重新选择或改为跟随系统默认。",
+                        "severity": "error",
+                        "expected": "当前可调用的策略 ID",
+                        "actual": default_skill,
+                    }
+                )
 
         agent_backend = (effective_map.get("AGENT_BACKEND") or "auto").strip().lower()
         agent_arch = (effective_map.get("AGENT_ARCH") or "single").strip().lower()

@@ -128,6 +128,47 @@ def test_factory_distinguishes_default_and_fixed_config_sources(monkeypatch):
     assert config_snapshot["source"] == "config"
 
 
+def test_saved_default_precedes_agent_skills_and_explicit_request_precedes_saved_default(monkeypatch):
+    monkeypatch.setattr(factory, "get_skill_manager", lambda _config: _skill_manager())
+    config = SimpleNamespace(
+        default_analysis_skill="box_oscillation",
+        agent_skills=["bull_trend"],
+    )
+
+    saved_state = factory.resolve_skill_prompt_state(config)
+    request_state = factory.resolve_skill_prompt_state(config, skills=["bull_trend"])
+
+    assert saved_state.skills_to_activate == ["box_oscillation"]
+    assert saved_state.selection_source == "saved"
+    assert saved_state.strategy_execution["source"] == "config"
+    assert saved_state.strategy_execution["effective"][0]["id"] == "box_oscillation"
+    assert request_state.skills_to_activate == ["bull_trend"]
+    assert request_state.selection_source == "request"
+    assert request_state.strategy_execution["source"] == "request"
+
+
+def test_unavailable_saved_default_falls_back_to_agent_skills_with_warning(monkeypatch):
+    monkeypatch.setattr(factory, "get_skill_manager", lambda _config: _skill_manager())
+    config = SimpleNamespace(
+        default_analysis_skill="removed_skill",
+        agent_skills=["box_oscillation"],
+    )
+
+    resolution = factory.resolve_default_skill_selection(config)
+    state = factory.resolve_skill_prompt_state(config)
+
+    assert resolution.effective_ids == ["box_oscillation"]
+    assert resolution.public_source == "fallback"
+    assert resolution.saved_default_skill_id == "removed_skill"
+    assert resolution.warning
+    assert state.strategy_execution["status"] == "fallback"
+    assert state.strategy_execution["source"] == "fallback"
+    assert state.strategy_execution["requested"][0]["id"] == "removed_skill"
+    assert state.strategy_execution["rejected"] == [
+        {"id": "removed_skill", "reason": "unavailable"}
+    ]
+
+
 def test_orchestrator_records_auto_routing_and_strategy_degradation():
     orchestrator = object.__new__(AgentOrchestrator)
     orchestrator.config = SimpleNamespace(agent_skill_routing="auto")
