@@ -57,6 +57,59 @@ Service 层负责调用 repository，并把 ORM row 转为 API 友好的 dict。
 - 检查 Docker volume 持久化路径和 GitHub Actions smoke import。
 - 更新 API schema、Web 类型和文档中暴露的数据字段。
 
+## 场景：合并多个启动期 SQLite 迁移
+
+### 1. Scope / Trigger
+
+- Trigger：新增迁移，或合并上游后 `DatabaseManager` 启动序列同时包含多条 `_ensure_*` schema 检查。
+
+### 2. Signatures
+
+- `DatabaseManager.__init__(db_url)` 在 `Base.metadata.create_all()` 后按显式顺序调用迁移。
+- 每条迁移使用 `_ensure_<domain>_<schema>() -> None`，检查失败时抛出异常并阻止数据库以未知结构继续启动。
+
+### 3. Contracts
+
+- 迁移顺序是可测试契约，不是可任意重排的实现细节。
+- 新增迁移必须保留已有迁移的安全失败入口；依赖特定检查器异常或日志的迁移应排在会使用同一检查器的宽泛兼容迁移之前。
+- 幂等迁移在空库、旧库和重复启动时都必须安全；不得因为前置迁移吞掉异常而跳过后续结构校验。
+
+### 4. Validation & Error Matrix
+
+- 列或索引检查失败 -> 记录所属迁移的 `ERROR` 日志并重新抛出，初始化失败。
+- 已存在目标列/索引 -> 不重复修改，继续后续迁移。
+- 多条迁移共享 `inspect()` 且顺序改变 -> 对每条迁移的失败归因测试必须仍命中对应日志。
+
+### 5. Good/Base/Bad Cases
+
+- Good：`decision_profile` 检查失败时日志明确包含该迁移名称，且数据库初始化抛出原始异常。
+- Base：空库完成 `create_all()` 后所有 `_ensure_*` 重复执行无副作用。
+- Bad：把另一条使用 `inspect().get_columns()` 的迁移插到安全检查之前，导致异常被错误归因或目标迁移测试不再执行。
+
+### 6. Tests Required
+
+- 旧库升级测试断言目标列、索引和回填结果。
+- 检查器故障测试使用 patch 注入异常，并断言对应迁移的日志、异常传播和 `DatabaseManager` 单例清理。
+- 调整启动迁移顺序后至少运行 `tests/test_storage.py` 全文件。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+Base.metadata.create_all(self._engine)
+self._ensure_generic_columns()  # 先消耗/触发共享 inspector 故障
+self._ensure_decision_signal_profile_schema()
+```
+
+#### Correct
+
+```python
+Base.metadata.create_all(self._engine)
+self._ensure_decision_signal_profile_schema()  # 保留专属安全失败与日志契约
+self._ensure_generic_columns()
+```
+
 ## 禁止项
 
 - 不在 endpoint 里手写 SQL 或直接管理 session。

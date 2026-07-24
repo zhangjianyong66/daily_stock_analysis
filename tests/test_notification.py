@@ -30,7 +30,7 @@ for optional_module in ("litellm", "json_repair"):
         sys.modules[optional_module] = mock.MagicMock()
 
 from src.config import Config
-from src.notification import NotificationService, NotificationChannel
+from src.notification import NotificationBuilder, NotificationChannel, NotificationService
 from src.notification_noise import reset_notification_noise_state
 from src.analyzer import AnalysisResult
 from bot.models import BotMessage, ChatType
@@ -662,6 +662,93 @@ class TestNotificationServiceSendToMethods(unittest.TestCase):
 class TestNotificationServiceReportGeneration(unittest.TestCase):
     """报告生成与选路相关测试。"""
 
+    def test_signal_metadata_uses_resolved_eight_state_action(self):
+        service = NotificationService()
+        cases = [
+            ("avoid", "Avoid", 90, ("Avoid", "🟡", "hold")),
+            ("add", "Add", 50, ("Add", "🟢", "buy")),
+            ("alert", "Alert", 85, ("Alert", "🔴", "sell")),
+        ]
+
+        for action, action_label, score, expected in cases:
+            with self.subTest(action=action):
+                result = AnalysisResult(
+                    code="AAPL",
+                    name="Apple",
+                    sentiment_score=score,
+                    trend_prediction="Neutral",
+                    operation_advice="Hold",
+                    report_language="en",
+                    action=action,
+                    action_label=action_label,
+                )
+
+                self.assertEqual(service._get_signal_level(result), expected)
+
+    def test_build_stock_summary_uses_resolved_eight_state_action(self):
+        summary = NotificationBuilder.build_stock_summary(
+            [
+                AnalysisResult(
+                    code="AVOID",
+                    name="Avoid Corp",
+                    sentiment_score=90,
+                    trend_prediction="Neutral",
+                    operation_advice="Avoid",
+                    report_language="en",
+                    action="avoid",
+                    action_label="Avoid",
+                ),
+                AnalysisResult(
+                    code="ALERT",
+                    name="Alert Corp",
+                    sentiment_score=85,
+                    trend_prediction="Neutral",
+                    operation_advice="Alert",
+                    report_language="en",
+                    action="alert",
+                    action_label="Alert",
+                ),
+                AnalysisResult(
+                    code="ADD",
+                    name="Add Corp",
+                    sentiment_score=50,
+                    trend_prediction="Neutral",
+                    operation_advice="Add",
+                    report_language="en",
+                    action="add",
+                    action_label="Add",
+                ),
+            ]
+        )
+
+        self.assertIn("🟡 Avoid Corp(AVOID): Avoid | Score 90", summary)
+        self.assertIn("🔴 Alert Corp(ALERT): Alert | Score 85", summary)
+        self.assertIn("🟢 Add Corp(ADD): Add | Score 50", summary)
+        self.assertNotIn("Buy | Score 50", summary)
+        self.assertNotIn("Strong Buy", summary)
+
+    @mock.patch("src.notification.get_config")
+    def test_report_rows_and_summary_use_same_score_aligned_action(
+        self, mock_get_config: mock.MagicMock
+    ):
+        mock_get_config.return_value = _make_config(report_renderer_enabled=False)
+        service = NotificationService()
+        result = AnalysisResult(
+            code="AAPL",
+            name="Apple",
+            sentiment_score=72,
+            trend_prediction="Bullish",
+            operation_advice="Hold",
+            decision_type="hold",
+            report_language="en",
+        )
+
+        out = service.generate_brief_report([result], report_date="2026-07-11")
+
+        self.assertIn("🟢1 🟡0 🔴0", out)
+        self.assertIn("Buy | Score 72", out)
+        self.assertNotIn("Hold | Score 72", out)
+
     @mock.patch("src.notification.get_config")
     def test_generate_aggregate_report_routes_by_report_type(self, mock_get_config: mock.MagicMock):
         mock_get_config.return_value = _make_config()
@@ -804,7 +891,7 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
         self.assertNotIn("盘中决策护栏", out)
 
     @mock.patch("src.notification.get_config")
-    def test_generate_dashboard_report_appends_decision_signal_excerpt_fallback(
+    def test_generate_dashboard_report_omits_decision_signal_excerpt_fallback(
         self, mock_get_config: mock.MagicMock
     ):
         mock_get_config.return_value = _make_config(report_renderer_enabled=False)
@@ -820,15 +907,11 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
 
         out = service.generate_dashboard_report([result], report_date="2026-02-01")
 
-        summary_section, detail_section = out.split("---", 1)
-        self.assertNotIn("AI 决策信号", summary_section)
-        self.assertIn("AI 决策信号", detail_section)
-        self.assertIn("动作: 卖出", detail_section)
-        self.assertIn("周期: 1d", detail_section)
-        self.assertIn("理由: 技术面走弱", detail_section)
+        self.assertNotIn("AI 决策信号", out)
+        self.assertNotIn("理由: 技术面走弱", out)
 
     @mock.patch("src.notification.get_config")
-    def test_generate_daily_report_appends_decision_signal_excerpt_fallback(
+    def test_generate_daily_report_omits_decision_signal_excerpt_fallback(
         self, mock_get_config: mock.MagicMock
     ):
         mock_get_config.return_value = _make_config(report_renderer_enabled=False)
@@ -845,16 +928,11 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
             service = NotificationService()
             service._report_summary_only = summary_only
             out = service.generate_daily_report([result], report_date="2026-02-01")
-            self.assertEqual(out.count("AI 决策信号"), 0 if summary_only else 1)
-            if summary_only:
-                self.assertNotIn("动作: 卖出", out)
-            else:
-                self.assertIn("动作: 卖出", out)
-                self.assertIn("周期: 1d", out)
-                self.assertIn("理由: 技术面走弱", out)
+            self.assertNotIn("AI 决策信号", out)
+            self.assertNotIn("理由: 技术面走弱", out)
 
     @mock.patch("src.notification.get_config")
-    def test_generate_wechat_dashboard_appends_decision_signal_excerpt_fallback(
+    def test_generate_wechat_dashboard_omits_decision_signal_excerpt_fallback(
         self, mock_get_config: mock.MagicMock
     ):
         mock_get_config.return_value = _make_config(report_renderer_enabled=False)
@@ -871,13 +949,67 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
             service = NotificationService()
             service._report_summary_only = summary_only
             out = service.generate_wechat_dashboard([result])
-            self.assertEqual(out.count("AI 决策信号"), 0 if summary_only else 1)
-            if summary_only:
-                self.assertNotIn("动作: 卖出", out)
-            else:
-                self.assertIn("动作: 卖出", out)
-                self.assertIn("周期: 1d", out)
-                self.assertIn("理由: 技术面走弱", out)
+            self.assertNotIn("AI 决策信号", out)
+            self.assertNotIn("理由: 技术面走弱", out)
+
+    @mock.patch("src.notification.get_config")
+    def test_strategy_synthesis_legacy_shapes_are_safe_in_fallback_reports(
+        self, mock_get_config: mock.MagicMock
+    ):
+        mock_get_config.return_value = _make_config(report_renderer_enabled=False)
+        service = NotificationService()
+
+        for malformed in ("bad-shape", ["bad-shape"], 42, True):
+            result = AnalysisResult(
+                code="600519",
+                name="贵州茅台",
+                sentiment_score=50,
+                trend_prediction="震荡",
+                operation_advice="观望",
+                report_language="zh",
+                dashboard={
+                    "core_conclusion": {"one_sentence": "测试"},
+                    "intelligence": {},
+                    "battle_plan": {},
+                    "strategy_synthesis": malformed,
+                },
+            )
+
+            markdown = service.generate_dashboard_report([result], report_date="2026-07-19")
+            wechat = service.generate_wechat_dashboard([result])
+
+            self.assertNotIn("多策略综合", markdown)
+            self.assertNotIn("多策略综合", wechat)
+
+        result = AnalysisResult(
+            code="600519",
+            name="贵州茅台",
+            sentiment_score=50,
+            trend_prediction="震荡",
+            operation_advice="观望",
+            report_language="zh",
+            dashboard={
+                "core_conclusion": {"one_sentence": "测试"},
+                "intelligence": {},
+                "battle_plan": {},
+                "strategy_synthesis": {
+                    "final_signal": "hold",
+                    "consensus_level": "insufficient",
+                    "conflict_severity": "none",
+                    "conflict_count": 0,
+                    "supporting_skills": "bad-shape",
+                    "opposing_skills": ["bad-shape"],
+                    "conflicts": "bad-shape",
+                    "summary_params": {"invalid_opinion_count": "3"},
+                },
+            },
+        )
+
+        markdown = service.generate_dashboard_report([result], report_date="2026-07-19")
+        wechat = service.generate_wechat_dashboard([result])
+
+        self.assertIn("另有 3 个策略解析失败", markdown)
+        self.assertIn("另有 3 个策略解析失败", wechat)
 
     @mock.patch("src.notification.get_config")
     def test_generate_wechat_summary_omits_decision_signal_excerpt(
@@ -900,7 +1032,7 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
         self.assertNotIn("动作: 卖出", out)
 
     @mock.patch("src.notification.get_config")
-    def test_generate_dashboard_report_appends_decision_signal_excerpt_with_renderer(
+    def test_generate_dashboard_report_omits_decision_signal_excerpt_with_renderer(
         self, mock_get_config: mock.MagicMock
     ):
         mock_get_config.return_value = _make_config(report_renderer_enabled=True)
@@ -916,12 +1048,8 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
 
         out = service.generate_dashboard_report([result], report_date="2026-02-01")
 
-        summary_section, detail_section = out.split("---", 1)
-        self.assertNotIn("AI 决策信号", summary_section)
-        self.assertIn("AI 决策信号", detail_section)
-        self.assertIn("动作: 卖出", detail_section)
-        self.assertIn("周期: 1d", detail_section)
-        self.assertIn("理由: 技术面走弱", detail_section)
+        self.assertNotIn("AI 决策信号", out)
+        self.assertNotIn("理由: 技术面走弱", out)
 
     @mock.patch("src.notification.get_config")
     def test_aggregate_reports_show_compact_market_status_only(self, mock_get_config: mock.MagicMock):
@@ -1139,7 +1267,7 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
         self.assertNotIn("消息面", out)
 
     @mock.patch("src.notification.get_config")
-    def test_generate_single_stock_report_localizes_english_fallback(self, mock_get_config: mock.MagicMock):
+    def test_generate_single_stock_report_aligns_english_fallback_with_score(self, mock_get_config: mock.MagicMock):
         mock_get_config.return_value = _make_config(report_renderer_enabled=False, report_language="en")
         service = NotificationService()
         result = AnalysisResult(
@@ -1166,7 +1294,7 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
 
         self.assertIn("Core Conclusion", out)
         self.assertIn("Action Levels", out)
-        self.assertIn("Hold", out)
+        self.assertIn("Buy", out)
 
     def _make_fundamental_context(self) -> dict:
         return {

@@ -299,6 +299,8 @@ gh run view <run_id> --log-failed
 
 ## 7. 稳定性护栏
 
+- 数据库启动迁移：`src/storage.py` 中 `Base.metadata.create_all()` 后的 `_ensure_*` 调用顺序属于可测试契约。新增或合并迁移时不得随意重排；共享 `inspect()` 的迁移要保留各自的失败日志与异常归因，并在调整顺序后运行 `tests/test_storage.py`。
+
 - 配置与运行入口：
   - 修改 `.env` 语义、默认值、CLI 参数、服务启动方式、调度语义时，要同时评估本地运行、Docker、GitHub Actions、API、Web、Desktop 的影响。
   - 新配置优先做到“不配置也可运行，配置后增强能力”，避免叠加开关和互斥模式。
