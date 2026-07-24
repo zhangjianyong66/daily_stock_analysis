@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 28
+- **Total Sessions**: 29
 - **Last Active**: 2026-07-24
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~946 | Active |
+| `journal-1.md` | ~979 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 29 | 2026-07-24 | 首页分析任务面板默认折叠 | `7aed552` | `main` |
 | 28 | 2026-07-24 | 支持配置默认分析策略 | `b8daef2` | `main` |
 | 27 | 2026-07-24 | 合并上游 v3.27.0 | `61bf8dfe9cd139916653e49f71fb3137b0dd1eae` | `integrate/upstream-v3.27` |
 | 26 | 2026-07-22 | 优化本地测试验证策略 | `9fdc48d` | `main` |

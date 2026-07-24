@@ -944,3 +944,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 29: 首页分析任务面板默认折叠
+
+**Date**: 2026-07-24
+**Task**: 首页分析任务面板默认折叠
+**Branch**: `main`
+
+### Summary
+
+首页分析任务面板在桌面和移动端默认折叠，保留进行中、等待中和取消中摘要；支持整行展开收起、状态重置、中英文文案与回归测试，并完成浏览器布局验收。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7aed552` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
