@@ -415,6 +415,7 @@ describe('HomePage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: '历史记录' }));
     const historyDrawer = screen.getByRole('dialog', { name: '历史记录' });
+    fireEvent.click(within(historyDrawer).getByRole('button', { name: /^展开分析任务/ }));
     fireEvent.click(within(historyDrawer).getByRole('button', { name: '查看 贵州茅台 运行流' }));
 
     await waitFor(() => {
@@ -2091,6 +2092,8 @@ describe('HomePage', () => {
     );
 
     expect(await screen.findByText('分析任务')).toBeInTheDocument();
+    expect(screen.queryByText('正在抓取最新行情')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^展开分析任务/ }));
     expect(screen.getByText('正在抓取最新行情')).toBeInTheDocument();
   });
 

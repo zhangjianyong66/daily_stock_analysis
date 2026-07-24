@@ -14,7 +14,32 @@ const baseTask: TaskInfo = {
   createdAt: '2026-03-21T08:00:00Z',
 };
 
+const expandTaskPanel = () => {
+  fireEvent.click(screen.getByRole('button', { name: /^展开分析任务/ }));
+};
+
 describe('TaskPanel', () => {
+  it('is collapsed by default and toggles task details from the full header', () => {
+    render(<TaskPanel tasks={[baseTask]} />);
+
+    const expandButton = screen.getByRole('button', { name: /^展开分析任务/ });
+    expect(expandButton).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByText('分析任务')).toBeInTheDocument();
+    expect(screen.getByText('1 进行中')).toBeInTheDocument();
+    expect(screen.queryByTestId('task-panel-item')).not.toBeInTheDocument();
+
+    fireEvent.click(expandButton);
+
+    const collapseButton = screen.getByRole('button', { name: /^收起分析任务/ });
+    expect(collapseButton).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByTestId('task-panel-item')).toBeInTheDocument();
+
+    fireEvent.click(collapseButton);
+
+    expect(screen.getByRole('button', { name: /^展开分析任务/ })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByTestId('task-panel-item')).not.toBeInTheDocument();
+  });
+
   it('renders requested analysis phase badges for active tasks', () => {
     render(
       <TaskPanel
@@ -34,6 +59,8 @@ describe('TaskPanel', () => {
         ]}
       />,
     );
+
+    expandTaskPanel();
 
     expect(screen.getByLabelText('请求阶段: 盘中')).toBeInTheDocument();
     expect(screen.getByLabelText('请求阶段: 自动阶段')).toBeInTheDocument();
@@ -62,6 +89,7 @@ describe('TaskPanel', () => {
     expect(screen.getByText('分析任务')).toBeInTheDocument();
     expect(screen.getByText('1 进行中')).toBeInTheDocument();
     expect(screen.getByText('1 等待中')).toBeInTheDocument();
+    expandTaskPanel();
     expect(screen.getByText('贵州茅台')).toBeInTheDocument();
     expect(screen.getByText('AAPL')).toBeInTheDocument();
     expect(screen.getByLabelText('任务状态：分析中')).toBeInTheDocument();
@@ -90,6 +118,8 @@ describe('TaskPanel', () => {
       />,
     );
 
+    expandTaskPanel();
+
     const item = screen.getByTestId('task-panel-item');
     expect(item).toHaveClass('grid');
     expect(item).not.toHaveClass('flex');
@@ -113,6 +143,7 @@ describe('TaskPanel', () => {
       />,
     );
 
+    expandTaskPanel();
     fireEvent.click(screen.getByRole('button', { name: '查看 贵州茅台 运行流' }));
 
     expect(onOpenRunFlow).toHaveBeenCalledWith(baseTask);
@@ -131,6 +162,8 @@ describe('TaskPanel', () => {
       />,
     );
 
+    expect(screen.getByText('1 取消中')).toBeInTheDocument();
+    expandTaskPanel();
     expect(screen.getByText('贵州茅台')).toBeInTheDocument();
     expect(screen.getByLabelText('任务状态：请求取消')).toBeInTheDocument();
     expect(screen.queryByText('失败')).not.toBeInTheDocument();
@@ -149,6 +182,23 @@ describe('TaskPanel', () => {
     );
 
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it('keeps the chosen state during task updates and resets after the panel disappears', () => {
+    const { rerender } = render(<TaskPanel tasks={[baseTask]} />);
+    expandTaskPanel();
+
+    rerender(<TaskPanel tasks={[{ ...baseTask, progress: 70, message: '正在生成报告' }]} />);
+
+    expect(screen.getByRole('button', { name: /^收起分析任务/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('70%')).toBeInTheDocument();
+
+    rerender(<TaskPanel tasks={[]} />);
+    expect(screen.queryByText('分析任务')).not.toBeInTheDocument();
+
+    rerender(<TaskPanel tasks={[{ ...baseTask, taskId: 'task-2' }]} />);
+    expect(screen.getByRole('button', { name: /^展开分析任务/ })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByTestId('task-panel-item')).not.toBeInTheDocument();
   });
 
   it('does not render when there are no active tasks', () => {

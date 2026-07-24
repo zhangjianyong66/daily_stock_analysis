@@ -1,7 +1,7 @@
+import { useState } from 'react';
 import type React from 'react';
 import { ChevronDown, RefreshCw, Workflow } from 'lucide-react';
 import { Badge, Button, Card, StatusDot, Tooltip } from '../common';
-import { DashboardPanelHeader } from '../dashboard';
 import type { TaskInfo } from '../../types/analysis';
 import { getRequestedPhaseLabel } from '../../utils/marketPhase';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
@@ -160,6 +160,95 @@ interface TaskPanelProps {
   onOpenRunFlow?: (task: TaskInfo) => void;
 }
 
+interface ActiveTaskPanelProps {
+  activeTasks: TaskInfo[];
+  title?: string;
+  className: string;
+  onOpenRunFlow?: (task: TaskInfo) => void;
+}
+
+/**
+ * 活跃任务面板主体
+ * 由外层在存在活跃任务时挂载，任务归零后卸载并自然重置折叠状态
+ */
+const ActiveTaskPanel: React.FC<ActiveTaskPanelProps> = ({
+  activeTasks,
+  title,
+  className,
+  onOpenRunFlow,
+}) => {
+  const { t } = useUiLanguage();
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  const pendingCount = activeTasks.filter((t) => t.status === 'pending').length;
+  const processingCount = activeTasks.filter((t) => t.status === 'processing').length;
+  const cancelRequestedCount = activeTasks.filter((t) => t.status === 'cancel_requested').length;
+  const summaryLabels = [
+    processingCount > 0 ? t('taskPanel.processingTasks', { count: processingCount }) : null,
+    pendingCount > 0 ? t('taskPanel.pendingTasks', { count: pendingCount }) : null,
+    cancelRequestedCount > 0 ? t('taskPanel.cancelRequestedTasks', { count: cancelRequestedCount }) : null,
+  ].filter((label): label is string => Boolean(label));
+
+  return (
+    <Card
+      variant="bordered"
+      padding="none"
+      className={`home-panel-card overflow-hidden ${className}`}
+    >
+      <button
+        type="button"
+        className={`flex w-full items-center justify-between gap-3 px-3 py-3 text-left transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cyan/60 ${isExpanded ? 'border-b border-subtle' : ''}`}
+        onClick={() => setIsExpanded((expanded) => !expanded)}
+        aria-expanded={isExpanded}
+        aria-label={`${isExpanded ? t('taskPanel.collapse') : t('taskPanel.expand')}: ${summaryLabels.join(', ')}`}
+      >
+        <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
+          <span className="flex min-w-0 items-center gap-2">
+            <RefreshCw className="h-4 w-4 text-cyan" aria-hidden="true" />
+            <span className="truncate text-sm font-medium text-foreground">
+              {title ?? t('taskPanel.title')}
+            </span>
+          </span>
+          <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-text">
+            {processingCount > 0 ? (
+              <span className="flex items-center gap-1">
+                <StatusDot tone="info" pulse className="h-1.5 w-1.5" aria-label={t('taskPanel.processingAria')} />
+                {t('taskPanel.processingTasks', { count: processingCount })}
+              </span>
+            ) : null}
+            {pendingCount > 0 ? (
+              <span className="flex items-center gap-1">
+                <StatusDot tone="neutral" className="h-1.5 w-1.5" aria-label={t('taskPanel.pendingAria')} />
+                {t('taskPanel.pendingTasks', { count: pendingCount })}
+              </span>
+            ) : null}
+            {cancelRequestedCount > 0 ? (
+              <span className="flex items-center gap-1">
+                <StatusDot tone="warning" pulse className="h-1.5 w-1.5" aria-label={t('taskPanel.cancelRequestedAria')} />
+                {t('taskPanel.cancelRequestedTasks', { count: cancelRequestedCount })}
+              </span>
+            ) : null}
+          </span>
+        </span>
+        <ChevronDown
+          className={`h-4 w-4 shrink-0 text-muted-text transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+          aria-hidden="true"
+        />
+      </button>
+
+      {isExpanded ? (
+        <div className="max-h-64 overflow-y-auto p-2">
+          <div className="space-y-2">
+            {activeTasks.map((task) => (
+              <TaskItem key={task.taskId} task={task} onOpenRunFlow={onOpenRunFlow} />
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </Card>
+  );
+};
+
 /**
  * 任务面板组件
  * 显示进行中的分析任务列表
@@ -171,62 +260,23 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({
   className = '',
   onOpenRunFlow,
 }) => {
-  const { t } = useUiLanguage();
   // 筛选活跃任务（pending / processing / cancel requested）
   const activeTasks = tasks.filter(
-    (t) => t.status === 'pending' || t.status === 'processing' || t.status === 'cancel_requested'
+    (task) => task.status === 'pending' || task.status === 'processing' || task.status === 'cancel_requested'
   );
 
-  // 无任务或不可见时不渲染
+  // 无任务或不可见时不挂载面板主体，确保下一批任务恢复默认折叠
   if (!visible || activeTasks.length === 0) {
     return null;
   }
 
-  const pendingCount = activeTasks.filter((t) => t.status === 'pending').length;
-  const processingCount = activeTasks.filter((t) => t.status === 'processing').length;
-
   return (
-    <Card
-      variant="bordered"
-      padding="none"
-      className={`home-panel-card overflow-hidden ${className}`}
-    >
-      <div className="border-b border-subtle px-3 py-3">
-        <DashboardPanelHeader
-          className="mb-0"
-          title={title ?? t('taskPanel.title')}
-          titleClassName="text-sm font-medium"
-          leading={(
-            <RefreshCw className="h-4 w-4 text-cyan" aria-hidden="true" />
-          )}
-          headingClassName="items-center"
-          actions={(
-            <div className="flex items-center gap-2 text-xs text-muted-text">
-              {processingCount > 0 && (
-                <span className="flex items-center gap-1">
-                  <StatusDot tone="info" pulse className="h-1.5 w-1.5" aria-label="进行中任务" />
-                  {t('taskPanel.processingTasks', { count: processingCount })}
-                </span>
-              )}
-              {pendingCount > 0 ? (
-                <span className="flex items-center gap-1">
-                  <StatusDot tone="neutral" className="h-1.5 w-1.5" aria-label="等待中任务" />
-                  {t('taskPanel.pendingTasks', { count: pendingCount })}
-                </span>
-              ) : null}
-            </div>
-          )}
-        />
-      </div>
-
-      <div className="max-h-64 overflow-y-auto p-2">
-        <div className="space-y-2">
-          {activeTasks.map((task) => (
-            <TaskItem key={task.taskId} task={task} onOpenRunFlow={onOpenRunFlow} />
-          ))}
-        </div>
-      </div>
-    </Card>
+    <ActiveTaskPanel
+      activeTasks={activeTasks}
+      title={title}
+      className={className}
+      onOpenRunFlow={onOpenRunFlow}
+    />
   );
 };
 
