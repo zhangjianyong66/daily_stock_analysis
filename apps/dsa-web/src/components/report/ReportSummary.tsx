@@ -8,6 +8,7 @@ import { ReportDiagnostics } from './ReportDiagnostics';
 import { AnalysisContextSummary } from './AnalysisContextSummary';
 import { MarketReviewReportView } from './MarketReviewReportView';
 import { getReportText, normalizeReportLanguage } from '../../utils/reportLanguage';
+import { KlinePatternReport } from './KlinePatternReport';
 
 interface ReportSummaryProps {
   data: AnalysisResult | AnalysisReport;
@@ -20,6 +21,7 @@ interface ReportSummaryProps {
     actionMessage: string | null;
   };
   onOpenRunFlow?: (recordId: number) => void;
+  onSelectStrategy?: (skillId: string) => void;
 }
 
 /**
@@ -31,6 +33,7 @@ export const ReportSummary: React.FC<ReportSummaryProps> = ({
   isHistory = false,
   watchlist,
   onOpenRunFlow,
+  onSelectStrategy,
 }) => {
   // 兼容 AnalysisResult 和 AnalysisReport 两种数据格式
   const report: AnalysisReport = 'report' in data ? data.report : data;
@@ -70,6 +73,8 @@ export const ReportSummary: React.FC<ReportSummaryProps> = ({
 
       {/* 策略点位区 */}
       <ReportStrategy strategy={strategy} language={reportLanguage} />
+
+      <KlinePatternReport report={details?.patternReport} language={reportLanguage} onSelectStrategy={onSelectStrategy} />
 
       {/* 资讯区 */}
       <ReportNews recordId={recordId} limit={8} language={reportLanguage} />

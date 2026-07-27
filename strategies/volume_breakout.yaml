@@ -12,6 +12,7 @@ required_tools:
   - get_realtime_quote
 aliases: [放量突破, 突破]
 default_priority: 30
+usage_scenarios: [接近前高, 平台突破, 放量确认]
 market_regimes: [trending_up]
 
 instructions: |

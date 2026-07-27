@@ -12,6 +12,7 @@ required_tools:
   - get_realtime_quote
 aliases: [波浪, 波浪理论, 艾略特]
 default_priority: 80
+usage_scenarios: [中期趋势, 推动浪, 调整浪]
 market_regimes: [volatile]
 
 instructions: |

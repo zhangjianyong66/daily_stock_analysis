@@ -320,12 +320,8 @@ get_volume_analysis_tool = ToolDefinition(
 # analyze_pattern — candlestick / chart pattern recognition
 # ============================================================
 
-def _handle_analyze_pattern(stock_code: str, days: int = 60) -> dict:
-    """Detect common candlestick and chart patterns in recent price history."""
-    from src.services.history_loader import load_history_df
-
-    df, source = load_history_df(stock_code, days=max(days, 120))
-
+def detect_patterns_from_df(df, stock_code: str, source: str = "unknown", days: int = 60) -> dict:
+    """Detect common candlestick and chart patterns from an already loaded frame."""
     if df is None or df.empty:
         return {"error": f"No historical data for {stock_code}"}
 
@@ -440,6 +436,32 @@ def _handle_analyze_pattern(stock_code: str, days: int = 60) -> dict:
             })
 
     # --- Chart patterns over the window ---
+    # 一阳夹三阴：最近五根 K 线的固定、可解释规则。
+    if n >= 5:
+        first = 0
+        middle = range(1, 4)
+        if (
+            is_bullish(first)
+            and body(first) > avg_body * 1.5
+            and all(is_bearish(i) or body(i) < avg_body * 0.6 for i in middle)
+            and is_bullish(4)
+            and c[4] > c[first]
+        ):
+            patterns_detected.append({
+                "pattern": "一阳夹三阴", "type": "bullish_continuation",
+                "day_offset": -4, "strength": "强", "desc": "大阳线后缩量整理并重新突破"
+            })
+
+        # 缩量回踩：价格回落但最近成交量显著低于此前均量。
+        if v is not None and n >= 10:
+            prior_avg = sum(v[-10:-3]) / 7 if sum(v[-10:-3]) > 0 else 0
+            recent_avg = sum(v[-3:]) / 3
+            if prior_avg > 0 and recent_avg < prior_avg * 0.7 and c[-1] >= min(c[-4:-1]):
+                patterns_detected.append({
+                    "pattern": "缩量回踩", "type": "bullish_continuation",
+                    "day_offset": 0, "strength": "中", "desc": "回调期间成交量收缩，等待均线支撑确认"
+                })
+
     # Double bottom detection (简化版: 两个相近低点 + 中间高点)
     recent_lows_idx = sorted(range(n), key=lambda i: l[i])[:5]
     if len(recent_lows_idx) >= 2:
@@ -495,6 +517,14 @@ def _handle_analyze_pattern(stock_code: str, days: int = 60) -> dict:
             else "、".join(p["pattern"] for p in unique_patterns)
         ),
     }
+
+
+def _handle_analyze_pattern(stock_code: str, days: int = 60) -> dict:
+    """Detect common candlestick and chart patterns in recent price history."""
+    from src.services.history_loader import load_history_df
+
+    df, source = load_history_df(stock_code, days=max(days, 120))
+    return detect_patterns_from_df(df, stock_code, source=source, days=days)
 
 
 analyze_pattern_tool = ToolDefinition(

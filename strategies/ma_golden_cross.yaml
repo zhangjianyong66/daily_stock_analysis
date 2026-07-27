@@ -11,6 +11,7 @@ required_tools:
   - analyze_trend
 aliases: [均线金叉, 金叉]
 default_priority: 20
+usage_scenarios: [盘整转强, 均线交叉, 趋势启动]
 market_regimes: [trending_up]
 
 instructions: |

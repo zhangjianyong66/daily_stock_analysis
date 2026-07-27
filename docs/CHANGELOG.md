@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [新功能] 策略菜单新增场景标签，个股报告持久化日线 K 线形态与确定性策略推荐，并兼容历史、Markdown 和通知出口。
+- [文档] 新增内置策略使用场景与 ETF 机会筛选指南，说明 15 种策略的适用形态、确认条件、误用边界及每日候选筛选流程。
 - [改进] Web 首页分析任务面板在桌面和移动端默认折叠，保留任务状态数量并支持按需展开，减少对个股栏操作空间的占用。
 - [新功能] 新增可配置的部署级默认分析策略，支持设置页动态选择、首页策略菜单一键设为默认或恢复系统默认，并统一应用于新建个股分析和问股任务。
 - [改进] 个股报告顶部展示服务端实际执行的策略、来源与回退/降级状态，Web 历史、Markdown 和通知保持一致，重新分析默认复用原报告策略。

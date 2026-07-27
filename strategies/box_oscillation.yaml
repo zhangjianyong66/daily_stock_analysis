@@ -12,6 +12,7 @@ required_tools:
   - get_realtime_quote
 aliases: [箱体, 箱体震荡]
 default_priority: 50
+usage_scenarios: [长期横盘, 区间震荡, 等待突破]
 market_regimes: [sideways]
 
 instructions: |

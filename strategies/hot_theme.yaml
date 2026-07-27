@@ -12,6 +12,7 @@ required_tools:
   - analyze_trend
 aliases: [热点, 题材, 热点题材]
 default_priority: 35
+usage_scenarios: [政策热点, 产业主线, 板块扩散]
 market_regimes: [sector_hot]
 
 instructions: |

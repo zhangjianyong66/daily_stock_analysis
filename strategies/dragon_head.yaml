@@ -12,6 +12,7 @@ required_tools:
   - search_stock_news
 aliases: [龙头, 龙头战法]
 default_priority: 90
+usage_scenarios: [板块启动, 行业催化, 相对强势]
 market_regimes: [sector_hot]
 
 instructions: |

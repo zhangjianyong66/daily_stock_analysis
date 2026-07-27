@@ -326,6 +326,36 @@ class StockAnalysisPipeline:
                 },
             )
 
+    def _attach_pattern_report(self, result: Optional[AnalysisResult], code: str) -> Optional[AnalysisResult]:
+        """Attach a fail-open, persisted daily-pattern snapshot to a stock result."""
+        if result is None:
+            return result
+        try:
+            from src.services.kline_pattern_service import KlinePatternService
+
+            skill_manager = getattr(self.skill_prompt_state, "skill_manager", None)
+            catalog = skill_manager.list_skills() if skill_manager is not None else []
+            result.pattern_report = KlinePatternService().build_report(
+                code,
+                language=normalize_report_language(getattr(result, "report_language", None) or getattr(self.config, "report_language", "zh")),
+                skill_catalog=catalog,
+            )
+        except Exception as exc:
+            logger.warning("[%s] K线形态报告失败，继续主分析: %s", code, exc, exc_info=True)
+            result.pattern_report = {
+                "schema_version": "kline-pattern-v1",
+                "status": "unavailable",
+                "period": "daily",
+                "window_days": 60,
+                "source": "unknown",
+                "as_of": None,
+                "current_price": None,
+                "patterns": [],
+                "summary": "形态数据暂不可用",
+                "recommendations": [],
+            }
+        return result
+
     def fetch_and_save_stock_data(
         self, 
         code: str,
@@ -824,6 +854,7 @@ class StockAnalysisPipeline:
                     report_type=report_type.value,
                     previous_operation_advice=action_source_advice,
                 )
+                self._attach_pattern_report(result, code)
 
             # Step 8: 保存分析历史记录
             if result and result.success:
@@ -1526,6 +1557,7 @@ class StockAnalysisPipeline:
                     report_type=report_type.value,
                     previous_operation_advice=action_source_advice,
                 )
+                self._attach_pattern_report(result, code)
 
             resolved_stock_name = result.name if result and result.name else stock_name
 

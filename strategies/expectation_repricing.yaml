@@ -12,6 +12,7 @@ required_tools:
   - analyze_trend
 aliases: [预期, 预期差, 预期重估]
 default_priority: 65
+usage_scenarios: [预期变化, 估值重估, 利好兑现]
 market_regimes: [volatile, sector_hot]
 
 instructions: |

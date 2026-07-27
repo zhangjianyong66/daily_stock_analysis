@@ -387,6 +387,38 @@ export interface ReportDetails {
   sectorRankings?: SectorRankings;
   conceptRankings?: SectorRankings;
   marketStructure?: MarketStructureContext | null;
+  patternReport?: KlinePatternReport | null;
+}
+
+export type KlinePatternStatus = 'ok' | 'insufficient_data' | 'unavailable' | 'not_supported';
+
+export interface KlinePatternItem {
+  name: string;
+  type: string;
+  strength?: string;
+  dayOffset?: number;
+  description?: string;
+}
+
+export interface KlinePatternRecommendation {
+  skillId: string;
+  displayName: string;
+  matchedPatterns: string[];
+  reason: string;
+  mode: 'analysis' | 'risk_review' | string;
+}
+
+export interface KlinePatternReport {
+  schemaVersion: string;
+  status: KlinePatternStatus;
+  period: string;
+  windowDays: number;
+  source?: string | null;
+  asOf?: string | null;
+  currentPrice?: number | null;
+  patterns: KlinePatternItem[];
+  summary?: string;
+  recommendations: KlinePatternRecommendation[];
 }
 
 /** Full analysis report */

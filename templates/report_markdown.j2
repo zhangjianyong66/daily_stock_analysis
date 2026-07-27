@@ -61,6 +61,9 @@
 **{{ e.signal_emoji }} {{ e.signal_text }}** | {{ localize_trend_prediction(result.trend_prediction, report_language) }}
 
 > **{{ labels.one_sentence_label }}**: {{ core.get('one_sentence', result.analysis_summary) }}
+{% if result.pattern_report and result.pattern_report.get('summary') %}
+> **{{ labels.pattern_heading }}**: {{ result.pattern_report.get('summary') }}
+{% endif %}
 
 ⏰ **{{ labels.time_sensitivity_label }}**: {{ core.get('time_sensitivity', labels.default_time_sensitivity) }}
 

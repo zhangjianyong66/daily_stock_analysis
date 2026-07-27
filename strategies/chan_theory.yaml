@@ -12,6 +12,7 @@ required_tools:
   - get_realtime_quote
 aliases: [缠论, 缠论分析]
 default_priority: 70
+usage_scenarios: [结构复杂, 中枢震荡, 背驰观察]
 market_regimes: [volatile]
 
 instructions: |

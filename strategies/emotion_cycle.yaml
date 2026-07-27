@@ -13,6 +13,7 @@ required_tools:
   - search_stock_news
 aliases: [情绪, 情绪周期]
 default_priority: 100
+usage_scenarios: [短线过热, 情绪降温, 热点轮动]
 market_regimes: [sector_hot]
 
 instructions: |

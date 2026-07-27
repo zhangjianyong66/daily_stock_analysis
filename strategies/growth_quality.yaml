@@ -12,6 +12,7 @@ required_tools:
   - analyze_trend
 aliases: [成长, 成长股, 成长质量]
 default_priority: 55
+usage_scenarios: [中长期成长, 业绩改善, 估值质量]
 market_regimes: [trending_up]
 
 instructions: |

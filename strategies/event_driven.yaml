@@ -11,6 +11,7 @@ required_tools:
   - analyze_trend
 aliases: [事件驱动, 催化, 催化事件]
 default_priority: 45
+usage_scenarios: [业绩公告, 政策落地, 事件催化]
 market_regimes: [sector_hot, volatile]
 
 instructions: |

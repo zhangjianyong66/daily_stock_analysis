@@ -1172,6 +1172,7 @@ def get_analysis_status(task_id: str) -> TaskStatus:
                 or market_structure is not None
                 or context_snapshot is not None
                 or analysis_context_pack_overview is not None
+                or (isinstance(raw_result, dict) and "pattern_report" in raw_result)
             ):
                 details = ReportDetails(
                     news_content=getattr(record, "news_content", None),
@@ -1184,6 +1185,7 @@ def get_analysis_status(task_id: str) -> TaskStatus:
                     sector_rankings=extracted_boards.get("sector_rankings"),
                     concept_rankings=extracted_boards.get("concept_rankings"),
                     market_structure=market_structure,
+                    pattern_report=(raw_result or {}).get("pattern_report") if isinstance(raw_result, dict) else None,
                 )
 
             raw_dict = raw_result if isinstance(raw_result, dict) else {}
@@ -1486,6 +1488,7 @@ def _build_analysis_report(
         or market_structure is not None
         or context_snapshot is not None
         or analysis_context_pack_overview is not None
+        or "pattern_report" in raw_result_data
     ):
         details = ReportDetails(
             news_content=details_data.get("news_summary") or details_data.get("news_content"),
@@ -1498,6 +1501,7 @@ def _build_analysis_report(
             sector_rankings=extracted_boards.get("sector_rankings"),
             concept_rankings=extracted_boards.get("concept_rankings"),
             market_structure=market_structure,
+            pattern_report=raw_result_data.get("pattern_report"),
         )
 
     return AnalysisReport(

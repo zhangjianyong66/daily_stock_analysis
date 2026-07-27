@@ -21,6 +21,9 @@
 ### {{ e.signal_emoji }} **{{ e.signal_text }}** | {{ e.stock_name }}({{ result.code }})
 
 {{ format_strategy_execution_text(result.strategy_execution, report_language) }}
+{% if result.pattern_report and result.pattern_report.get('summary') %}
+🧭 {{ result.pattern_report.get('summary') }}
+{% endif %}
 
 {% set one_sentence = core.get('one_sentence', result.analysis_summary) if core else result.analysis_summary %}
 {% if one_sentence %}

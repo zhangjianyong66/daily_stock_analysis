@@ -12,6 +12,7 @@ aliases: [趋势, 趋势分析, 多头趋势]
 default_active: true
 default_router: true
 default_priority: 10
+usage_scenarios: [均线多头, 趋势稳定, 批量初筛]
 market_regimes: [trending_up]
 
 instructions: |

@@ -462,6 +462,7 @@ const HomePage: React.FC = () => {
         id: skill.id,
         name: skill.name,
         description: skill.description,
+        usageScenarios: (skill.usage_scenarios || []).slice(0, 3),
       })),
     ],
     [analysisSkills, t],
@@ -1529,6 +1530,13 @@ const HomePage: React.FC = () => {
                                   ) : null}
                                 </span>
                                 <span className="mt-0.5 line-clamp-2 block text-xs leading-5 text-muted-text">{option.description}</span>
+                                {'usageScenarios' in option && option.usageScenarios?.length ? (
+                                  <span className="mt-1 flex flex-wrap gap-1">
+                                    {option.usageScenarios.map((scenario: string) => (
+                                      <span key={scenario} className="rounded border border-subtle px-1.5 py-0.5 text-[10px] leading-4 text-secondary-text">{scenario}</span>
+                                    ))}
+                                  </span>
+                                ) : null}
                               </span>
                             </button>
                             {option.id && !isEffectiveDefault ? (
@@ -1883,6 +1891,7 @@ const HomePage: React.FC = () => {
                     data={selectedReport}
                     isHistory
                     onOpenRunFlow={openHistoryRunFlow}
+                    onSelectStrategy={selectStrategy}
                     watchlist={{
                       isInWatchlist: watchlistState.isInWatchlist,
                       onToggle: watchlistState.toggleWatchlist,

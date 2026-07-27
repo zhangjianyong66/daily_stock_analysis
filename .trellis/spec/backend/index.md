@@ -30,6 +30,7 @@
 | API 错误、异常传播、fallback 语义 | [Error Handling](./error-handling.md) |
 | 日志初始化、级别、敏感信息 | [Logging Guidelines](./logging-guidelines.md) |
 | 分析实际策略快照、历史/API/Web/报告跨层契约 | [Strategy Execution](./strategy-execution.md) |
+| 日线形态快照、策略推荐及跨层读取契约 | [Kline Pattern Report](./kline-pattern-report.md) |
 | 每日大盘上下文日期、历史复用、锁与 fail-open | [Daily Market Context](./daily-market-context.md) |
 | 持仓/成交截图、Vision、`trade_time` 跨层改动 | [Portfolio Image Import](./portfolio-image-import.md) |
 | A 股场内 ETF 日资金流与盘中主动流 | [ETF Capital Flow](./etf-capital-flow.md) |

@@ -892,6 +892,7 @@ class HistoryService:
                 change_pct=raw_result.get("change_pct"),
                 model_used=raw_result.get("model_used"),
                 strategy_execution=raw_result.get("strategy_execution"),
+                pattern_report=raw_result.get("pattern_report"),
             )
             guardrail_reason = extract_decision_guardrail_reason(raw_result)
             if guardrail_reason:
@@ -939,6 +940,7 @@ class HistoryService:
         ma_label = _label("Moving Averages", "均线", "이동평균")
         volume_analysis_label = _label("Volume", "量能", "거래량")
         news_heading = _label("News Flow", "消息面", "뉴스 흐름")
+        pattern_heading = _label("Daily Patterns", "日线形态", "일봉 패턴")
 
         # Escape markdown special characters in stock name
         name_escaped = self._escape_md(
@@ -1248,6 +1250,12 @@ class HistoryService:
                     f"{result.news_summary}",
                     "",
                 ])
+
+        pattern_report = getattr(result, "pattern_report", None)
+        if isinstance(pattern_report, dict) and pattern_report.get("status") in {"ok", "insufficient_data", "unavailable"}:
+            summary = str(pattern_report.get("summary") or "").strip()
+            if summary:
+                report_lines.extend([f"**{pattern_heading}**: {summary}", ""])
 
         # ========== 底部 ==========
         report_lines.extend([

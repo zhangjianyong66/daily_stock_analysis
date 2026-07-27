@@ -44,6 +44,7 @@ export interface SkillInfo {
   id: string;
   name: string;
   description: string;
+  usage_scenarios?: string[];
 }
 
 export interface SkillsResponse {

@@ -1739,6 +1739,7 @@ class AnalysisResult:
     fundamental_context: Optional[Dict[str, Any]] = None
     market_structure_context: Optional[Dict[str, Any]] = None
     strategy_execution: Optional[Dict[str, Any]] = None
+    pattern_report: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
@@ -1780,6 +1781,7 @@ class AnalysisResult:
             'model_used': self.model_used,
             'market_structure_context': self.market_structure_context,
             'strategy_execution': self.strategy_execution,
+            'pattern_report': self.pattern_report,
         }
 
     def get_core_conclusion(self) -> str:

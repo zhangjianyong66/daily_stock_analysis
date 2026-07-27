@@ -73,6 +73,7 @@ class SkillInfo(BaseModel):
     id: str
     name: str
     description: str
+    usage_scenarios: List[str] = Field(default_factory=list)
 
 class SkillsResponse(BaseModel):
     skills: List[SkillInfo]
@@ -157,7 +158,12 @@ def _build_skills_response(config) -> SkillsResponse:
         ),
     )
     skills = [
-        SkillInfo(id=skill.name, name=skill.display_name, description=skill.description)
+        SkillInfo(
+            id=skill.name,
+            name=skill.display_name,
+            description=skill.description,
+            usage_scenarios=list(getattr(skill, "usage_scenarios", []) or [])[:3],
+        )
         for skill in available_skills
     ]
     default_resolution = resolve_default_skill_selection(

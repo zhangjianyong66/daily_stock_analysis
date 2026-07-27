@@ -1004,6 +1004,9 @@ class NotificationService(
                     tech_lines.append(f"**量能**：{result.volume_analysis}")
                 if hasattr(result, 'pattern_analysis') and result.pattern_analysis:
                     tech_lines.append(f"**形态**：{result.pattern_analysis}")
+                pattern_report = getattr(result, "pattern_report", None)
+                if isinstance(pattern_report, dict) and pattern_report.get("summary"):
+                    tech_lines.append(f"**{labels.get('pattern_heading', '日线形态')}**：{pattern_report['summary']}")
                 if tech_lines:
                     report_lines.extend([
                         "#### 📊 技术面分析",
@@ -1570,6 +1573,11 @@ class NotificationService(
                             f"{result.news_summary}",
                             "",
                         ])
+
+                pattern_report = getattr(result, "pattern_report", None)
+                if isinstance(pattern_report, dict) and pattern_report.get("summary"):
+                    report_lines.append(f"**{labels.get('pattern_heading', '日线形态')}**：{pattern_report['summary']}")
+                    report_lines.append("")
 
                 report_lines.extend([
                     "---",

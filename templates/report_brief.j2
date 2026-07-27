@@ -11,6 +11,8 @@
 {% set one = (core.get('one_sentence') or e.result.analysis_summary or '')[:60] %}
 **{{ e.stock_name }}({{ e.result.code }})** {{ e.signal_emoji }} {{ e.signal_text }} | {{ labels.score_label }} {{ e.result.sentiment_score }} | {{ one }}
 - {{ format_strategy_execution_text(e.result.strategy_execution, report_language) }}
+{% if e.result.pattern_report and e.result.pattern_report.get('summary') %}- {{ e.result.pattern_report.get('summary') }}
+{% endif %}
 {% endfor %}
 
 *{{ report_timestamp }}*
