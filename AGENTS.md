@@ -196,6 +196,7 @@ npm run build
 ### 本机 / ECS2 当前部署备注
 
 - 本机 Docker 中 `daily-stock-analysis` 的 Web/API 服务通常由 `stock-server` 容器提供，启动命令为 `python main.py --serve-only --host 0.0.0.0 --port ${WEBUI_PORT:-${API_PORT:-8000}}`。
+- 本机 Docker daemon 的 systemd 代理配置位于 `/etc/systemd/system/docker.service.d/http-proxy.conf`，当前使用 `http://127.0.0.1:7890`。Dockerfile 顶部 `# syntax=docker/dockerfile:1.7` 和基础镜像元数据由 daemon 拉取，不受 Compose `build.args` 或 `DOCKER_BUILD_HTTPS_PROXY` 控制；若此阶段出现 Docker Hub TLS 握手超时，应先验证 daemon 代理，修改后执行 `sudo systemctl daemon-reload && sudo systemctl restart docker`。
 - 当前本机 8000 端口可能被其他项目占用；如 `.env` 中设置 `WEBUI_PORT=8001` / `API_PORT=8001`，`stock-server` 会映射为宿主机 `0.0.0.0:8001->8001/tcp`。
 - 本机 frpc 由用户级 systemd 服务 `~/.config/systemd/user/frpc.service` 管理，配置入口为 `~/.frpc/frpc.ini`。该文件包含 frps token，禁止提交仓库。
 - 当前本机 frpc 代理包含本机 SSH、其他项目域名以及本项目 `[dsa-stock]`。`[dsa-stock]` 使用 `type = http`、`local_ip = 127.0.0.1`、`local_port = 8001`、`custom_domains = stock.zhangjianyong.top`，通过 ECS2 frps HTTP vhost 暴露 DSA。
