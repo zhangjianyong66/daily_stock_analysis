@@ -1019,3 +1019,29 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 32: 修复历史报告策略推荐缺失
+
+**Date**: 2026-07-27
+**Task**: 修复历史报告策略推荐缺失
+**Branch**: `main`
+
+### Summary
+
+历史报告详情恢复透传分析时保存的日线形态与策略推荐快照，补充有无快照回归测试，并完成容器部署验证。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a9b29d2` | (see git log) |
+
+### Testing
+
+- [OK] 相关定向测试 66 项通过
+- [OK] 运行中容器真实历史记录 1165 返回箱体震荡推荐
+
+### Status
+
+[OK] **Completed**

@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 31
+- **Total Sessions**: 32
 - **Last Active**: 2026-07-27
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1021 | Active |
+| `journal-1.md` | ~1047 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 32 | 2026-07-27 | 修复历史报告策略推荐缺失 | `a9b29d2` | `main` |
 | 31 | 2026-07-27 | 升级 Trellis 至 0.6.9 | `c86c014` | `main` |
 | 30 | 2026-07-27 | 完成策略场景与日线形态推荐 | `956d1bb` | `main` |
 | 29 | 2026-07-24 | 首页分析任务面板默认折叠 | `7aed552` | `main` |
