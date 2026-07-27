@@ -1,0 +1,2 @@
+{"file":".trellis/spec/backend/kline-pattern-report.md","reason":"检查历史 API 是否复用持久化快照并兼容缺失字段"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"检查测试覆盖、影响面与交付验证是否符合项目要求"}

@@ -944,6 +944,64 @@ class AnalysisHistoryTestCase(unittest.TestCase):
         self.assertEqual(response.summary.action, "watch")
         self.assertEqual(response.summary.action_label, "观望")
 
+    def test_history_detail_returns_persisted_pattern_report(self) -> None:
+        if get_history_detail is None:
+            self.skipTest("fastapi is not installed in this test environment")
+
+        pattern_report = {
+            "schema_version": "kline-pattern-v1",
+            "status": "ok",
+            "period": "daily",
+            "window_days": 60,
+            "source": "test",
+            "as_of": "2026-07-25",
+            "current_price": 4.32,
+            "patterns": [
+                {
+                    "name": "箱体震荡",
+                    "type": "consolidation",
+                    "strength": "medium",
+                    "day_offset": 0,
+                    "description": "近 20 日价格维持区间波动",
+                }
+            ],
+            "summary": "当前处于箱体震荡形态。",
+            "recommendations": [
+                {
+                    "skill_id": "box_oscillation",
+                    "display_name": "箱体震荡",
+                    "matched_patterns": ["箱体震荡"],
+                    "reason": "适合区间内高抛低吸。",
+                    "mode": "analysis",
+                }
+            ],
+        }
+        result = self._build_result()
+        result.pattern_report = pattern_report
+        record_id = self.db.save_analysis_history(
+            result=result,
+            query_id="query_pattern_report",
+            report_type="simple",
+            news_content="新闻摘要",
+            context_snapshot=None,
+            save_snapshot=False,
+        )
+        self.assertGreater(record_id, 0)
+
+        report = get_history_detail(str(record_id), db_manager=self.db)
+
+        self.assertEqual(report.details.pattern_report, pattern_report)
+
+    def test_history_detail_keeps_pattern_report_none_when_snapshot_missing(self) -> None:
+        if get_history_detail is None:
+            self.skipTest("fastapi is not installed in this test environment")
+
+        record_id = self._save_history("query_without_pattern_report")
+
+        report = get_history_detail(str(record_id), db_manager=self.db)
+
+        self.assertIsNone(report.details.pattern_report)
+
     def test_history_list_matches_equivalent_suffixed_stock_codes(self) -> None:
         """Same-stock history should include rows saved with supported suffixed codes."""
 
