@@ -998,3 +998,24 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 31: 升级 Trellis 至 0.6.9
+
+**Date**: 2026-07-27
+**Task**: 升级 Trellis 至 0.6.9
+**Branch**: `main`
+
+### Summary
+
+将项目 Trellis 从 0.6.6 升级到 0.6.9；保留本地 common/__init__.py 定制，完成 AI 资产校验、脚本语法检查、任务上下文校验与 dry-run 版本核对；未推送远端。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c86c014` | (see git log) |
+
+### Status
+
+[OK] **Completed**
