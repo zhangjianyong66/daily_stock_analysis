@@ -977,3 +977,24 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 30: 完成策略场景与日线形态推荐
+
+**Date**: 2026-07-27
+**Task**: 完成策略场景与日线形态推荐
+**Branch**: `main`
+
+### Summary
+
+实现策略场景标签、日线 K 线形态报告、确定性策略推荐及 API、历史、通知和 Web 展示；完成后端与前端定向验证。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `956d1bb` | (see git log) |
+
+### Status
+
+[OK] **Completed**
