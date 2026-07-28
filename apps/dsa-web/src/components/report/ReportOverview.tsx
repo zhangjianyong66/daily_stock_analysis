@@ -48,18 +48,21 @@ const STRATEGY_TEXT = {
     source: { request: '本次指定', default: '系统默认', config: '固定配置', auto: '自动路由', fallback: '系统回退', unknown: '未记录' },
     status: { normal: '', partial: '部分执行', fallback: '系统回退', degraded: '执行降级', unrecorded: '未记录' },
     requested: '原请求', effective: '实际执行', rejected: '未执行', details: '查看完整策略',
+    selection: '本次选择', autoMatch: '自动匹配', asOf: '完整日线截止', basis: '匹配依据', fallbackReason: '兜底原因',
   },
   en: {
     label: 'Strategy', unrecorded: 'Not recorded', unrecordedHelp: 'This report was created before strategy metadata was saved',
     source: { request: 'Selected this time', default: 'System default', config: 'Fixed configuration', auto: 'Auto routing', fallback: 'System fallback', unknown: 'Not recorded' },
     status: { normal: '', partial: 'Partial execution', fallback: 'System fallback', degraded: 'Execution degraded', unrecorded: 'Not recorded' },
     requested: 'Requested', effective: 'Executed', rejected: 'Not executed', details: 'View all strategies',
+    selection: 'Selection', autoMatch: 'Auto match', asOf: 'Complete daily bars through', basis: 'Matched patterns', fallbackReason: 'Fallback reason',
   },
   ko: {
     label: '분석 전략', unrecorded: '기록되지 않음', unrecordedHelp: '이 보고서 생성 당시 전략 정보가 저장되지 않았습니다',
     source: { request: '이번에 지정', default: '시스템 기본값', config: '고정 설정', auto: '자동 라우팅', fallback: '시스템 대체', unknown: '기록되지 않음' },
     status: { normal: '', partial: '일부 실행', fallback: '시스템 대체', degraded: '실행 저하', unrecorded: '기록되지 않음' },
     requested: '요청', effective: '실제 실행', rejected: '미실행', details: '전체 전략 보기',
+    selection: '이번 선택', autoMatch: '자동 매칭', asOf: '완료 일봉 기준일', basis: '매칭 근거', fallbackReason: '대체 사유',
   },
 } as const;
 
@@ -202,6 +205,7 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
   const preparedRelatedBoards = buildPreparedRelatedBoards(relatedBoards, boardSignals);
   const strategyText = STRATEGY_TEXT[reportLanguage];
   const strategyExecution = meta.strategyExecution;
+  const selectionContext = strategyExecution?.selectionContext;
   const effectiveStrategies = strategyExecution?.effective || [];
   const firstStrategy = effectiveStrategies[0];
   const additionalStrategyCount = Math.max(0, effectiveStrategies.length - 1);
@@ -209,6 +213,7 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
   const strategyStatus = strategyExecution?.status || 'unrecorded';
   const showStrategyDetails = effectiveStrategies.length > 1
     || Boolean(strategyExecution?.rejected?.length)
+    || Boolean(selectionContext)
     || ['partial', 'fallback', 'degraded'].includes(strategyStatus);
   const strategyVariant = ['fallback', 'partial'].includes(strategyStatus)
     ? 'warning'
@@ -222,7 +227,7 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
         {strategyText.label}: {firstStrategy?.displayName}
         {additionalStrategyCount > 0 ? ` +${additionalStrategyCount}` : ''}
       </span>
-      <span className="max-w-28 shrink-0 truncate opacity-75">· {strategyText.source[strategySource]}</span>
+      <span className="max-w-28 shrink-0 truncate opacity-75">· {selectionContext ? strategyText.autoMatch : strategyText.source[strategySource]}</span>
       {expandable ? <ChevronDown className="h-3 w-3 shrink-0 transition-transform group-open:rotate-180" aria-hidden="true" /> : null}
     </Badge>
   );
@@ -340,7 +345,9 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
                       </summary>
                       <div className="mt-2 w-[min(20rem,calc(100vw-3rem))] max-w-full rounded-md border border-border bg-card p-3 text-xs shadow-lg">
                         <p className="font-medium text-foreground">
-                          {strategyText.source[strategySource]}
+                          {selectionContext
+                            ? `${strategyText.selection}: ${strategyText.autoMatch}`
+                            : strategyText.source[strategySource]}
                           {strategyText.status[strategyStatus] ? ` · ${strategyText.status[strategyStatus]}` : ''}
                         </p>
                         <div className="mt-2 space-y-1 text-secondary-text">
@@ -353,6 +360,15 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
                           {(strategyExecution?.rejected || []).map((item) => (
                             <p key={`rejected-${item.id}`}>{strategyText.rejected}: {item.id}</p>
                           ))}
+                          {selectionContext?.asOf ? (
+                            <p>{strategyText.asOf}: {selectionContext.asOf}</p>
+                          ) : null}
+                          {selectionContext?.matchedPatterns?.length ? (
+                            <p>{strategyText.basis}: {selectionContext.matchedPatterns.join('、')}</p>
+                          ) : null}
+                          {selectionContext?.fallbackReason ? (
+                            <p>{strategyText.fallbackReason}: {selectionContext.fallbackReasonLabel || selectionContext.fallbackReason}</p>
+                          ) : null}
                         </div>
                         {strategyExecution?.message ? <p className="mt-2 text-muted-text">{strategyExecution.message}</p> : null}
                       </div>

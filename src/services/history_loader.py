@@ -127,6 +127,7 @@ def load_history_df(
     stock_code: str,
     days: int = 60,
     target_date: Optional[date] = None,
+    minimum_records: Optional[int] = None,
 ) -> Tuple[Optional[pd.DataFrame], str]:
     """Load K-line history, DB first with DataFetcherManager fallback.
 
@@ -150,7 +151,10 @@ def load_history_df(
     try:
         db = get_db()
         _code, bars = _select_best_bars(db, stock_code, start, end)
-        required_records = max(min(days, _CACHE_MIN_RECORDS), 1)
+        required_records = max(
+            min(days, minimum_records if minimum_records is not None else _CACHE_MIN_RECORDS),
+            1,
+        )
         latest_date = max((_bar_date(bar) for bar in bars), default=date.min)
         if bars and latest_date >= end and len(bars) >= required_records:
             df = pd.DataFrame([b.to_dict() for b in bars])

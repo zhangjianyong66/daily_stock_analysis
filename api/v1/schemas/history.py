@@ -137,6 +137,27 @@ class StrategyExecutionRejectedItem(BaseModel):
     reason: str = "unavailable"
 
 
+class StrategySelectionCandidate(BaseModel):
+    """自动匹配候选策略及其确定性依据。"""
+
+    skill_id: str
+    mode: Literal["analysis", "risk_review"]
+    matched_patterns: List[str] = Field(default_factory=list)
+
+
+class StrategySelectionContext(BaseModel):
+    """本次自动匹配所使用的完整日线快照。"""
+
+    mode: Literal["auto_match"]
+    status: Literal["matched", "fallback"]
+    as_of: Optional[str] = None
+    matched_patterns: List[str] = Field(default_factory=list)
+    candidates: List[StrategySelectionCandidate] = Field(default_factory=list)
+    selected_skill_id: Optional[str] = None
+    fallback_reason: Optional[str] = None
+    fallback_reason_label: Optional[str] = None
+
+
 class StrategyExecution(BaseModel):
     """服务端最终策略执行快照。"""
 
@@ -147,6 +168,7 @@ class StrategyExecution(BaseModel):
     effective: List[StrategyExecutionItem] = Field(default_factory=list)
     rejected: List[StrategyExecutionRejectedItem] = Field(default_factory=list)
     message: Optional[str] = None
+    selection_context: Optional[StrategySelectionContext] = None
 
 
 class ReportMeta(BaseModel):

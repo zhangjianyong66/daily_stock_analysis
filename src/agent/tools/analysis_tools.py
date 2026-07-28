@@ -408,7 +408,7 @@ def detect_patterns_from_df(df, stock_code: str, source: str = "unknown", days: 
                 and c[i] > (o[i - 2] + c[i - 2]) / 2):
             patterns_detected.append({
                 "pattern": "早晨之星 (Morning Star)", "type": "bullish_reversal",
-                "day_offset": -2, "strength": "强", "desc": "三根K线底部反转形态"
+                "day_offset": 0, "strength": "强", "desc": "三根K线底部反转形态"
             })
 
         # Evening Star (黄昏之星) — top reversal
@@ -418,7 +418,7 @@ def detect_patterns_from_df(df, stock_code: str, source: str = "unknown", days: 
                 and c[i] < (o[i - 2] + c[i - 2]) / 2):
             patterns_detected.append({
                 "pattern": "黄昏之星 (Evening Star)", "type": "bearish_reversal",
-                "day_offset": -2, "strength": "强", "desc": "三根K线顶部反转形态"
+                "day_offset": 0, "strength": "强", "desc": "三根K线顶部反转形态"
             })
 
         # Engulfing (吞没形态)
@@ -426,30 +426,30 @@ def detect_patterns_from_df(df, stock_code: str, source: str = "unknown", days: 
                 and o[i] < c[i - 1] and c[i] > o[i - 1]):
             patterns_detected.append({
                 "pattern": "看涨吞没 (Bullish Engulfing)", "type": "bullish_reversal",
-                "day_offset": -1, "strength": "强", "desc": "阳线完全覆盖前一阴线"
+                "day_offset": 0, "strength": "强", "desc": "阳线完全覆盖前一阴线"
             })
         elif (is_bearish(i) and is_bullish(i - 1)
               and o[i] > c[i - 1] and c[i] < o[i - 1]):
             patterns_detected.append({
                 "pattern": "看跌吞没 (Bearish Engulfing)", "type": "bearish_reversal",
-                "day_offset": -1, "strength": "强", "desc": "阴线完全覆盖前一阳线"
+                "day_offset": 0, "strength": "强", "desc": "阴线完全覆盖前一阳线"
             })
 
     # --- Chart patterns over the window ---
     # 一阳夹三阴：最近五根 K 线的固定、可解释规则。
     if n >= 5:
-        first = 0
-        middle = range(1, 4)
+        first = n - 5
+        middle = range(n - 4, n - 1)
         if (
             is_bullish(first)
             and body(first) > avg_body * 1.5
             and all(is_bearish(i) or body(i) < avg_body * 0.6 for i in middle)
-            and is_bullish(4)
-            and c[4] > c[first]
+            and is_bullish(n - 1)
+            and c[n - 1] > c[first]
         ):
             patterns_detected.append({
                 "pattern": "一阳夹三阴", "type": "bullish_continuation",
-                "day_offset": -4, "strength": "强", "desc": "大阳线后缩量整理并重新突破"
+                "day_offset": 0, "strength": "强", "desc": "大阳线后缩量整理并重新突破"
             })
 
         # 缩量回踩：价格回落但最近成交量显著低于此前均量。

@@ -469,6 +469,77 @@ def resolve_skill_prompt_state(config=None, skills: Optional[List[str]] = None) 
     )
 
 
+def build_auto_skill_prompt_state(
+    frozen_state: SkillPromptState,
+    skill_id: str,
+    *,
+    selection_context: dict[str, Any],
+) -> SkillPromptState:
+    """基于入队时冻结的目录构造单个股票专属自动策略状态。"""
+    from src.agent.skills.defaults import (
+        get_default_technical_skill_policy,
+        get_default_trading_skill_policy,
+    )
+
+    skill_manager = copy.deepcopy(frozen_state.skill_manager)
+    catalog = list(skill_manager.list_skills())
+    selected = next(
+        (
+            skill
+            for skill in catalog
+            if str(getattr(skill, "name", "")).strip() == skill_id
+            and bool(getattr(skill, "user_invocable", True))
+        ),
+        None,
+    )
+    if selected is None:
+        raise ValueError(f"Auto-matched strategy is unavailable in frozen catalog: {skill_id}")
+    skill_manager.activate([skill_id])
+    strategy_execution = build_strategy_execution_snapshot(
+        requested=[],
+        effective=_strategy_snapshot_items([skill_id], catalog),
+        source="auto",
+        status="normal",
+        selection_context=selection_context,
+    )
+    return SkillPromptState(
+        skill_manager=skill_manager,
+        skills_to_activate=[skill_id],
+        explicit_skill_selection=False,
+        use_legacy_default_prompt=False,
+        skill_instructions=skill_manager.get_skill_instructions(),
+        default_skill_policy=get_default_trading_skill_policy(explicit_skill_selection=True),
+        technical_skill_policy=get_default_technical_skill_policy(explicit_skill_selection=True),
+        strategy_execution=strategy_execution,
+        selection_source="auto",
+        default_skill_id=frozen_state.default_skill_id,
+        default_skill_source=frozen_state.default_skill_source,
+        saved_default_skill_id=frozen_state.saved_default_skill_id,
+        default_skill_warning=frozen_state.default_skill_warning,
+    )
+
+
+def build_auto_fallback_prompt_state(
+    frozen_state: SkillPromptState,
+    *,
+    selection_context: dict[str, Any],
+) -> SkillPromptState:
+    """保留冻结默认的实际策略，只补充本次自动匹配失败语义。"""
+    state = copy.deepcopy(frozen_state)
+    current = state.strategy_execution or {}
+    state.strategy_execution = build_strategy_execution_snapshot(
+        requested=current.get("requested") or [],
+        effective=current.get("effective") or [],
+        source="fallback",
+        status="fallback",
+        rejected=current.get("rejected") or [],
+        message=current.get("message") or "Auto strategy matching fell back to the frozen default.",
+        selection_context=selection_context,
+    )
+    state.selection_source = "auto_fallback"
+    return state
+
+
 def build_agent_executor(
     config=None,
     skills: Optional[List[str]] = None,
@@ -527,6 +598,7 @@ def build_agent_executor(
             fixed_default_skills=(
                 prompt_state.skills_to_activate
                 if prompt_state.saved_default_skill_id
+                or prompt_state.selection_source in {"auto", "auto_fallback"}
                 else None
             ),
         )

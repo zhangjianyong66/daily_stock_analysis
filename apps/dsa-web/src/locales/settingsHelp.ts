@@ -892,11 +892,12 @@ const settingsHelpZhCN: SettingsHelpMap = {
     notes: ['设为 0 或极低值可能导致推理不完整。'],
   },
   'settings.agent.DEFAULT_ANALYSIS_SKILL': {
-    title: '默认分析策略',
-    summary: '为未明确选择策略的新分析设置一个服务端默认值。',
-    usage: '选择一个当前可用策略；选择“跟随系统默认”会恢复 AGENT_SKILLS 和内置默认策略的原有解析。',
+    title: '自动匹配兜底策略',
+    summary: '设置个股日 K 线无法可靠匹配策略时使用的服务端兜底策略。',
+    usage: '选择一个当前可用策略；选择“恢复系统兜底链路”会按 AGENT_SKILLS 和内置默认策略继续解析。',
     valueNotes: [
-      '首页、批量与定时分析、问股都会使用这个默认值。',
+      '首页、批量与定时个股分析会先自动匹配，失败后才使用这个值。',
+      '问股不进行日 K 线自动匹配，仍直接使用这个默认值。',
       '首页手动选择其他策略只影响本次分析。',
     ],
     impact: ['只影响保存后创建的新任务，不会改写执行中任务或历史报告。'],
@@ -2108,11 +2109,12 @@ const settingsHelpEnUS: SettingsHelpMap = {
     notes: ['Very low values may cause incomplete reasoning.'],
   },
   'settings.agent.DEFAULT_ANALYSIS_SKILL': {
-    title: 'Default Analysis Strategy',
-    summary: 'Sets one server-side default for new analyses that do not explicitly choose a strategy.',
-    usage: 'Choose an available strategy. Choose “Follow system default” to restore the existing AGENT_SKILLS and built-in default resolution.',
+    title: 'Auto-match Fallback Strategy',
+    summary: 'Sets the server-side fallback used when daily-bar auto matching cannot select a reliable stock strategy.',
+    usage: 'Choose an available strategy. Choose “Restore system fallback chain” to use the existing AGENT_SKILLS and built-in resolution.',
     valueNotes: [
-      'The default applies to Home, batch and scheduled analyses, and Ask Stock.',
+      'Home, batch, and scheduled stock analyses try auto matching before using this fallback.',
+      'Ask Stock does not use daily-bar auto matching and still applies this value directly.',
       'Selecting another strategy on Home affects only that analysis.',
     ],
     impact: ['Only new tasks are affected; running tasks and historical reports keep their recorded strategy.'],

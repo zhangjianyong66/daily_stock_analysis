@@ -68,6 +68,38 @@ describe('ReportOverview', () => {
     expect(screen.getByRole('status')).toHaveTextContent('系统回退');
   });
 
+  it('renders the persisted auto-match basis and complete-bar cutoff', () => {
+    render(
+      <ReportOverview
+        meta={{
+          ...baseMeta,
+          strategyExecution: {
+            schemaVersion: 1,
+            status: 'normal',
+            source: 'auto',
+            requested: [],
+            effective: [{ id: 'volume_breakout', displayName: '放量突破', status: 'selected' }],
+            rejected: [],
+            selectionContext: {
+              mode: 'auto_match',
+              status: 'matched',
+              asOf: '2026-07-27',
+              matchedPatterns: ['放量突破20日高点'],
+              candidates: [{ skillId: 'volume_breakout', mode: 'analysis', matchedPatterns: ['放量突破20日高点'] }],
+              selectedSkillId: 'volume_breakout',
+              fallbackReason: null,
+            },
+          },
+        }}
+        summary={baseSummary}
+      />,
+    );
+
+    expect(screen.getAllByText(/自动匹配/).length).toBeGreaterThan(0);
+    expect(screen.getByText('完整日线截止: 2026-07-27')).toBeInTheDocument();
+    expect(screen.getByText('匹配依据: 放量突破20日高点')).toBeInTheDocument();
+  });
+
   it('marks legacy reports as having no recorded strategy metadata', () => {
     render(<ReportOverview meta={baseMeta} summary={baseSummary} />);
 

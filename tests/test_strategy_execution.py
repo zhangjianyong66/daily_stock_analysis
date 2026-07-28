@@ -95,6 +95,42 @@ def test_builtin_strategy_name_is_localized_for_api_display():
     assert localized["effective"][0]["display_name"]
 
 
+def test_auto_match_selection_context_round_trips_and_is_formatted():
+    context = {
+        "mode": "auto_match",
+        "status": "matched",
+        "as_of": "2026-07-27",
+        "matched_patterns": ["缩量回踩"],
+        "candidates": [
+            {"skill_id": "shrink_pullback", "mode": "analysis", "matched_patterns": ["缩量回踩"]}
+        ],
+        "selected_skill_id": "shrink_pullback",
+        "fallback_reason": None,
+    }
+    snapshot = build_strategy_execution_snapshot(
+        effective=[{"id": "shrink_pullback", "display_name": "缩量回踩"}],
+        source="auto",
+        selection_context=context,
+    )
+
+    assert normalize_strategy_execution(snapshot) == snapshot
+    assert "完整日线截止 2026-07-27" in format_strategy_execution_text(snapshot, "zh")
+    localized = localize_strategy_execution(snapshot, "en")
+    assert localized["selection_context"]["matched_patterns"] == ["low-volume pullback"]
+
+
+def test_invalid_optional_selection_context_does_not_break_legacy_snapshot():
+    snapshot = build_strategy_execution_snapshot(
+        effective=[{"id": "bull_trend", "display_name": "趋势策略"}],
+        source="default",
+    )
+    snapshot["selection_context"] = {"mode": "invalid", "status": "matched"}
+
+    normalized = normalize_strategy_execution(snapshot)
+    assert normalized is not None
+    assert "selection_context" not in normalized
+
+
 def test_factory_records_request_fallback_and_partial_execution(monkeypatch):
     monkeypatch.setattr(factory, "get_skill_manager", lambda _config: _skill_manager())
     config = SimpleNamespace(agent_skills=[])
@@ -169,6 +205,39 @@ def test_unavailable_saved_default_falls_back_to_agent_skills_with_warning(monke
     ]
 
 
+def test_multi_agent_keeps_auto_match_fallback_fixed(monkeypatch):
+    monkeypatch.setattr(factory, "get_skill_manager", lambda _config: _skill_manager())
+    monkeypatch.setattr(factory, "get_tool_registry", lambda: object())
+    monkeypatch.setattr("src.agent.llm_adapter.LLMToolAdapter", lambda _config: object())
+    captured = {}
+
+    def fake_build_orchestrator(*args, **kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(factory, "_build_orchestrator", fake_build_orchestrator)
+    frozen_state = factory.resolve_skill_prompt_state(SimpleNamespace(agent_skills=[]))
+    fallback_state = factory.build_auto_fallback_prompt_state(
+        frozen_state,
+        selection_context={
+            "mode": "auto_match",
+            "status": "fallback",
+            "as_of": "2026-07-27",
+            "matched_patterns": [],
+            "candidates": [],
+            "selected_skill_id": None,
+            "fallback_reason": "no_reliable_pattern",
+        },
+    )
+
+    factory.build_agent_executor(
+        SimpleNamespace(agent_arch="multi"),
+        prompt_state=fallback_state,
+    )
+
+    assert captured["fixed_default_skills"] == ["bull_trend"]
+
+
 def test_orchestrator_records_auto_routing_and_strategy_degradation():
     orchestrator = object.__new__(AgentOrchestrator)
     orchestrator.config = SimpleNamespace(agent_skill_routing="auto")
@@ -176,6 +245,15 @@ def test_orchestrator_records_auto_routing_and_strategy_degradation():
     orchestrator.strategy_execution = build_strategy_execution_snapshot(
         effective=[{"id": "bull_trend", "display_name": "默认多头趋势"}],
         source="default",
+        selection_context={
+            "mode": "auto_match",
+            "status": "matched",
+            "as_of": "2026-07-27",
+            "matched_patterns": ["箱体震荡"],
+            "candidates": [{"skill_id": "box_oscillation", "mode": "analysis", "matched_patterns": ["箱体震荡"]}],
+            "selected_skill_id": "box_oscillation",
+            "fallback_reason": None,
+        },
     )
     context = AgentContext(query="分析")
 
@@ -185,12 +263,22 @@ def test_orchestrator_records_auto_routing_and_strategy_degradation():
     assert orchestrator.strategy_execution["source"] == "auto"
     assert orchestrator.strategy_execution["status"] == "degraded"
     assert orchestrator.strategy_execution["effective"][0]["status"] == "degraded"
+    assert orchestrator.strategy_execution["selection_context"]["as_of"] == "2026-07-27"
 
 
 def test_analysis_report_api_reads_strategy_execution_from_persisted_raw_result():
     snapshot = build_strategy_execution_snapshot(
         effective=[{"id": "box_oscillation", "display_name": "箱体震荡"}],
-        source="request",
+        source="auto",
+        selection_context={
+            "mode": "auto_match",
+            "status": "matched",
+            "as_of": "2026-07-27",
+            "matched_patterns": ["箱体震荡"],
+            "candidates": [{"skill_id": "box_oscillation", "mode": "analysis", "matched_patterns": ["箱体震荡"]}],
+            "selected_skill_id": "box_oscillation",
+            "fallback_reason": None,
+        },
     )
 
     report = _build_analysis_report(
@@ -204,5 +292,7 @@ def test_analysis_report_api_reads_strategy_execution_from_persisted_raw_result(
     )
 
     assert report.meta.strategy_execution is not None
-    assert report.meta.strategy_execution.source == "request"
+    assert report.meta.strategy_execution.source == "auto"
     assert report.meta.strategy_execution.effective[0].id == "box_oscillation"
+    assert report.meta.strategy_execution.selection_context is not None
+    assert report.meta.strategy_execution.selection_context.as_of == "2026-07-27"

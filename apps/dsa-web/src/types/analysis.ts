@@ -80,6 +80,33 @@ export interface StrategyExecutionRejectedItem {
   reason: string;
 }
 
+export type AutoMatchFallbackReason =
+  | 'calendar_unavailable'
+  | 'history_unavailable'
+  | 'insufficient_data'
+  | 'invalid_daily_bars'
+  | 'stale_daily_bars'
+  | 'pattern_detection_failed'
+  | 'no_reliable_pattern'
+  | 'candidate_unavailable';
+
+export interface StrategySelectionCandidate {
+  skillId: string;
+  mode: 'analysis' | 'risk_review';
+  matchedPatterns: string[];
+}
+
+export interface StrategySelectionContext {
+  mode: 'auto_match';
+  status: 'matched' | 'fallback';
+  asOf?: string | null;
+  matchedPatterns: string[];
+  candidates: StrategySelectionCandidate[];
+  selectedSkillId?: string | null;
+  fallbackReason?: AutoMatchFallbackReason | null;
+  fallbackReasonLabel?: string | null;
+}
+
 export interface StrategyExecution {
   schemaVersion: number;
   status: StrategyExecutionStatus;
@@ -88,6 +115,7 @@ export interface StrategyExecution {
   effective: StrategyExecutionItem[];
   rejected: StrategyExecutionRejectedItem[];
   message?: string;
+  selectionContext?: StrategySelectionContext | null;
 }
 
 /** Report metadata */

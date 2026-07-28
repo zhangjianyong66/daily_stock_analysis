@@ -83,6 +83,7 @@ from src.stock_analyzer import StockTrendAnalyzer, TrendAnalysisResult
 from src.core.trading_calendar import (
     build_market_phase_context,
     get_effective_trading_date,
+    get_reliable_effective_trading_date,
     get_market_for_stock,
     get_market_now,
     is_market_open,
@@ -326,11 +327,21 @@ class StockAnalysisPipeline:
                 },
             )
 
-    def _attach_pattern_report(self, result: Optional[AnalysisResult], code: str) -> Optional[AnalysisResult]:
+    def _attach_pattern_report(
+        self,
+        result: Optional[AnalysisResult],
+        code: str,
+        strategy_resolution: Optional[Any] = None,
+    ) -> Optional[AnalysisResult]:
         """Attach a fail-open, persisted daily-pattern snapshot to a stock result."""
         if result is None:
             return result
         try:
+            if strategy_resolution is not None and isinstance(
+                getattr(strategy_resolution, "pattern_report", None), dict
+            ):
+                result.pattern_report = dict(strategy_resolution.pattern_report)
+                return result
             from src.services.kline_pattern_service import KlinePatternService
 
             skill_manager = getattr(self.skill_prompt_state, "skill_manager", None)
@@ -355,6 +366,138 @@ class StockAnalysisPipeline:
                 "recommendations": [],
             }
         return result
+
+    def _resolve_stock_strategy(
+        self,
+        code: str,
+        *,
+        current_time: Optional[datetime],
+    ) -> Any:
+        """Resolve one stock without mutating pipeline-wide strategy state."""
+        from src.agent.factory import (
+            build_auto_fallback_prompt_state,
+            build_auto_skill_prompt_state,
+        )
+        from src.services.kline_pattern_service import (
+            AutoStrategyResolution,
+            build_runtime_pattern_match,
+        )
+
+        frozen_state = self.skill_prompt_state
+        if self.analysis_skills:
+            return AutoStrategyResolution(
+                mode="explicit",
+                skills=tuple(frozen_state.skills_to_activate),
+                prompt_state=frozen_state,
+                pattern_report=None,
+                selection_context=None,
+            )
+
+        skill_manager = getattr(frozen_state, "skill_manager", None)
+        catalog = list(skill_manager.list_skills()) if skill_manager is not None else []
+        market = get_market_for_stock(normalize_stock_code(code))
+        target_date = get_reliable_effective_trading_date(market, current_time=current_time)
+        match = build_runtime_pattern_match(
+            code,
+            target_date=target_date,
+            language=normalize_report_language(getattr(self.config, "report_language", "zh")),
+            skill_catalog=catalog,
+        )
+
+        winner = match.winner
+        if winner is not None:
+            context = {
+                "mode": "auto_match",
+                "status": "matched",
+                "as_of": match.pattern_report.get("as_of"),
+                "matched_patterns": list(winner.get("matched_patterns") or []),
+                "candidates": [
+                    {
+                        "skill_id": candidate["skill_id"],
+                        "mode": candidate["mode"],
+                        "matched_patterns": list(candidate.get("matched_patterns") or []),
+                    }
+                    for candidate in match.candidates
+                ],
+                "selected_skill_id": winner["skill_id"],
+                "fallback_reason": None,
+            }
+            try:
+                prompt_state = build_auto_skill_prompt_state(
+                    frozen_state,
+                    winner["skill_id"],
+                    selection_context=context,
+                )
+                return AutoStrategyResolution(
+                    mode="matched",
+                    skills=(winner["skill_id"],),
+                    prompt_state=prompt_state,
+                    pattern_report=match.pattern_report,
+                    selection_context=context,
+                )
+            except ValueError as exc:
+                logger.warning("[%s] 自动匹配候选不可调用，使用冻结兜底: %s", code, exc)
+                fallback_reason = "candidate_unavailable"
+        else:
+            fallback_reason = match.reason_code or "no_reliable_pattern"
+
+        fallback_snapshot = frozen_state.strategy_execution or {}
+        effective = fallback_snapshot.get("effective") or []
+        context = {
+            "mode": "auto_match",
+            "status": "fallback",
+            "as_of": match.pattern_report.get("as_of"),
+            "matched_patterns": list(match.matched_patterns),
+            "candidates": [],
+            "selected_skill_id": effective[0].get("id") if effective else None,
+            "fallback_reason": fallback_reason,
+        }
+        prompt_state = build_auto_fallback_prompt_state(
+            frozen_state,
+            selection_context=context,
+        )
+        pattern_report = dict(match.pattern_report)
+        pattern_report["reason_code"] = fallback_reason
+        return AutoStrategyResolution(
+            mode="fallback",
+            skills=tuple(prompt_state.skills_to_activate),
+            prompt_state=prompt_state,
+            pattern_report=pattern_report,
+            selection_context=context,
+        )
+
+    def _should_use_agent_for_strategy_resolution(
+        self,
+        strategy_resolution: Optional[Any],
+        *,
+        code: str,
+        stock_name: str,
+    ) -> bool:
+        """Preserve engine selection while keeping auto-match state stock-local."""
+        use_agent = bool(getattr(self.config, "agent_mode", False))
+        if not use_agent and self.analysis_skills and self.skill_prompt_state.selection_source == "request":
+            use_agent = True
+            logger.info(
+                "%s(%s) Auto-enabled agent mode due to request skills: %s",
+                stock_name,
+                code,
+                self.analysis_skills,
+            )
+        if not use_agent and getattr(strategy_resolution, "mode", None) not in {"matched", "fallback"}:
+            configured_skills = self.skill_prompt_state.skills_to_activate
+            if (
+                self.skill_prompt_state.selection_source in {"saved", "agent_skills"}
+                and configured_skills
+                and configured_skills != ["all"]
+            ):
+                use_agent = True
+                logger.info(
+                    "%s(%s) Auto-enabled agent mode due to configured skills: %s",
+                    stock_name,
+                    code,
+                    configured_skills,
+                )
+        return use_agent
 
     def fetch_and_save_stock_data(
         self, 
@@ -418,6 +561,7 @@ class StockAnalysisPipeline:
         report_type: ReportType,
         query_id: str,
         current_time: Optional[datetime] = None,
+        strategy_resolution: Optional[Any] = None,
     ) -> Optional[AnalysisResult]:
         """
         分析单只股票（增强版：含量比、换手率、筹码分析、多维度情报）
@@ -441,6 +585,23 @@ class StockAnalysisPipeline:
         """
         stock_name = code
         try:
+            prompt_state = (
+                strategy_resolution.prompt_state
+                if strategy_resolution is not None
+                else self.skill_prompt_state
+            )
+            runtime_skills = (
+                list(strategy_resolution.skills)
+                if strategy_resolution is not None
+                else self.analysis_skills
+            )
+            runtime_analyzer = GeminiAnalyzer(
+                config=self.config,
+                skills=runtime_skills,
+                skill_instructions=prompt_state.skill_instructions,
+                default_skill_policy=prompt_state.default_skill_policy,
+                use_legacy_default_prompt=prompt_state.use_legacy_default_prompt,
+            )
             portfolio_context = getattr(self, "portfolio_context", None)
             if not isinstance(portfolio_context, dict):
                 portfolio_context = None
@@ -515,20 +676,11 @@ class StockAnalysisPipeline:
             # config.is_agent_available() so that users who only configured an
             # API Key for the traditional analysis path are not silently
             # switched to Agent mode (which is slower and more expensive).
-            use_agent = getattr(self.config, 'agent_mode', False)
-            if not use_agent:
-                if self.analysis_skills and self.skill_prompt_state.selection_source == "request":
-                    use_agent = True
-                    logger.info(f"{stock_name}({code}) Auto-enabled agent mode due to request skills: {self.analysis_skills}")
-            if not use_agent:
-                configured_skills = self.skill_prompt_state.skills_to_activate
-                if (
-                    self.skill_prompt_state.selection_source in {"saved", "agent_skills"}
-                    and configured_skills
-                    and configured_skills != ["all"]
-                ):
-                    use_agent = True
-                    logger.info(f"{stock_name}({code}) Auto-enabled agent mode due to configured skills: {configured_skills}")
+            use_agent = self._should_use_agent_for_strategy_resolution(
+                strategy_resolution,
+                code=code,
+                stock_name=stock_name,
+            )
 
             self._emit_progress(32, f"{stock_name}：正在聚合基本面与趋势数据")
 
@@ -611,6 +763,7 @@ class StockAnalysisPipeline:
                     daily_market_context=daily_market_context,
                     portfolio_context=portfolio_context,
                     market_structure_context=market_structure_context,
+                    strategy_resolution=strategy_resolution,
                 )
 
             # Step 4: 多维度情报搜索（最新消息+风险排查+业绩预期）
@@ -768,7 +921,7 @@ class StockAnalysisPipeline:
                     model=getattr(self.config, "litellm_model", None),
                     call_type="analysis",
                 )
-                result = self.analyzer.analyze(
+                result = runtime_analyzer.analyze(
                     enhanced_context,
                     news_context=news_context,
                     progress_callback=self._emit_progress,
@@ -814,7 +967,7 @@ class StockAnalysisPipeline:
             # Step 7.6: chip_structure fallback (Issue #589) and unavailable collapse
             if result:
                 if getattr(result, "strategy_execution", None) is None:
-                    result.strategy_execution = self.skill_prompt_state.strategy_execution
+                    result.strategy_execution = prompt_state.strategy_execution
                 normalize_chip_structure_availability(result, chip_data)
 
             # Step 7.7: price_position fallback
@@ -854,7 +1007,7 @@ class StockAnalysisPipeline:
                     report_type=report_type.value,
                     previous_operation_advice=action_source_advice,
                 )
-                self._attach_pattern_report(result, code)
+                self._attach_pattern_report(result, code, strategy_resolution)
 
             # Step 8: 保存分析历史记录
             if result and result.success:
@@ -1347,6 +1500,7 @@ class StockAnalysisPipeline:
         daily_market_context: Optional[DailyMarketContext] = None,
         portfolio_context: Optional[Dict[str, Any]] = None,
         market_structure_context: Optional[Dict[str, Any]] = None,
+        strategy_resolution: Optional[Any] = None,
     ) -> Optional[AnalysisResult]:
         """
         使用 Agent 模式分析单只股票。
@@ -1354,12 +1508,22 @@ class StockAnalysisPipeline:
         try:
             from src.agent.factory import build_agent_executor
             report_language = normalize_report_language(getattr(self.config, "report_language", "zh"))
+            prompt_state = (
+                strategy_resolution.prompt_state
+                if strategy_resolution is not None
+                else self.skill_prompt_state
+            )
+            runtime_skills = (
+                list(strategy_resolution.skills)
+                if strategy_resolution is not None
+                else self.analysis_skills
+            )
 
             # Build executor from shared factory (ToolRegistry and SkillManager prototype are cached)
             executor = build_agent_executor(
                 self.config,
-                self.analysis_skills,
-                prompt_state=self.skill_prompt_state,
+                runtime_skills,
+                prompt_state=prompt_state,
             )
 
             # Build initial context to avoid redundant tool calls
@@ -1372,8 +1536,8 @@ class StockAnalysisPipeline:
             }
             if isinstance(portfolio_context, dict):
                 initial_context["portfolio_context"] = dict(portfolio_context)
-            if self.analysis_skills is not None:
-                initial_context["skills"] = self.analysis_skills
+            if runtime_skills is not None:
+                initial_context["skills"] = runtime_skills
             if market_phase_context is not None:
                 initial_context["market_phase_context"] = market_phase_context
             if isinstance(market_structure_context, dict):
@@ -1498,6 +1662,8 @@ class StockAnalysisPipeline:
             )
             if result:
                 result.query_id = query_id
+                if getattr(result, "strategy_execution", None) is None:
+                    result.strategy_execution = prompt_state.strategy_execution
             # Agent weak integrity: placeholder fill only, no LLM retry
             if result and getattr(self.config, "report_integrity_enabled", False):
                 from src.analyzer import check_content_integrity, apply_placeholder_fill
@@ -1557,7 +1723,7 @@ class StockAnalysisPipeline:
                     report_type=report_type.value,
                     previous_operation_advice=action_source_advice,
                 )
-                self._attach_pattern_report(result, code)
+                self._attach_pattern_report(result, code, strategy_resolution)
 
             resolved_stock_name = result.name if result and result.name else stock_name
 
@@ -3022,10 +3188,21 @@ class StockAnalysisPipeline:
             if skip_analysis:
                 logger.info(f"[{code}] 跳过 AI 分析（dry-run 模式）")
                 return None
+
+            strategy_resolution = self._resolve_stock_strategy(
+                code,
+                current_time=current_time,
+            )
+            if strategy_resolution.mode == "matched":
+                logger.info("[%s] 自动匹配分析策略: %s", code, strategy_resolution.skills[0])
+            elif strategy_resolution.mode == "fallback":
+                reason = (strategy_resolution.selection_context or {}).get("fallback_reason")
+                logger.info("[%s] 自动匹配未命中，使用冻结兜底策略: %s", code, reason)
             
             analyze_kwargs = {"query_id": effective_query_id}
             if current_time is not None:
                 analyze_kwargs["current_time"] = current_time
+            analyze_kwargs["strategy_resolution"] = strategy_resolution
             result = self.analyze_stock(code, report_type, **analyze_kwargs)
             
             if result and result.success:

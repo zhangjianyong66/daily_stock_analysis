@@ -248,6 +248,32 @@ def get_effective_trading_date(
         return fallback_date
 
 
+def get_reliable_effective_trading_date(
+    market: Optional[str], current_time: Optional[datetime] = None
+) -> Optional[date]:
+    """Resolve the latest completed session, returning ``None`` instead of guessing."""
+    if market not in MARKET_EXCHANGE or market not in MARKET_TIMEZONE or not _XCALS_AVAILABLE:
+        return None
+    market_now = get_market_now(market, current_time=current_time)
+    try:
+        cal = xcals.get_calendar(MARKET_EXCHANGE[market])
+        local_date = market_now.date()
+        if not cal.is_session(local_date):
+            return cal.date_to_session(local_date, direction="previous").date()
+        session = cal.date_to_session(local_date, direction="previous")
+        session_close = cal.session_close(session)
+        if hasattr(session_close, "tz_convert"):
+            close_local = session_close.tz_convert(MARKET_TIMEZONE[market]).to_pydatetime()
+        elif session_close.tzinfo is not None:
+            close_local = session_close.astimezone(ZoneInfo(MARKET_TIMEZONE[market]))
+        else:
+            close_local = session_close.replace(tzinfo=ZoneInfo(MARKET_TIMEZONE[market]))
+        return session.date() if market_now >= close_local else cal.previous_session(session).date()
+    except Exception as exc:
+        logger.warning("trading_calendar reliable effective date unavailable: %s", exc)
+        return None
+
+
 def _as_market_datetime(value: Any, tz_name: str) -> Optional[datetime]:
     """
     Convert exchange-calendar timestamps into market-local datetimes.

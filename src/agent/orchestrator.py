@@ -828,6 +828,7 @@ class AgentOrchestrator:
             status=current.get("status", "normal"),
             rejected=current.get("rejected") or [],
             message=current.get("message"),
+            selection_context=current.get("selection_context"),
         )
         ctx.meta["strategy_execution"] = self.strategy_execution
 
@@ -849,6 +850,7 @@ class AgentOrchestrator:
             status="degraded",
             rejected=snapshot.get("rejected") or [],
             message="A selected strategy agent failed or timed out; no replacement strategy was claimed.",
+            selection_context=snapshot.get("selection_context"),
         )
 
     def _build_skill_agents(self, ctx: AgentContext) -> list:

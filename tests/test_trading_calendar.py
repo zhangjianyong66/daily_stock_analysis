@@ -263,6 +263,69 @@ class EffectiveTradingDateTestCase(unittest.TestCase):
 
         self.assertEqual(result, date(2026, 3, 28))
 
+    def test_reliable_date_uses_previous_session_on_weekend(self):
+        fake_calendar = _FakeCalendar(
+            sessions=[date(2026, 3, 26), date(2026, 3, 27)],
+            close_hour=15,
+            tz_name="Asia/Shanghai",
+        )
+        current_time = datetime(2026, 3, 28, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+        with patch.object(trading_calendar, "_XCALS_AVAILABLE", True), patch.object(
+            trading_calendar,
+            "xcals",
+            SimpleNamespace(get_calendar=lambda _ex: fake_calendar),
+            create=True,
+        ):
+            result = trading_calendar.get_reliable_effective_trading_date("cn", current_time=current_time)
+        self.assertEqual(result, date(2026, 3, 27))
+
+    def test_reliable_date_returns_none_when_calendar_is_unavailable(self):
+        with patch.object(trading_calendar, "_XCALS_AVAILABLE", False):
+            result = trading_calendar.get_reliable_effective_trading_date("cn")
+        self.assertIsNone(result)
+
+    def test_reliable_date_supports_every_stock_market_calendar(self):
+        market_closes = {
+            "cn": (15, "Asia/Shanghai"),
+            "hk": (16, "Asia/Hong_Kong"),
+            "us": (16, "America/New_York"),
+            "jp": (15, "Asia/Tokyo"),
+            "kr": (15, "Asia/Seoul"),
+            "tw": (13, "Asia/Taipei"),
+        }
+        sessions = [date(2026, 3, 26), date(2026, 3, 27)]
+
+        for market, (close_hour, timezone_name) in market_closes.items():
+            with self.subTest(market=market):
+                fake_calendar = _FakeCalendar(
+                    sessions=sessions,
+                    close_hour=close_hour,
+                    tz_name=timezone_name,
+                )
+                current_time = datetime(
+                    2026,
+                    3,
+                    27,
+                    close_hour,
+                    30,
+                    tzinfo=ZoneInfo(timezone_name),
+                )
+                with patch.object(trading_calendar, "_XCALS_AVAILABLE", True), patch.object(
+                    trading_calendar,
+                    "xcals",
+                    SimpleNamespace(get_calendar=lambda _ex: fake_calendar),
+                    create=True,
+                ):
+                    result = trading_calendar.get_reliable_effective_trading_date(
+                        market,
+                        current_time=current_time,
+                    )
+                self.assertEqual(result, date(2026, 3, 27))
+
+        self.assertIsNone(
+            trading_calendar.get_reliable_effective_trading_date("unknown")
+        )
+
 
 class InferMarketPhaseTestCase(unittest.TestCase):
     """Tests for the Issue #1386 P0 market phase baseline."""

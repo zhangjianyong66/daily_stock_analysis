@@ -227,7 +227,6 @@ const HomePage: React.FC = () => {
   const [marketReviewPayload, setMarketReviewPayload] = useState<MarketReviewPayload | null>(null);
   const [analysisSkills, setAnalysisSkills] = useState<SkillInfo[]>([]);
   const [selectedStrategyId, setSelectedStrategyId] = useState('');
-  const [strategySelectionTouched, setStrategySelectionTouched] = useState(false);
   const [effectiveDefaultStrategyId, setEffectiveDefaultStrategyId] = useState('');
   const [savedDefaultStrategyId, setSavedDefaultStrategyId] = useState('');
   const [defaultStrategyWarning, setDefaultStrategyWarning] = useState<string | null>(null);
@@ -258,7 +257,6 @@ const HomePage: React.FC = () => {
   const strategyButtonRef = useRef<HTMLButtonElement | null>(null);
   const strategyItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const strategyInitialFocusIndexRef = useRef<number | null>(null);
-  const strategySelectionTouchedRef = useRef(false);
 
   const stopMarketReviewPolling = useCallback(() => {
     if (marketReviewPollTimer.current !== null) {
@@ -390,9 +388,6 @@ const HomePage: React.FC = () => {
     setEffectiveDefaultStrategyId(response.default_skill_id || '');
     setSavedDefaultStrategyId(response.saved_default_skill_id || '');
     setDefaultStrategyWarning(response.default_skill_warning || null);
-    if (!strategySelectionTouchedRef.current) {
-      setSelectedStrategyId(response.default_skill_id || '');
-    }
     return response;
   }, []);
 
@@ -447,13 +442,9 @@ const HomePage: React.FC = () => {
     closeHistoryTrend();
   }, [closeHistoryTrend, isHistoryTrendOpen, isHistoryTrendUnavailable]);
 
-  const selectedStrategy = useMemo(
-    () => analysisSkills.find((skill) => skill.id === selectedStrategyId),
-    [analysisSkills, selectedStrategyId],
-  );
   const selectedAnalysisSkills = useMemo(
-    () => (strategySelectionTouched && selectedStrategyId ? [selectedStrategyId] : undefined),
-    [selectedStrategyId, strategySelectionTouched],
+    () => (selectedStrategyId ? [selectedStrategyId] : undefined),
+    [selectedStrategyId],
   );
   const strategyOptions = useMemo(
     () => [
@@ -467,6 +458,10 @@ const HomePage: React.FC = () => {
     ],
     [analysisSkills, t],
   );
+  const selectedStrategyOption = useMemo(
+    () => strategyOptions.find((option) => option.id === selectedStrategyId),
+    [selectedStrategyId, strategyOptions],
+  );
   const closeStrategyMenu = useCallback((restoreFocus = false) => {
     setStrategyMenuOpen(false);
     if (restoreFocus) {
@@ -475,8 +470,6 @@ const HomePage: React.FC = () => {
   }, []);
   const selectStrategy = useCallback((strategyId: string) => {
     setSelectedStrategyId(strategyId);
-    strategySelectionTouchedRef.current = true;
-    setStrategySelectionTouched(true);
     setStrategyMenuOpen(false);
   }, []);
   const saveDefaultStrategy = useCallback(async (strategyId: string) => {
@@ -833,24 +826,15 @@ const HomePage: React.FC = () => {
       return;
     }
 
-    const recordedStrategyIds = selectedReport.meta.strategyExecution?.effective
-      .map((item) => item.id.trim())
-      .filter(Boolean);
-    const reanalysisSkills = strategySelectionTouched
-      ? selectedAnalysisSkills
-      : recordedStrategyIds?.length
-        ? recordedStrategyIds
-        : undefined;
-
     void submitAnalysis({
       stockCode: selectedReport.meta.stockCode,
       stockName: selectedReport.meta.stockName,
       originalQuery: selectedReport.meta.stockCode,
       selectionSource: 'manual',
       forceRefresh: true,
-      skills: reanalysisSkills,
+      skills: selectedAnalysisSkills,
     });
-  }, [selectedAnalysisSkills, selectedReport, strategySelectionTouched, submitAnalysis]);
+  }, [selectedAnalysisSkills, selectedReport, submitAnalysis]);
 
   const openTaskRunFlow = useCallback((task: TaskInfo) => {
     const stock = task.stockName || task.stockCode || task.taskId;
@@ -1481,7 +1465,7 @@ const HomePage: React.FC = () => {
                     className="home-surface-button flex h-11 w-full min-w-0 items-center gap-1.5 rounded-xl px-3 text-xs text-foreground disabled:cursor-not-allowed disabled:opacity-60 min-[360px]:max-w-[8.5rem] sm:max-w-[11rem] lg:h-10"
                   >
                     <SlidersHorizontal className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
-                    <span className="truncate">{selectedStrategy?.name || t('home.strategy')}</span>
+                    <span className="truncate">{selectedStrategyOption?.name || t('home.defaultStrategyName')}</span>
                   </button>
                   {strategyMenuOpen ? (
                     <div
