@@ -1045,3 +1045,25 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 33: 根据完整日K线自动匹配分析策略
+
+**Date**: 2026-07-28
+**Task**: 根据完整日K线自动匹配分析策略
+**Branch**: `main`
+
+### Summary
+
+实现个股默认按最近完整日K线自动匹配策略，保持显式选择优先和分析引擎不变；统一形态映射、快照、历史与Web展示，补齐多市场交易日、并发隔离和跨层回归测试。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `aeecdb9` | (see git log) |
+| `1ee86dc` | (see git log) |
+
+### Status
+
+[OK] **Completed**
