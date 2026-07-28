@@ -1,0 +1,5 @@
+{"file":".trellis/spec/backend/strategy-execution.md","reason":"检查执行策略、fallback、异步冻结、历史事实源和旧快照兼容。"}
+{"file":".trellis/spec/backend/kline-pattern-report.md","reason":"检查数据不足/异常 fail-open、映射一致性和报告只识别一次。"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"检查日线、日历、候选不可用时的可解释 fallback 不拖垮主分析。"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"检查定向测试、Web 构建、文档同步和未验证风险。"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"检查请求到历史展示的完整数据流和共享 normalizer。"}

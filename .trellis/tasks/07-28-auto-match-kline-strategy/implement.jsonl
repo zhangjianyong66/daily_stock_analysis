@@ -1,0 +1,5 @@
+{"file":".trellis/spec/backend/strategy-execution.md","reason":"约束默认/兜底优先级、任务冻结、执行快照唯一事实源和跨层兼容。"}
+{"file":".trellis/spec/backend/kline-pattern-report.md","reason":"约束单次形态识别、推荐映射、状态和历史快照复用。"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"本功能跨请求、队列、Pipeline、API、Web、历史和通知，需要统一字段所有权。"}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"必须复用同一形态映射和快照 normalizer，禁止维护平行规则。"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"约束 Python/Web 实现、测试、文档和最小影响面。"}

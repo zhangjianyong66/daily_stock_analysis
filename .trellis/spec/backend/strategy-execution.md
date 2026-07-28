@@ -13,6 +13,8 @@
 - `src.schemas.strategy_execution.localize_strategy_execution(value: Any, language: str) -> Optional[dict[str, Any]]`
 - `src.agent.factory.resolve_default_skill_selection(config, *, skill_catalog=None) -> DefaultSkillResolution`
 - `src.agent.factory.resolve_skill_prompt_state(config, skills=None) -> SkillPromptState`
+- `src.agent.factory.build_auto_skill_prompt_state(frozen_state, skill_id, *, selection_context) -> SkillPromptState`
+- `src.services.kline_pattern_service.AutoStrategyResolution`
 - 环境变量 `DEFAULT_ANALYSIS_SKILL`：单个 `user_invocable=true` 的稳定 skill ID，空值表示跟随系统默认。
 - API `GET /api/v1/agent/skills`：`default_skill_id/default_skill_source/saved_default_skill_id/default_skill_warning`。
 - API `ReportMeta.strategy_execution: Optional[StrategyExecution]`
@@ -25,10 +27,11 @@
 - `status`：`normal`、`partial`、`fallback`、`degraded`、`unrecorded`。
 - `source`：`request`、`default`、`config`、`auto`、`fallback`、`unknown`。
 - 每个策略项保存稳定 `id`、历史快照名称 `display_name` 和 `status`（`selected`/`degraded`/`not_executed`）。
-- 个股分析统一优先级：单次明确 `skills` > 有效 `DEFAULT_ANALYSIS_SKILL` > `AGENT_SKILLS` > 内置 metadata 默认；大盘复盘不读取该配置。
-- `DEFAULT_ANALYSIS_SKILL` 是部署级单值覆盖；保存值存在时，多 Agent router 使用冻结后的固定结果，不再被行情自动路由替换。
-- 首页和问股可视觉选中 `default_skill_id`，但用户未操作时请求中必须省略 `skills`；用户清空问股策略时保留显式 `skills=[]` 以清理旧上下文。
-- 异步分析在入队时解析并深拷贝 `SkillPromptState`；配置热更新只影响之后创建的任务，排队中、执行中任务继续使用冻结状态。
+- 个股分析统一优先级：单次明确 `skills` > 最近完整日 K 线自动匹配 > 有效 `DEFAULT_ANALYSIS_SKILL` > `AGENT_SKILLS` > 内置 metadata 默认；问股与大盘复盘不进入 K 线自动匹配。
+- `DEFAULT_ANALYSIS_SKILL` 是自动匹配失败后的部署级单值兜底；保存值存在时，兜底阶段使用冻结后的固定结果，不再被执行期配置或行情路由替换。
+- 首页首项固定为“自动匹配”，初始与清空选择必须省略 `skills`；具体策略发送单值列表。问股仍可视觉选中 `default_skill_id`，清空时保留显式 `skills=[]` 以清理旧上下文。
+- 异步分析在入队时解析并深拷贝兜底 `SkillPromptState` 和策略目录；配置热更新只影响之后创建的任务。每股匹配状态作为局部不可变对象传递，不得写回共享 Pipeline/Analyzer。
+- 快照可选 `selection_context`：`mode=auto_match`、`status=matched|fallback`、`as_of`、`matched_patterns`、`candidates`、`selected_skill_id`、`fallback_reason`。保持 `schema_version=1`，旧快照缺失该字段时正常读取。
 - 策略列表接口中 `default_skill_source` 取 `saved/agent_skills/builtin/fallback`；保存值失效时 `saved_default_skill_id` 保留原值，`default_skill_warning` 给出非敏感提示。
 - 后端生成的快照是唯一事实来源；历史缺少或非法快照时返回空值，展示层显示“策略未记录”，不得根据当前配置推断。
 - API endpoint 将 JSON 本地化结果传给 `ReportMeta` 时必须经过 `StrategyExecution.model_validate` 或在模型构造阶段校验，不能在 Pydantic 模型创建后直接赋普通字典。
@@ -42,6 +45,7 @@
 - 已保存默认失效 -> 不中断分析，回退到 `AGENT_SKILLS` / 内置默认；快照使用 `status=fallback/source=fallback`，API 返回 warning。
 - 显式请求有效且保存默认失效 -> 显式请求仍优先，快照保持 `source=request`，失效默认不得污染本次请求状态。
 - 已选策略运行失败或超时 -> `status=degraded`，不得伪装为切换到其他成功策略。
+- 自动匹配成功 -> `source=auto/status=normal`；日线或候选失败 -> `source=fallback/status=fallback` 并保留稳定 `fallback_reason`。执行降级不得丢失 `selection_context`。
 - 正常默认或自动路由未匹配后的默认候选 -> 不产生异常告警。
 
 ## 5. Good / Base / Bad Cases
@@ -59,10 +63,10 @@
 - 默认解析：保存默认优先于 `AGENT_SKILLS`、显式请求优先于保存默认、保存值失效可解释回退。
 - 配置/API：动态候选包含跟随系统默认；无效保存返回 `unavailable_strategy`；skills/legacy strategies 接口字段一致。
 - 任务/router：队列冻结 prompt state；保存默认优先于自动行情路由。
-- Web：首页和问股初始默认不发送 `skills`，用户操作后显式发送；快捷保存、恢复和失败不误更新默认标记。
+- Web：首页初始自动匹配不发送 `skills`，具体选择后显式发送；快捷保存、恢复和失败不误更新兜底标记。问股保持原默认范围。
 - API：从持久化 `raw_result` 重建报告时断言 `report.meta.strategy_execution.source` 和嵌套策略项属性可用。
 - 跨层：历史报告、通知、Markdown、Web 实时/历史展示使用同一名称、来源和状态语义。
-- 重新分析：历史有效策略默认复用，首页明确选择覆盖，旧报告走当前默认。
+- 重新分析：始终按首页当前菜单；自动匹配重新判断最新合格 K 线，具体策略发送单值，不隐式复用历史 effective strategy。
 
 ## 7. Wrong vs Correct
 

@@ -239,8 +239,8 @@ daily_stock_analysis/
 | `LOCAL_CLI_BACKEND_MAX_CONCURRENCY` | 本地 CLI backend 并发上限；范围 `1-4`，有效并发取它与 `GENERATION_BACKEND_MAX_CONCURRENCY` 的较小值 | `1` | 否 |
 | `AGENT_BACKEND` | 现有问股 Chat 的运行方式：`auto`（推荐，保持默认模型）、`litellm` 或 `codex_app_server`（实验，仅 single-agent Chat） | `auto` | 否 |
 | `AGENT_GENERATION_BACKEND` | Agent Chat 生成后端；Web 设置页仅暴露 `auto|litellm`，手写 local CLI backend 会返回 unsupported tool-calling 诊断 | `auto` | 否 |
-| `DEFAULT_ANALYSIS_SKILL` | 未明确选择策略的新个股分析使用的单一服务端默认策略 ID；留空时继续按 `AGENT_SKILLS`、内置默认顺序解析 | 空 | 否 |
-| `AGENT_SKILLS` | 旧版默认策略列表，逗号分隔；只在 `DEFAULT_ANALYSIS_SKILL` 留空或失效时参与默认解析 | 空 | 否 |
+| `DEFAULT_ANALYSIS_SKILL` | 最近完整日 K 线无法可靠匹配时使用的单一兜底策略 ID；留空时继续按 `AGENT_SKILLS`、内置默认顺序解析 | 空 | 否 |
+| `AGENT_SKILLS` | 旧版兜底策略列表，逗号分隔；只在 `DEFAULT_ANALYSIS_SKILL` 留空或失效时参与自动匹配失败后的解析 | 空 | 否 |
 | `LITELLM_MODEL` | 主模型，格式 `provider/model`（如 `gemini/gemini-3.1-pro-preview`），推荐优先使用 | - | 否 |
 | `AGENT_LITELLM_MODEL` | 「默认模型」问股的主模型（可选）；留空继承主模型，无 provider 前缀按 `openai/<model>` 解析；Codex 不使用此项 | - | 否 |
 | `AGENT_CONTEXT_COMPRESSION_ENABLED` | 「默认模型」问股可见历史的 LLM 压缩开关；Codex 使用最近 20 条可见对话且保留该配置 | `false` | 否 |
@@ -1628,10 +1628,10 @@ FastAPI 提供 RESTful API 服务，支持配置管理和触发分析。
 | `/docs` | GET | API Swagger 文档 |
 
 > 说明：`POST /api/v1/analysis/analyze` 在 `async_mode=false` 时仅支持单只股票；批量 `stock_codes` 需使用 `async_mode=true`。异步 `202` 响应对单股返回 `task_id`，对批量返回 `accepted` / `duplicates` 汇总结构。
-> 说明：`POST /api/v1/analysis/analyze` 支持使用 `skills` 传入策略 skill ID 列表；若未传则依次使用 `DEFAULT_ANALYSIS_SKILL`、`AGENT_SKILLS` 和内置默认策略。保存的单一默认适用于首页、批量/定时分析和问股，但不影响大盘复盘；为兼容历史调用，`strategies` 字段仍作为兼容别名保留。
+> 说明：`POST /api/v1/analysis/analyze` 支持使用 `skills` 传入具体策略 skill ID 列表；明确传入时直接执行该策略。未传时，首页、批量、CLI 和定时个股分析会先用最近有效的完整日 K 线做确定性匹配；数据不足、过期、日历不可用、无可靠形态或候选不可调用时，才依次使用冻结的 `DEFAULT_ANALYSIS_SKILL`、`AGENT_SKILLS` 和内置默认策略。问股和大盘复盘不进入日 K 线自动匹配；`strategies` 字段仍作为兼容别名保留。
 > 说明：`POST /api/v1/analysis/analyze` 支持 `analysis_phase=auto|premarket|intraday|postmarket`，默认 `auto`。非 `auto` 只覆盖本次分析阶段与派生阶段标记，不改写真实交易日历时间；accepted response、内存 task status、任务列表和 SSE 会回显请求阶段，最终报告阶段以 `report.meta.market_phase_summary.phase` 为准。
 > 说明：`POST /api/v1/analysis/analyze` 支持 `report_language=zh|en|ko`，并兼容 `reportLanguage` 作为别名；未传时回退到全局 `REPORT_LANGUAGE`（或环境中的 `Config.report_language`）。该字段仅影响本次分析的报告文本、`report.meta.report_language` 与持久化展示，不会持久化为运行时配置。
-> 说明：Web 侧首页策略下拉为显式可选策略入口。用户未手动选择时不会携带 `skills`；普通选择只影响本次分析，星标操作会通过系统配置保存 `DEFAULT_ANALYSIS_SKILL`。修改默认值只影响之后创建的新任务，排队中、执行中和历史报告继续使用创建时记录的策略快照。
+> 说明：Web 首页策略下拉默认显示“自动匹配”，提交时省略 `skills`；选择具体策略后仅本次请求发送单值列表。星标操作保存的是自动匹配失败后的 `DEFAULT_ANALYSIS_SKILL` 兜底策略。重新分析始终按当前菜单选择，自动匹配会重新读取最新合格日线，不复用历史报告的实际策略。排队中、执行中任务继续使用入队时冻结的兜底结果与策略目录，历史报告只读取当次保存的策略执行快照。
 > 说明：`POST /api/v1/analysis/market-review` 采用后端与 CLI/Bot 共用的配置路径（`GeminiAnalyzer(config=...)` 与同样的搜索/提示词构造入口）。Provider 兼容路由会优先识别并使用 `litellm_model`、`llm_model_list`，若未配置则回退 legacy `GEMINI_*`、`OPENAI_*`、`ANTHROPIC_*`、`DEEPSEEK_*` 键；不会新增/调整 provider、Base URL 或 LiteLLM 路由语义。
 > 说明：`POST /api/v1/analysis/market-review` 额外支持 `report_language=zh|en|ko`（支持别名 `reportLanguage`）。未传时同样回退到全局 `REPORT_LANGUAGE`。该参数仅影响本次复盘报告文本与结构化返回字段中的语言相关内容；Bot、schedule、CLI 或按钮触发的 `main.py --market-review` 仍沿用全局配置，未新增请求级覆盖能力。
 > 说明：`POST /api/v1/analysis/market-review` 是 Web / 桌面端的人工触发入口，点击后会直接提交大盘复盘任务，不会因 `TRADING_DAY_CHECK_ENABLED=true` 或当日相关市场休市而短路跳过；定时任务、GitHub Actions 手动运行和 CLI 默认入口仍遵循交易日检查，可用 `--force-run` 或 workflow `force_run` 覆盖。

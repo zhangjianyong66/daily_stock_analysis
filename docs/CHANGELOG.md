@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [新功能] 未明确选择策略的个股分析会按最近完整日 K 线自动匹配唯一策略，强看跌冲突优先进入情绪周期风险复核，无法可靠匹配时使用冻结的服务端兜底策略。
+- [改进] 策略执行快照新增自动匹配截止日、形态依据、候选和兜底原因，历史、Web、Markdown 与通知统一读取同一持久化事实；首页重新分析按当前菜单重新判断，不再复用历史实际策略。
 - [新功能] 策略菜单新增场景标签，个股报告持久化日线 K 线形态与确定性策略推荐，并兼容历史、Markdown 和通知出口。
 - [修复] 历史报告详情恢复返回分析时保存的日线形态与策略推荐快照，避免最新报告已有推荐但 Web 页面不显示。
 - [文档] 新增内置策略使用场景与 ETF 机会筛选指南，说明 15 种策略的适用形态、确认条件、误用边界及每日候选筛选流程。
