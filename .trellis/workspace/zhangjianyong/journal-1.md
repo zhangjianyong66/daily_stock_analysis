@@ -1067,3 +1067,25 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 34: 归档 ETF 短线规则回退与策略展示任务
+
+**Date**: 2026-07-28
+**Task**: 归档 ETF 短线规则回退与策略展示任务
+**Branch**: `main`
+
+### Summary
+
+完成两个历史任务的最终验收：后端 558 个定向回归、前端 69 个测试、lint、生产构建及 Python 语法检查均通过；补齐策略展示任务验收记录并归档两个任务。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0fa4a41` | (see git log) |
+| `6551bc4` | (see git log) |
+
+### Status
+
+[OK] **Completed**
