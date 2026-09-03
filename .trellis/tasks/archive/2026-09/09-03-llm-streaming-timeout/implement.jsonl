@@ -1,0 +1,2 @@
+{"file":".trellis/spec/backend/error-handling.md","reason":"保留 LLM 失败、fallback 与任务失败的现有错误传播契约。"}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"新增/调整流式 fallback 日志时遵守敏感信息和级别约束。"}

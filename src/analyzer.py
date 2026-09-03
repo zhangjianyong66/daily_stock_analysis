@@ -3220,6 +3220,7 @@ class GeminiAnalyzer:
 
                 _stream_text: Optional[str] = None
                 _stream_usage: Dict[str, Any] = {}
+                stream_attempt_failed = False
 
                 if model_stream:
                     try:
@@ -3245,24 +3246,26 @@ class GeminiAnalyzer:
                             progress_callback=stream_progress_callback,
                         )
                     except _LiteLLMStreamError as exc:
+                        stream_attempt_failed = True
                         safe_error = self._sanitize_litellm_exception_text(exc, config=config, model=model)
                         if exc.partial_received:
                             logger.warning(
-                                "[LiteLLM] %s stream failed after partial output, retrying non-stream for same model: %s",
+                                "[LiteLLM] %s stream failed after partial output, trying next model: %s",
                                 model,
                                 safe_error,
                             )
                         else:
                             logger.warning(
-                                "[LiteLLM] %s stream unavailable before first chunk, falling back to non-stream: %s",
+                                "[LiteLLM] %s stream unavailable before first chunk, trying next model: %s",
                                 model,
                                 safe_error,
                             )
                         last_error = RuntimeError(f"{type(exc).__name__}: {safe_error}")
                     except Exception as exc:
+                        stream_attempt_failed = True
                         safe_error = self._sanitize_litellm_exception_text(exc, config=config, model=model)
                         logger.warning(
-                            "[LiteLLM] %s stream request failed before first chunk, falling back to non-stream: %s",
+                            "[LiteLLM] %s stream request failed, trying next model: %s",
                             model,
                             safe_error,
                         )
@@ -3275,6 +3278,13 @@ class GeminiAnalyzer:
                     if response_validator is not None:
                         response_validator(_stream_text)
                     return _stream_text, model, _stream_usage
+
+                # A stream-capable deployment that failed to produce a usable
+                # stream must not be retried with the non-stream transport.
+                # Some compatible gateways impose a long non-stream timeout;
+                # move directly to the next configured deployment instead.
+                if model_stream and stream_attempt_failed:
+                    continue
 
                 response = call_litellm_with_param_recovery(
                     lambda kwargs: self._dispatch_litellm_completion(

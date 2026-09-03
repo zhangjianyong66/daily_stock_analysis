@@ -943,7 +943,7 @@ class TestAnalyzerGenerateText:
         assert "cache_observation" not in usage
         assert usage["messages_hmac"]
 
-    def test_call_litellm_stream_falls_back_to_non_stream_before_first_chunk(self):
+    def test_call_litellm_stream_does_not_retry_same_model_non_stream(self):
         analyzer = self._make_analyzer()
         analyzer._config_override = SimpleNamespace(
             litellm_model="gemini/gemini-2.0-flash",
@@ -955,32 +955,95 @@ class TestAnalyzerGenerateText:
             raise RuntimeError("stream unsupported")
             yield  # pragma: no cover
 
-        response = SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content="full response"))],
-            usage=SimpleNamespace(prompt_tokens=4, completion_tokens=5, total_tokens=9),
-        )
-
         dispatch_calls = []
 
         def fake_dispatch(model, call_kwargs, **kwargs):
             dispatch_calls.append(call_kwargs.copy())
             if call_kwargs.get("stream"):
                 return broken_stream()
-            return response
+            raise AssertionError("stream failure must not retry non-stream on the same model")
 
         with patch.object(analyzer, "_dispatch_litellm_completion", side_effect=fake_dispatch):
-            text, model, usage = analyzer._call_litellm(
+            with pytest.raises(Exception, match="All LLM models failed"):
+                analyzer._call_litellm(
+                    "prompt",
+                    {"max_tokens": 128, "temperature": 0.2},
+                    stream=True,
+                )
+
+        assert len(dispatch_calls) == 1
+        assert dispatch_calls[0]["stream"] is True
+
+    def test_call_litellm_stream_failure_tries_next_model(self):
+        analyzer = self._make_analyzer()
+        analyzer._config_override = SimpleNamespace(
+            litellm_model="openai/primary",
+            litellm_fallback_models=["openai/fallback"],
+            llm_model_list=[],
+        )
+
+        def broken_stream():
+            raise RuntimeError("stream unsupported")
+            yield  # pragma: no cover
+
+        dispatch_calls = []
+
+        def fake_dispatch(model, call_kwargs, **kwargs):
+            dispatch_calls.append((model, call_kwargs.copy()))
+            if model == "openai/primary":
+                return broken_stream()
+            assert call_kwargs.get("stream") is True
+            return iter([
+                {"choices": [{"delta": {"content": "fallback response"}}]},
+            ])
+
+        with patch.object(analyzer, "_dispatch_litellm_completion", side_effect=fake_dispatch):
+            text, model, _usage = analyzer._call_litellm(
                 "prompt",
                 {"max_tokens": 128, "temperature": 0.2},
                 stream=True,
             )
 
-        assert text == "full response"
-        assert model == "gemini/gemini-2.0-flash"
-        _assert_usage_contains(usage, {"prompt_tokens": 4, "completion_tokens": 5, "total_tokens": 9})
-        assert len(dispatch_calls) == 2
-        assert dispatch_calls[0]["stream"] is True
-        assert "stream" not in dispatch_calls[1]
+        assert text == "fallback response"
+        assert model == "openai/fallback"
+        assert [item[0] for item in dispatch_calls] == ["openai/primary", "openai/fallback"]
+        assert all(item[1]["stream"] is True for item in dispatch_calls)
+
+    def test_call_litellm_stream_validator_failure_tries_next_model(self):
+        analyzer = self._make_analyzer()
+        analyzer._config_override = SimpleNamespace(
+            litellm_model="openai/primary",
+            litellm_fallback_models=["openai/fallback"],
+            llm_model_list=[],
+        )
+        dispatch_calls = []
+
+        def fake_dispatch(model, call_kwargs, **kwargs):
+            dispatch_calls.append((model, call_kwargs.copy()))
+            if model == "openai/primary":
+                return iter([{"choices": [{"delta": {"content": "invalid"}}]}])
+            return iter([{"choices": [{"delta": {"content": "valid"}}]}])
+
+        validations = []
+
+        def validator(text):
+            validations.append(text)
+            if text == "invalid":
+                raise ValueError("invalid response")
+
+        with patch.object(analyzer, "_dispatch_litellm_completion", side_effect=fake_dispatch):
+            text, model, _usage = analyzer._call_litellm(
+                "prompt",
+                {"max_tokens": 128, "temperature": 0.2},
+                stream=True,
+                response_validator=validator,
+            )
+
+        assert text == "valid"
+        assert model == "openai/fallback"
+        assert validations == ["invalid", "valid"]
+        assert [item[0] for item in dispatch_calls] == ["openai/primary", "openai/fallback"]
+        assert all(item[1]["stream"] is True for item in dispatch_calls)
 
     def test_call_litellm_hermes_route_forces_non_stream_direct_client(self):
         analyzer = self._make_analyzer()
@@ -2117,7 +2180,7 @@ class TestAnalyzerGenerateText:
             ("openai/gpt-4o-mini", 0.2),
         ]
 
-    def test_call_litellm_stream_falls_back_to_non_stream_after_partial_and_falls_back_model(self):
+    def test_call_litellm_stream_after_partial_output_falls_back_to_next_model(self):
         analyzer = self._make_analyzer()
         analyzer._config_override = SimpleNamespace(
             litellm_model="provider/bad-model",
@@ -2167,7 +2230,6 @@ class TestAnalyzerGenerateText:
         _assert_usage_contains(usage, {"prompt_tokens": 4, "completion_tokens": 5, "total_tokens": 9})
         assert dispatch_calls == [
             ("provider/bad-model", True),
-            ("provider/bad-model", False),
             ("provider/good-model", True),
         ]
 

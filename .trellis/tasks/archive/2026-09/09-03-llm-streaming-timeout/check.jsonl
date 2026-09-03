@@ -1,0 +1,2 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"按项目测试、语法检查和文档同步要求验收改动。"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"检查流式失败和跨模型 fallback 不改变错误语义。"}
