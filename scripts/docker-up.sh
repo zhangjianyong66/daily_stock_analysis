@@ -7,7 +7,7 @@ ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env}"
 ENV_EXAMPLE="$ROOT_DIR/.env.example"
 ACTION="${1:-build-up}"
 TARGET="${2:-server}"
-DEFAULT_DOCKER_BUILD_PROXY="http://127.0.0.1:10808"
+DEFAULT_DOCKER_BUILD_PROXY="http://127.0.0.1:7890"
 DEFAULT_DEBIAN_APT_MIRROR="https://mirrors.tuna.tsinghua.edu.cn/debian"
 DEFAULT_DEBIAN_SECURITY_APT_MIRROR="https://mirrors.tuna.tsinghua.edu.cn/debian-security"
 
@@ -44,9 +44,9 @@ usage() {
 
 环境变量:
   ENV_FILE=/path/to/.env   指定 Docker Compose 使用的 env 文件，默认项目根目录 .env
-  HTTP_PROXY/HTTPS_PROXY    可作为运行环境代理输入；Docker build 默认使用 127.0.0.1:10808
+  HTTP_PROXY/HTTPS_PROXY    可作为运行环境代理输入；Docker build 默认使用 127.0.0.1:7890
   DOCKER_BUILD_HTTP_PROXY   覆盖传入 Docker build 的 HTTP 代理；本地代理默认不传 HTTP，避免 apt 走代理被拒绝
-  DOCKER_BUILD_HTTPS_PROXY  覆盖传入 Docker build 的 HTTPS 代理，默认 http://127.0.0.1:10808
+  DOCKER_BUILD_HTTPS_PROXY  覆盖传入 Docker build 的 HTTPS 代理，默认 http://127.0.0.1:7890
   DOCKER_BUILD_NETWORK      覆盖 Docker build 网络模式，默认 host
   DEBIAN_APT_MIRROR         覆盖 Docker build 阶段 Debian 主源，默认清华 HTTPS 镜像
   DEBIAN_SECURITY_APT_MIRROR 覆盖 Docker build 阶段 Debian security 源，默认清华 HTTPS 镜像

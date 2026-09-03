@@ -40,7 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] Web 首页历史日期参数改为稳定生成 `YYYY-MM-DD`，避免 iPad/Safari 将日期格式化为 `M/D/YYYY` 后导致历史股票栏接口失败、首页只显示单条记录。
 - [新功能] Web 首页新增“批量分析配置”入口，可从当前自选队列批量提交所有配置编码的异步分析任务。
 - [修复] Docker Compose 启动 `server` 时优先使用 `.env` 中的 `WEBUI_PORT`，并保留 `API_PORT` 兼容，避免 WebUI 端口已改但容器仍绑定默认 8000。
-- [修复] Docker 一键启动脚本默认使用宿主机 `127.0.0.1:10808` HTTPS 构建代理、host build network 与清华 Debian HTTPS 镜像源，并保持 HTTP build 代理为空，避免 npm/PyPI/GitHub 依赖或 Debian apt 源在构建阶段因本机代理规则出现 403 或 TLS 握手失败。
+- [修复] Docker 一键启动脚本默认使用宿主机 `127.0.0.1:7890` HTTPS 构建代理、host build network 与清华 Debian HTTPS 镜像源，并保持 HTTP build 代理为空，避免 npm/PyPI/GitHub 依赖或 Debian apt 源在构建阶段因本机代理规则出现 403 或 TLS 握手失败。
 - [改进] GitHub Actions 每日分析工作流补齐 TickFlow 数据源环境变量映射，并收敛 README 数据源稳定性说明到完整指南。
 - [修复] WebUI 启动时显式 `--host` / `--port` 不再被 `.env` 中的 `WEBUI_HOST` / `WEBUI_PORT` 覆盖，未传 CLI 参数时统一使用解析后的运行时配置。
 - [改进] GitHub Actions: 每日分析工作流（`00-daily-analysis.yml`）新增钉钉通知环境变量映射，支持在云端定时任务中直接使用钉钉机器人。
