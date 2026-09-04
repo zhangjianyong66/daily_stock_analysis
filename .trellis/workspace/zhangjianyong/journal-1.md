@@ -1089,3 +1089,24 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 35: 修复 LLM 代理与错误传递
+
+**Date**: 2026-09-04
+**Task**: 修复 LLM 代理与错误传递
+**Branch**: `main`
+
+### Summary
+
+关闭运行时代理开关并完成 Docker 重建验证；修复流式 LLM 异常错误丢失，补充回归测试和错误处理规范。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9ff5be6` | (see git log) |
+
+### Status
+
+[OK] **Completed**

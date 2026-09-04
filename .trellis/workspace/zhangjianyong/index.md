@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 34
-- **Last Active**: 2026-07-28
+- **Total Sessions**: 35
+- **Last Active**: 2026-09-04
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1091 | Active |
+| `journal-1.md` | ~1112 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 35 | 2026-09-04 | 修复 LLM 代理与错误传递 | `9ff5be6` | `main` |
 | 34 | 2026-07-28 | 归档 ETF 短线规则回退与策略展示任务 | `0fa4a41`, `6551bc4` | `main` |
 | 33 | 2026-07-28 | 根据完整日K线自动匹配分析策略 | `aeecdb9`, `1ee86dc` | `main` |
 | 32 | 2026-07-27 | 修复历史报告策略推荐缺失 | `a9b29d2` | `main` |
