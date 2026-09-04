@@ -1,0 +1,3 @@
+{"file":".trellis/spec/backend/error-handling.md","reason":"流式 LLM 错误必须保留可排查且已脱敏的原因，不能降级为无信息错误。"}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"错误传递和验证过程不得泄露模型渠道密钥、授权头或完整环境变量。"}
+{"file":".trellis/spec/backend/runtime-deployment.md","reason":"运行时环境变量和 Docker 重建的部署、验证约定。"}

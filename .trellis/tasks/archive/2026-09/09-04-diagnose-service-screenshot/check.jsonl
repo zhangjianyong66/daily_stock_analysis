@@ -1,0 +1,2 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Python 改动应最小化并使用相关确定性回归和语法检查验证。"}
+{"file":".trellis/spec/backend/runtime-deployment.md","reason":"服务重建后需验证运行时代理未注入与模型服务直连。"}
