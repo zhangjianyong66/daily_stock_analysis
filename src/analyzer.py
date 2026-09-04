@@ -3269,6 +3269,7 @@ class GeminiAnalyzer:
                             model,
                             safe_error,
                         )
+                        last_error = RuntimeError(f"{type(exc).__name__}: {safe_error}")
 
                 if _stream_text is not None:
                     last_response_text = _stream_text

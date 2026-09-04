@@ -185,6 +185,54 @@ quote = manager._call_fetcher_method(
 - 配置值无效时应提供可操作提示，避免只有底层 traceback。
 - 新配置默认应做到“不配置也可运行，配置后增强能力”。
 
+## 场景：流式 LLM 连接失败的错误保留
+
+### 1. Scope / Trigger
+
+- Trigger：修改 `GeminiAnalyzer._call_litellm()` 的流式调用、fallback 或错误展示逻辑。
+
+### 2. Signatures
+
+- `GeminiAnalyzer._call_litellm(...)` 在全部候选模型失败时抛出 `_AllModelsFailedError`。
+
+### 3. Contracts
+
+- 流式分支的 `_LiteLLMStreamError` 和普通 `Exception` 都必须把已脱敏的异常类型与原因保存为 `last_error`。
+- 不得为保留错误而对同一流式模型追加非流式重试。
+
+### 4. Validation & Error Matrix
+
+- 流式连接异常 -> 记录脱敏 warning，继续下一个 fallback，并在最终异常中包含该原因。
+- 无 fallback -> 最终异常不得显示 `Last error: None`。
+
+### 5. Good/Base/Bad Cases
+
+- Good：用户可区分渠道连接失败与未配置模型。
+- Base：已有流式失败后切换下一个模型的行为不变。
+- Bad：仅写日志后 `continue`，使最终错误丢失为 `None`。
+
+### 6. Tests Required
+
+- 单模型流式普通异常测试须断言最终异常包含原始（脱敏后）原因，且不包含 `Last error: None`。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+except Exception:
+    stream_attempt_failed = True
+    continue
+```
+
+#### Correct
+
+```python
+except Exception as exc:
+    stream_attempt_failed = True
+    last_error = RuntimeError(f"{type(exc).__name__}: {safe_error}")
+```
+
 ## 禁止项
 
 - 不向 API 用户返回 Python traceback、密钥、webhook、token 或完整请求体。

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修复] Docker 运行时取消 HTTP/HTTPS 代理并直连外部服务；流式 LLM 连接失败会保留已脱敏的真实原因，避免误报为未配置模型。
 - [修复] LLM 分析流式请求失败时不再对同一模型回退非流式调用，直接切换下一个模型，降低中转站非流式超时导致批量报告缺失的概率。
 - [新功能] 未明确选择策略的个股分析会按最近完整日 K 线自动匹配唯一策略，强看跌冲突优先进入情绪周期风险复核，无法可靠匹配时使用冻结的服务端兜底策略。
 - [改进] 策略执行快照新增自动匹配截止日、形态依据、候选和兜底原因，历史、Web、Markdown 与通知统一读取同一持久化事实；首页重新分析按当前菜单重新判断，不再复用历史实际策略。

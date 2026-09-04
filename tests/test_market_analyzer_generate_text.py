@@ -974,6 +974,28 @@ class TestAnalyzerGenerateText:
         assert len(dispatch_calls) == 1
         assert dispatch_calls[0]["stream"] is True
 
+    def test_call_litellm_stream_failure_keeps_last_error(self):
+        analyzer = self._make_analyzer()
+        analyzer._config_override = SimpleNamespace(
+            litellm_model="gemini/gemini-2.0-flash",
+            litellm_fallback_models=[],
+            llm_model_list=[],
+        )
+
+        def broken_stream():
+            raise RuntimeError("model service connection failed")
+            yield  # pragma: no cover
+
+        with patch.object(analyzer, "_dispatch_litellm_completion", return_value=broken_stream()):
+            with pytest.raises(Exception, match="model service connection failed") as exc_info:
+                analyzer._call_litellm(
+                    "prompt",
+                    {"max_tokens": 128, "temperature": 0.2},
+                    stream=True,
+                )
+
+        assert "Last error: None" not in str(exc_info.value)
+
     def test_call_litellm_stream_failure_tries_next_model(self):
         analyzer = self._make_analyzer()
         analyzer._config_override = SimpleNamespace(
