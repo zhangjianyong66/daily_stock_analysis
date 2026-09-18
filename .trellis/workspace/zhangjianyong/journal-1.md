@@ -1110,3 +1110,24 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 36: 完成上游合并回归修复与验收
+
+**Date**: 2026-09-18
+**Task**: 完成上游合并回归修复与验收
+**Branch**: `main`
+
+### Summary
+
+完成 upstream/main 合并后的后端契约修复、存储 canonical_id 迁移、海外基本面、搜索并发与英文别名、ETF画像和 Web 类型兼容；337 项后端定向测试、搜索/ETF专项测试、Web lint/build 与 Docker Compose config 检查通过。创建本地提交 60fc2426，未推送远程。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `60fc2426` | (see git log) |
+
+### Status
+
+[OK] **Completed**
