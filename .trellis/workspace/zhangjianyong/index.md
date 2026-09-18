@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 36
+- **Total Sessions**: 37
 - **Last Active**: 2026-09-18
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1133 | Active |
+| `journal-1.md` | ~1154 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 37 | 2026-09-18 | 修复 Docker 选股模块导入校验 | `8b96b13b` | `main` |
 | 36 | 2026-09-18 | 完成上游合并回归修复与验收 | `60fc2426` | `main` |
 | 35 | 2026-09-04 | 修复 LLM 代理与错误传递 | `9ff5be6` | `main` |
 | 34 | 2026-07-28 | 归档 ETF 短线规则回退与策略展示任务 | `0fa4a41`, `6551bc4` | `main` |

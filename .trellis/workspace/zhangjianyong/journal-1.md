@@ -1131,3 +1131,24 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 37: 修复 Docker 选股模块导入校验
+
+**Date**: 2026-09-18
+**Task**: 修复 Docker 选股模块导入校验
+**Branch**: `main`
+
+### Summary
+
+修复 Dockerfile 构建期错误导入外部 alphasift 包，改为校验仓库内置 src.services.screening.pipeline；内置选股回归 22 项通过，Dockerfile 静态检查通过，完整镜像构建因 Debian 依赖下载过慢中止。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8b96b13b` | (see git log) |
+
+### Status
+
+[OK] **Completed**
