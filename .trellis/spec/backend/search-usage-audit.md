@@ -227,3 +227,51 @@ if not underlying_terms:
 if existing.quarantined_at is not None:
     return  # 仅 rollback_news_intel_quarantine(batch=...) 可以恢复
 ```
+
+## 场景：外股英文别名与题材搜索隔离
+
+### 1. Scope / Trigger
+
+- Trigger：港股/美股新闻查询需要英文公司名，或题材搜索必须有独立超时和并发上限。
+
+### 2. Signatures
+
+- `SearchService._foreign_english_query_terms(stock_code, stock_name) -> tuple[str, ...]`
+- `SearchService.search_topic_news_bounded(..., timeout_seconds=12.0) -> SearchResponse`
+
+### 3. Contracts
+
+- 外股代码先 canonicalize，再判断市场和生成受控英文别名；中文名称没有可信别名时不得猜测。
+- 题材 bounded 搜索通过独立 worker process 执行，超过 deadline 必须终止 worker、释放槽位并返回可归因错误。
+- owner/waiter 缓存等待者复用成功结果，不能在等待超时后无条件扇出第二次供应商请求。
+
+### 4. Validation & Error Matrix
+
+- `AAPL.US` / `00700.HK` -> 识别为外股并使用英文别名。
+- worker 超时或异常 -> 回收进程和连接，不泄漏后台请求。
+- 缓存命中/等待命中 -> 不新增物理搜索审计记录。
+
+### 5. Good/Base/Bad Cases
+
+- Good：英文别名用于查询和相关性评分，但结果仍要求代码/公司身份匹配。
+- Base：普通中文 A 股查询不额外添加英文词。
+- Bad：从任意中文名称直接拼接英文译名，或 waiter 失败后立即重复请求。
+
+### 6. Tests Required
+
+- `tests/test_search_service_concurrency.py`、`tests/test_search_news_freshness.py` 覆盖别名、缓存、超时、进程回收和并发 owner/waiter。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+query = f"{stock_name} latest news {english_name_guess}"
+```
+
+#### Correct
+
+```python
+aliases = SearchService._foreign_english_query_terms(code, name)
+query = build_query(name, code, aliases)
+```

@@ -12,6 +12,7 @@ A股自选股智能分析系统 - 搜索服务模块
 """
 
 import logging
+import multiprocessing
 import re
 import threading
 import time
@@ -40,6 +41,7 @@ from src.config import (
     resolve_news_window_days,
 )
 from src.services.run_diagnostics import record_provider_run, record_provider_run_started
+from src.data.stock_mapping import canonicalize_foreign_stock_code, foreign_stock_english_aliases
 from src.services.market_symbol_utils import CN_ETF_PREFIXES, is_cn_etf_symbol
 from src.services.etf_search_intelligence import (
     ANALYSIS_DAYS,
@@ -75,6 +77,95 @@ from src.services.search_request_audit_service import (
 from src.utils.sanitize import sanitize_diagnostic_text, sanitize_search_snapshot_text
 
 logger = logging.getLogger(__name__)
+
+_SEARCH_TIMEOUT_PROCESS_START_METHOD = "spawn"
+_SEARCH_TIMEOUT_PROCESS_JOIN_GRACE_SECONDS = 1.0
+_SEARCH_TIMEOUT_WORKER_SLOTS = threading.BoundedSemaphore(4)
+
+
+def _terminate_search_process(process: Any) -> None:
+    if not process.is_alive():
+        return
+    process.terminate()
+    process.join(_SEARCH_TIMEOUT_PROCESS_JOIN_GRACE_SECONDS)
+    if process.is_alive() and hasattr(process, "kill"):
+        process.kill()
+        process.join(_SEARCH_TIMEOUT_PROCESS_JOIN_GRACE_SECONDS)
+
+
+def _search_topic_news_process_worker(
+    conn: Any,
+    constructor_kwargs: Dict[str, Any],
+    topic: str,
+    max_results: int,
+    focus_keywords: Optional[List[str]],
+) -> None:
+    try:
+        service = SearchService(**constructor_kwargs)
+        conn.send((True, service.search_topic_news(topic, max_results=max_results, focus_keywords=focus_keywords)))
+    except BaseException as exc:
+        try:
+            conn.send((False, exc))
+        except BaseException:
+            try:
+                conn.send((False, RuntimeError(f"{type(exc).__name__}: {exc}")))
+            except BaseException:
+                pass
+    finally:
+        conn.close()
+
+
+def _call_topic_news_in_subprocess(
+    *,
+    constructor_kwargs: Dict[str, Any],
+    topic: str,
+    max_results: int,
+    focus_keywords: Optional[List[str]],
+    timeout_seconds: float,
+    deadline: Optional[float] = None,
+) -> "SearchResponse":
+    wait_seconds = max(0.01, float(timeout_seconds))
+    if not _SEARCH_TIMEOUT_WORKER_SLOTS.acquire(blocking=False):
+        raise RuntimeError("题材新闻搜索并发已满，请稍后重试")
+    process = None
+    process_started = False
+    parent_conn = child_conn = None
+    try:
+        multiprocessing.freeze_support()
+        ctx = multiprocessing.get_context(_SEARCH_TIMEOUT_PROCESS_START_METHOD)
+        parent_conn, child_conn = ctx.Pipe(duplex=False)
+        process = ctx.Process(
+            target=_search_topic_news_process_worker,
+            args=(child_conn, constructor_kwargs, topic, max_results, focus_keywords),
+            name="search-topic-news",
+            daemon=True,
+        )
+        process.start()
+        process_started = True
+        child_conn.close()
+        child_conn = None
+        poll_seconds = wait_seconds if deadline is None else max(0.0, deadline - time.monotonic())
+        if poll_seconds <= 0 or not parent_conn.poll(poll_seconds):
+            _terminate_search_process(process)
+            raise TimeoutError(f"题材新闻搜索超过 {wait_seconds:g}s，已终止请求进程")
+        try:
+            ok, value = parent_conn.recv()
+        except EOFError as exc:
+            raise RuntimeError("题材新闻搜索进程未返回结果") from exc
+    finally:
+        try:
+            if child_conn is not None:
+                child_conn.close()
+        finally:
+            if parent_conn is not None:
+                parent_conn.close()
+            if process_started:
+                process.join(_SEARCH_TIMEOUT_PROCESS_JOIN_GRACE_SECONDS)
+                _terminate_search_process(process)
+        _SEARCH_TIMEOUT_WORKER_SLOTS.release()
+    if ok:
+        return value
+    raise value
 
 # Transient network errors (retryable)
 _SEARCH_TRANSIENT_EXCEPTIONS = (
@@ -2494,6 +2585,18 @@ class SearchService:
             self.news_strategy_profile,
             NEWS_STRATEGY_WINDOWS["short"],
         )
+        self._constructor_kwargs = {
+            "bocha_keys": list(bocha_keys or []),
+            "tavily_keys": list(tavily_keys or []),
+            "anspire_keys": list(anspire_keys or []),
+            "brave_keys": list(brave_keys or []),
+            "serpapi_keys": list(serpapi_keys or []),
+            "minimax_keys": list(minimax_keys or []),
+            "searxng_base_urls": list(searxng_base_urls or []),
+            "searxng_public_instances_enabled": bool(searxng_public_instances_enabled),
+            "news_max_age_days": self.news_max_age_days,
+            "news_strategy_profile": self.news_strategy_profile,
+        }
 
         # 初始化搜索引擎（按优先级排序）
         # 1. Bocha 优先（中文搜索优化，AI摘要）
@@ -2559,17 +2662,18 @@ class SearchService:
     @staticmethod
     def _is_foreign_stock(stock_code: str) -> bool:
         """判断是否为港股或美股"""
-        code = stock_code.strip()
+        code = canonicalize_foreign_stock_code(stock_code).strip()
         # 美股：1-5个大写字母，可能包含点（如 BRK.B）
         if SearchService._US_STOCK_RE.match(code):
             return True
         # 港股：带 hk 前缀或 5位纯数字
-        lower = code.lower()
-        if lower.startswith('hk'):
-            return True
         if code.isdigit() and len(code) == 5:
             return True
         return False
+
+    @staticmethod
+    def _foreign_english_query_terms(stock_code: str, stock_name: str) -> Tuple[str, ...]:
+        return foreign_stock_english_aliases(stock_code, stock_name)
 
     @classmethod
     def _contains_chinese_text(cls, value: Optional[str]) -> bool:
@@ -2744,9 +2848,32 @@ class SearchService:
                 self._cache_inflight.pop(key, None)
                 event.set()
 
-    def _wait_for_cached(self, key: str, event: threading.Event) -> Optional['SearchResponse']:
-        event.wait(timeout=max(1.0, min(float(self._cache_ttl), 30.0)))
+    def _wait_for_cached(
+        self,
+        key: str,
+        event: threading.Event,
+        *,
+        timeout_seconds: Optional[float] = None,
+    ) -> Optional['SearchResponse']:
+        timeout = max(0.0, float(timeout_seconds)) if timeout_seconds is not None else max(1.0, min(float(self._cache_ttl), 30.0))
+        event.wait(timeout=timeout)
         return self._get_cached(key)
+
+    def _get_cached_or_wait_for_reservation(
+        self,
+        key: str,
+        *,
+        deadline: Optional[float] = None,
+    ) -> Tuple[Optional['SearchResponse'], bool, Optional[threading.Event], bool]:
+        cached, owner, event = self._get_cached_or_reserve(key)
+        if cached is not None or owner or event is None:
+            return cached, owner, event, False
+        remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+        cached = self._wait_for_cached(key, event, timeout_seconds=remaining) if remaining is not None else self._wait_for_cached(key, event)
+        if cached is not None:
+            return cached, False, None, True
+        cached, owner, event = self._get_cached_or_reserve(key)
+        return cached, owner, event, True
 
     def _put_cache(self, key: str, response: 'SearchResponse') -> None:
         """Store a successful SearchResponse in cache."""
@@ -3195,7 +3322,14 @@ class SearchService:
                         add_reason(f"链接命中股票代码 {term}")
                         break
 
-        for term in cls._company_identity_terms(stock_name):
+        primary_company_terms = list(cls._company_identity_terms(stock_name))
+        company_terms = list(primary_company_terms)
+        alias_terms = set()
+        for alias in foreign_stock_english_aliases(stock_code, stock_name):
+            alias_terms.update(cls._company_identity_terms(alias))
+            company_terms.extend(term for term in cls._company_identity_terms(alias) if term not in company_terms)
+        for term in company_terms:
+            is_alias_term = term in alias_terms and term not in primary_company_terms
             ambiguous_en = (
                 not cls._contains_chinese_text(term)
                 and term.lower() in cls._AMBIGUOUS_EN_COMPANY_NAMES
@@ -3209,7 +3343,7 @@ class SearchService:
                     has_ambiguous_company_signal = True
                 else:
                     has_unambiguous_company_signal = True
-                add_reason(f"标题命中公司名 {term}")
+                add_reason(f"标题命中公司英文别名 {term}" if is_alias_term else f"标题命中公司名 {term}")
                 break
             if cls._contains_identity_term(snippet, term):
                 score += snippet_score
@@ -3218,7 +3352,7 @@ class SearchService:
                     has_ambiguous_company_signal = True
                 else:
                     has_unambiguous_company_signal = True
-                add_reason(f"摘要命中公司名 {term}")
+                add_reason(f"摘要命中公司英文别名 {term}" if is_alias_term else f"摘要命中公司名 {term}")
                 break
 
         has_company_event = cls._contains_any_news_term(full_text, cls._COMPANY_EVENT_TERMS)
@@ -3810,6 +3944,112 @@ class SearchService:
         with search_audit_scope(context):
             return provider.search(query, max_results=max_results, days=days, **search_kwargs)
 
+    def search_topic_news(
+        self,
+        topic: str,
+        max_results: int = 5,
+        focus_keywords: Optional[List[str]] = None,
+    ) -> SearchResponse:
+        topic_text = (topic or "").strip()
+        if not topic_text or not self.is_available:
+            return SearchResponse(query=topic_text, results=[], provider="None", success=False, error_message="未配置搜索能力或题材为空")
+        search_days = self._effective_news_window_days()
+        provider_max_results = self._provider_request_size(max_results)
+        query_terms = [str(item).strip() for item in (focus_keywords or []) if str(item).strip()]
+        query = " ".join(query_terms) if query_terms else f'"{topic_text}" A股 最新消息 催化'
+        prefer_chinese = self._contains_chinese_text(query)
+        cache_key = self._cache_key(f"topic_news:{topic_text}:{query}", max_results, search_days)
+        cached, cache_owner, cache_event, _waited = self._get_cached_or_wait_for_reservation(cache_key)
+        if cached is not None:
+            return cached
+        had_provider_success = False
+        try:
+            for provider_attempt, provider in enumerate(self._providers, 1):
+                if not provider.is_available:
+                    continue
+                search_kwargs: Dict[str, Any] = {}
+                if isinstance(provider, TavilySearchProvider):
+                    search_kwargs["topic"] = "news"
+                elif isinstance(provider, BraveSearchProvider):
+                    search_kwargs.update(self._brave_search_locale("", prefer_chinese=prefer_chinese))
+                started_at = time.monotonic()
+                try:
+                    record_provider_run_started(data_type="news_search", provider=provider.name, operation="search_topic_news")
+                    response = self._call_provider_with_audit(
+                        provider, query,
+                        business_search_id=SearchAuditContext(call_source="screening").business_search_id,
+                        call_source="screening", operation="search_topic_news", provider_attempt=provider_attempt,
+                        dimension="topic", lookback_days=search_days,
+                        max_results=provider_max_results, days=search_days, **search_kwargs,
+                    )
+                except Exception as exc:
+                    self._record_news_search_run(provider=provider.name, operation="search_topic_news", success=False,
+                        latency_ms=self._elapsed_ms(started_at), error_type=type(exc).__name__, error_message=exc)
+                    continue
+                had_provider_success = had_provider_success or bool(response.success)
+                filtered = self._filter_news_response(response, search_days=search_days, max_results=provider_max_results,
+                    log_scope=f"{topic_text}:{provider.name}:topic_news")
+                if filtered.success and filtered.results:
+                    prioritized, _ = self._prioritize_news_language(filtered, prefer_chinese=prefer_chinese)
+                    limited = self._limit_search_response(prioritized, max_results=max_results)
+                    self._record_news_search_run(provider=provider.name, operation="search_topic_news", success=True,
+                        latency_ms=self._elapsed_ms(started_at), record_count=len(limited.results or []))
+                    self._put_cache(cache_key, limited)
+                    return limited
+            return SearchResponse(query=query, results=[], provider="Filtered" if had_provider_success else "None",
+                success=had_provider_success, error_message=None if had_provider_success else "所有搜索引擎都不可用或搜索失败")
+        finally:
+            if cache_owner and cache_event is not None:
+                self._release_cache_fill(cache_key, cache_event)
+
+    def search_topic_news_bounded(
+        self,
+        topic: str,
+        max_results: int = 5,
+        focus_keywords: Optional[List[str]] = None,
+        *,
+        timeout_seconds: float = 12.0,
+    ) -> SearchResponse:
+        topic_text = (topic or "").strip()
+        if not topic_text or not self.is_available:
+            return SearchResponse(query=topic_text, results=[], provider="None", success=False, error_message="未配置搜索能力或题材为空")
+        wait_seconds = float(timeout_seconds)
+        if wait_seconds <= 0:
+            raise ValueError("题材新闻搜索超时必须大于 0 秒")
+        deadline = time.monotonic() + wait_seconds
+        search_days = self._effective_news_window_days()
+        query_terms = [str(item).strip() for item in (focus_keywords or []) if str(item).strip()]
+        query = " ".join(query_terms) if query_terms else f'"{topic_text}" A股 最新消息 催化'
+        cache_key = self._cache_key(f"topic_news:{topic_text}:{query}", max_results, search_days)
+        cached, cache_owner, cache_event = self._get_cached_or_reserve(cache_key)
+        if cached is not None:
+            return cached
+        if not cache_owner and cache_event is not None:
+            cached = self._wait_for_cached(cache_key, cache_event, timeout_seconds=max(0.0, deadline - time.monotonic()))
+            if cached is not None:
+                return cached
+            cached, cache_owner, cache_event = self._get_cached_or_reserve(cache_key)
+            if cached is not None:
+                return cached
+            if cache_event is not None:
+                cached = self._wait_for_cached(cache_key, cache_event, timeout_seconds=max(0.0, deadline - time.monotonic()))
+                if cached is not None:
+                    return cached
+        try:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("题材新闻搜索等待超过调用截止时间")
+            response = _call_topic_news_in_subprocess(
+                constructor_kwargs=self._constructor_kwargs, topic=topic_text, max_results=max_results,
+                focus_keywords=focus_keywords, timeout_seconds=remaining, deadline=deadline,
+            )
+            if response.success and response.results:
+                self._put_cache(cache_key, response)
+            return response
+        finally:
+            if cache_owner and cache_event is not None:
+                self._release_cache_fill(cache_key, cache_event)
+
     def search_stock_news(
         self,
         stock_code: str,
@@ -3844,6 +4084,10 @@ class SearchService:
 
         # 构建搜索查询（优化搜索效果）
         is_foreign = self._is_foreign_stock(stock_code)
+        english_aliases = self._foreign_english_query_terms(stock_code, stock_name)
+        effective_name = english_aliases[0] if english_aliases else stock_name
+        short_name = english_aliases[-1] if english_aliases else None
+        prefer_chinese = prefer_chinese and not (is_foreign and english_aliases)
         if focus_keywords:
             # 如果提供了关键词，直接使用关键词作为查询
             query = " ".join(focus_keywords)
@@ -3851,7 +4095,10 @@ class SearchService:
             query = f"{stock_name} {stock_code} 股票 最新消息"
         elif is_foreign:
             # 港股/美股使用英文搜索关键词
-            query = f"{stock_name} {stock_code} stock latest news"
+            if english_aliases and short_name and short_name != effective_name:
+                query = f"{effective_name} {short_name} {stock_code} stock latest news"
+            else:
+                query = f"{effective_name} {stock_code} stock latest news"
         else:
             # 默认主查询：股票名称 + 核心关键词
             query = f"{stock_name} {stock_code} 股票 最新消息"
@@ -4151,10 +4398,16 @@ class SearchService:
         
         # 构建针对性查询
         event_query = " OR ".join(event_types)
-        query = f"{stock_name} ({event_query})"
+        aliases = self._foreign_english_query_terms(stock_code, stock_name)
+        query_name = aliases[-1] if aliases else stock_name
+        query = f"{query_name} ({event_query})"
         
         logger.info(f"搜索股票事件: {stock_name}({stock_code}) - {event_types}")
         
+        cache_key = self._cache_key(f"stock_events:{stock_code}:{query}", 5, self._effective_news_window_days())
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            return cached
         # 依次尝试各个搜索引擎
         business_search_id = SearchAuditContext(call_source=call_source).business_search_id
         for provider_attempt, provider in enumerate(self._providers, 1):
@@ -4175,6 +4428,7 @@ class SearchService:
             )
             
             if response.success:
+                self._put_cache(cache_key, response)
                 return response
         
         return SearchResponse(
@@ -4991,6 +5245,9 @@ class SearchService:
         business_search_id = SearchAuditContext(call_source=call_source).business_search_id
 
         is_foreign = self._is_foreign_stock(stock_code)
+        english_aliases = self._foreign_english_query_terms(stock_code, stock_name)
+        effective_name = english_aliases[0] if english_aliases else stock_name
+        short_name = english_aliases[-1] if english_aliases else None
         is_index_etf = self.is_index_or_etf(stock_code, stock_name)
         is_etf_target = self._is_etf_search_target(stock_code, stock_name)
 
@@ -5019,14 +5276,14 @@ class SearchService:
             search_dimensions = [
                 {
                     'name': 'latest_news',
-                    'query': f"{stock_name} {stock_code} latest news events",
+                    'query': f"{effective_name} {short_name + ' ' if short_name and short_name != effective_name else ''}{stock_code} latest news events",
                     'desc': '最新消息',
                     'tavily_topic': 'news',
                     'strict_freshness': True,
                 },
                 {
                     'name': 'market_analysis',
-                    'query': f"{stock_name} analyst rating target price report",
+                    'query': f"{effective_name} analyst rating target price report",
                     'desc': '机构分析',
                     'tavily_topic': None,
                     'strict_freshness': False,
@@ -5034,8 +5291,8 @@ class SearchService:
                 {
                     'name': 'risk_check',
                     'query': (
-                        f"{stock_name} {stock_code} index performance outlook tracking error"
-                        if is_index_etf else f"{stock_name} risk insider selling lawsuit litigation"
+                        f"{effective_name} {stock_code} index performance outlook tracking error"
+                        if is_index_etf else f"{effective_name} risk insider selling lawsuit litigation"
                     ),
                     'desc': '风险排查',
                     'tavily_topic': None if is_index_etf else 'news',
@@ -5044,8 +5301,8 @@ class SearchService:
                 {
                     'name': 'earnings',
                     'query': (
-                        f"{stock_name} {stock_code} index performance composition outlook"
-                        if is_index_etf else f"{stock_name} earnings revenue profit growth forecast"
+                        f"{effective_name} {stock_code} index performance composition outlook"
+                        if is_index_etf else f"{effective_name} earnings revenue profit growth forecast"
                     ),
                     'desc': '业绩预期',
                     'tavily_topic': None,
@@ -5054,8 +5311,8 @@ class SearchService:
                 {
                     'name': 'industry',
                     'query': (
-                        f"{stock_name} {stock_code} index sector allocation holdings"
-                        if is_index_etf else f"{stock_name} industry competitors market share outlook"
+                        f"{effective_name} {stock_code} index sector allocation holdings"
+                        if is_index_etf else f"{effective_name} industry competitors market share outlook"
                     ),
                     'desc': '行业分析',
                     'tavily_topic': None,

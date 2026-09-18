@@ -27,7 +27,7 @@ from typing import Optional, Dict, List, Any, TYPE_CHECKING, Tuple, Literal, Cal
 if TYPE_CHECKING:
     from asyncio import Queue as AsyncQueue
 
-from data_provider.base import canonical_stock_code, normalize_stock_code
+from data_provider.base import normalize_stock_code
 from src.services.run_diagnostics import (
     activate_run_diagnostic_context,
     get_current_diagnostic_context,
@@ -86,6 +86,10 @@ class TaskInfo:
     skills: Optional[List[str]] = None
     skill_prompt_state: Optional[Any] = field(default=None, repr=False, compare=False)
     report_language: Optional[str] = None
+    # Market-review tasks carry the canonical region selected at submission;
+    # ordinary stock tasks leave this unset for backward compatibility.
+    region: Optional[str] = None
+    asset_type: Optional[str] = None
     trace_id: Optional[str] = None
     flow_events: List[Dict[str, Any]] = field(default_factory=list)
     
@@ -108,6 +112,8 @@ class TaskInfo:
             "original_query": self.original_query,
             "selection_source": self.selection_source,
             "skills": self.skills,
+            "region": self.region,
+            "asset_type": self.asset_type,
         }
     
     def copy(self) -> 'TaskInfo':
@@ -132,6 +138,8 @@ class TaskInfo:
             portfolio_context=dict(self.portfolio_context) if isinstance(self.portfolio_context, dict) else None,
             skills=list(self.skills) if self.skills is not None else None,
             report_language=self.report_language,
+            region=self.region,
+            asset_type=self.asset_type,
             trace_id=self.trace_id or self.task_id,
             flow_events=copy.deepcopy(self.flow_events),
         )
@@ -563,6 +571,8 @@ class AnalysisTaskQueue:
         message: Optional[str] = "任务已加入队列",
         task_id: Optional[str] = None,
         trace_id: Optional[str] = None,
+        region: Optional[str] = None,
+        asset_type: Optional[str] = None,
     ) -> TaskInfo:
         """
         Submit a generic background callable with task lifecycle tracking.
@@ -579,6 +589,8 @@ class AnalysisTaskQueue:
             status=TaskStatus.PENDING,
             message=message,
             report_type=report_type,
+            region=region,
+            asset_type=asset_type,
         )
 
         with self._data_lock:

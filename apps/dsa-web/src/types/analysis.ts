@@ -37,7 +37,7 @@ export interface MarketReviewAccepted {
   status: 'accepted';
   message: string;
   sendNotification: boolean;
-  region: string;
+  region?: string;
   traceId?: string;
   taskId?: string;
 }

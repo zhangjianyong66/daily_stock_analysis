@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"约束 Python/TypeScript 修改、定向测试、文档同步和交付验证范围。"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"分析 API、任务队列、数据库、Web 和报告字段跨层兼容时使用的数据流与边界检查。"}
+{"file":".trellis/spec/backend/runtime-deployment.md","reason":"前端 lint/build、Docker/Compose 静态验证和未执行外部服务检查的运行约束。"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"存储模型、启动迁移顺序和幂等性要求，覆盖合并后新增记录模型。"}

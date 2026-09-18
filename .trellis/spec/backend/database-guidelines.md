@@ -116,3 +116,51 @@ self._ensure_generic_columns()
 - 不绕过 `DatabaseManager` 新建独立 SQLite 连接，除非是明确隔离的数据文件并有文档说明。
 - 不依赖 SQLite 隐式并发行为处理关键写路径；需要串行化时像 portfolio 账本一样显式加写事务。
 - 不把外部原始 payload 直接长期存储为唯一数据来源，除非同时保存规范化字段和查询索引。
+
+## 场景：`StockDaily.canonical_id` 启动迁移与双写
+
+### 1. Scope / Trigger
+
+- Trigger：日线记录需要跨市场稳定标识，或上游合并引入 canonical target 解析。
+
+### 2. Signatures
+
+- `DatabaseManager._ensure_stock_daily_canonical_id() -> None`
+- `DatabaseManager.save_daily_data(df, code, data_source="Unknown", canonical_id=None) -> int`
+
+### 3. Contracts
+
+- 旧库启动时幂等添加 `stock_daily.canonical_id` 和普通索引，并回填可解析记录；无法解析的旧记录保持 `NULL`。
+- 显式 `canonical_id` 优先，未提供时使用 `parse_analysis_target(code)` 推导；更新已有日线时不能用 `NULL` 覆盖非空值。
+- 检查器、回填或索引验证失败必须记录迁移归因并阻止数据库以未知结构继续启动。
+
+### 4. Validation & Error Matrix
+
+- 空库、旧库、重复启动 -> 结构和索引保持一致，无重复迁移副作用。
+- 注册表为空 -> canonical 修复跳过并记录 warning，不改写原始代码。
+- 单行解析失败 -> 该行保持可用，继续处理其他行并记录统计。
+
+### 5. Good/Base/Bad Cases
+
+- Good：`save_daily_data(..., canonical_id="sh600519")` 双写并在重复日期更新时保留该值。
+- Base：旧库启动完成列、索引和可解析行回填。
+- Bad：只修改 ORM 模型而不迁移旧 SQLite 文件，或用空值覆盖已有 canonical ID。
+
+### 6. Tests Required
+
+- `tests/test_storage.py` 覆盖迁移、回填、索引、推导、修复、幂等和显式双写。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+existing.canonical_id = record["canonical_id"]  # NULL 会覆盖旧值
+```
+
+#### Correct
+
+```python
+if record["canonical_id"] is not None:
+    existing.canonical_id = record["canonical_id"]
+```

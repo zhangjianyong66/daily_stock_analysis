@@ -140,6 +140,10 @@ class StockDaily(Base):
     
     # 数据来源
     data_source = Column(String(50))  # 记录数据来源（如 AkshareFetcher）
+
+    # Phase 1 stable analysis identity. Nullable for legacy rows; migration
+    # backfills existing data and save_daily_data dual-writes new rows.
+    canonical_id = Column(String(32), nullable=True)
     
     # 更新时间
     created_at = Column(DateTime, default=datetime.now)
@@ -149,6 +153,7 @@ class StockDaily(Base):
     __table_args__ = (
         UniqueConstraint('code', 'date', name='uix_code_date'),
         Index('ix_code_date', 'code', 'date'),
+        Index('ix_stock_daily_canonical_id', 'canonical_id'),
     )
     
     def __repr__(self):
@@ -171,6 +176,7 @@ class StockDaily(Base):
             'ma20': self.ma20,
             'volume_ratio': self.volume_ratio,
             'data_source': self.data_source,
+            'canonical_id': self.canonical_id,
         }
 
 
@@ -707,6 +713,15 @@ class ConversationMessage(Base):
     role = Column(String(20), nullable=False)  # user, assistant, system
     content = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.now, index=True)
+
+
+class ConversationSessionState(Base):
+    """Persisted user skill selection for an Agent conversation."""
+    __tablename__ = 'conversation_session_states'
+    session_id = Column(String(100), primary_key=True)
+    selected_skill_ids_json = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.now, nullable=False)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
 
 
 class ConversationSummary(Base):
@@ -1367,6 +1382,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             # 创建所有表
             Base.metadata.create_all(self._engine)
             self._ensure_decision_signal_profile_schema()
+            self._ensure_stock_daily_canonical_id()
             self._ensure_news_intel_quarantine_columns()
             self._ensure_portfolio_trade_time_column()
             self._ensure_llm_usage_telemetry_columns()
@@ -1390,6 +1406,102 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             self._SessionLocal = None
             self.__class__._instance = None
             raise
+
+    def _ensure_stock_daily_canonical_id(self) -> None:
+        """Add, backfill, repair and index StockDaily canonical identifiers."""
+        if not self._is_sqlite_engine or not inspect(self._engine).has_table(StockDaily.__tablename__):
+            return
+        inspector = inspect(self._engine)
+        try:
+            columns = {c["name"] for c in inspector.get_columns(StockDaily.__tablename__)}
+        except Exception as exc:
+            logger.error("[StockDaily] failed to inspect canonical_id column; canonical_id migration cannot continue safely: %s", exc)
+            raise
+        if "canonical_id" not in columns:
+            with self._engine.begin() as conn:
+                conn.exec_driver_sql("ALTER TABLE stock_daily ADD COLUMN canonical_id VARCHAR(32)")
+        self._backfill_stock_daily_canonical_id()
+        self._backfill_canonical_ids()
+        self._ensure_stock_daily_canonical_id_index()
+
+    def _ensure_stock_daily_canonical_id_index(self) -> None:
+        with self._engine.begin() as conn:
+            conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_stock_daily_canonical_id ON stock_daily (canonical_id)")
+        indexes = {i["name"]: i["column_names"] for i in inspect(self._engine).get_indexes(StockDaily.__tablename__)}
+        if indexes.get("ix_stock_daily_canonical_id") != ["canonical_id"]:
+            raise RuntimeError("canonical_id index verification failed: index=ix_stock_daily_canonical_id expected=['canonical_id'] actual=%r" % indexes.get("ix_stock_daily_canonical_id"))
+
+    def _derive_canonical_id(self, code: str) -> Optional[str]:
+        try:
+            from src.services.stock_list_parser import ParseStatus, parse_analysis_target
+            target = parse_analysis_target(code)
+            if target.asset_type == ParseStatus.UNSUPPORTED:
+                return None
+            return target.canonical_id or None
+        except Exception as exc:
+            logger.warning("_derive_canonical_id failed for %r: %s", code, exc)
+            return None
+
+    def _backfill_stock_daily_canonical_id(self) -> None:
+        last_id = 0
+        total = skipped = 0
+        while True:
+            with self._engine.begin() as conn:
+                rows = conn.execute(text("SELECT id, code FROM stock_daily WHERE canonical_id IS NULL AND id > :last ORDER BY id LIMIT 5000"), {"last": last_id}).fetchall()
+            if not rows:
+                break
+            with self._engine.begin() as conn:
+                for row_id, code in rows:
+                    last_id = row_id
+                    derived = self._derive_canonical_id(code)
+                    if not derived:
+                        skipped += 1
+                        continue
+                    result = conn.execute(text("UPDATE stock_daily SET canonical_id=:value WHERE id=:id AND canonical_id IS NULL"), {"value": derived, "id": row_id})
+                    if result.rowcount == 1:
+                        total += 1
+                    else:
+                        skipped += 1
+        logger.info("[StockDaily] canonical_id backfill stats: backfilled_count=%s skipped_count=%s", total, skipped)
+
+    def _backfill_canonical_ids(self) -> None:
+        try:
+            from src.services.stock_list_parser import parse_analysis_target
+            from src.data.stock_index_loader import _load_active_index_rows
+            active = _load_active_index_rows()
+        except Exception as exc:
+            logger.warning("[StockDaily] canonical_id repair cannot import parser/loader: %s — skipping", exc)
+            return
+        if not active:
+            logger.warning("[StockDaily] canonical_id repair skipped: index registry is empty")
+            return
+        canonicals = {str(row[0]).strip() for row in active if row and str(row[0]).strip()}
+        if not canonicals:
+            logger.warning("[StockDaily] canonical_id repair skipped: no active index canonicals")
+            return
+        params = {"last": 0, **{"c%d" % i: value for i, value in enumerate(sorted(canonicals))}}
+        placeholders = ",".join(":c%d" % i for i in range(len(canonicals)))
+        repaired = skipped = 0
+        while True:
+            with self._engine.begin() as conn:
+                rows = conn.execute(text("SELECT id, code, canonical_id FROM stock_daily WHERE id > :last AND canonical_id IN (" + placeholders + ") AND length(code)=6 AND code NOT GLOB '*[^0-9]*' ORDER BY id LIMIT 5000"), params).fetchall()
+            if not rows:
+                break
+            with self._engine.begin() as conn:
+                for row_id, code, current in rows:
+                    params["last"] = row_id
+                    try:
+                        derived = parse_analysis_target(str(code)).canonical_id or None
+                    except Exception:
+                        skipped += 1
+                        continue
+                    if not derived or derived == current:
+                        skipped += 1
+                        continue
+                    result = conn.execute(text("UPDATE stock_daily SET canonical_id=:derived WHERE id=:id AND canonical_id=:current"), {"derived": derived, "id": row_id, "current": current})
+                    repaired += int(result.rowcount == 1)
+                    skipped += int(result.rowcount != 1)
+        logger.info("[StockDaily] canonical_id repair stats: repaired_count=%s skipped_count=%s", repaired, skipped)
 
     def _ensure_schema_migration_record(self) -> None:
         session = self._SessionLocal()
@@ -2870,7 +2982,8 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
         self, 
         df: pd.DataFrame, 
         code: str,
-        data_source: str = "Unknown"
+        data_source: str = "Unknown",
+        canonical_id: Optional[str] = None,
     ) -> int:
         """
         保存日线数据到数据库
@@ -2893,6 +3006,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             return 0
 
         now = datetime.now()
+        resolved_canonical_id = canonical_id or self._derive_canonical_id(code)
         records_by_date: Dict[date, Dict[str, Any]] = {}
         for row in df.to_dict(orient='records'):
             row_date = self._normalize_daily_date(row.get('date'))
@@ -2911,6 +3025,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                 'ma20': self._normalize_sql_value(row.get('ma20')),
                 'volume_ratio': self._normalize_sql_value(row.get('volume_ratio')),
                 'data_source': data_source,
+                'canonical_id': resolved_canonical_id,
                 'created_at': now,
                 'updated_at': now,
             }
@@ -2968,6 +3083,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                                 'ma20': excluded.ma20,
                                 'volume_ratio': excluded.volume_ratio,
                                 'data_source': excluded.data_source,
+                                'canonical_id': func.coalesce(excluded.canonical_id, StockDaily.canonical_id),
                                 'updated_at': excluded.updated_at,
                             },
                         )
@@ -3004,6 +3120,8 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                     existing.ma20 = record['ma20']
                     existing.volume_ratio = record['volume_ratio']
                     existing.data_source = record['data_source']
+                    if record['canonical_id'] is not None:
+                        existing.canonical_id = record['canonical_id']
                     existing.updated_at = record['updated_at']
                 return new_count
 
@@ -3200,6 +3318,37 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             session.add(msg)
             session.flush()
             return int(msg.id)
+
+    def save_conversation_user_turn(
+        self,
+        session_id: str,
+        content: str,
+        selected_skill_ids: Optional[List[str]] = None,
+    ) -> int:
+        """Atomically persist a user message and optional skill selection."""
+        with self.session_scope() as session:
+            msg = ConversationMessage(session_id=session_id, role="user", content=content)
+            session.add(msg)
+            session.flush()
+            if selected_skill_ids is not None:
+                now = datetime.now()
+                values = {
+                    "session_id": session_id,
+                    "selected_skill_ids_json": json.dumps(selected_skill_ids, ensure_ascii=False),
+                    "created_at": now,
+                    "updated_at": now,
+                }
+                stmt = sqlite_insert(ConversationSessionState).values(**values)
+                session.execute(stmt.on_conflict_do_update(
+                    index_elements=["session_id"],
+                    set_={"selected_skill_ids_json": values["selected_skill_ids_json"], "updated_at": now},
+                ))
+            return int(msg.id)
+
+    def get_conversation_session_selected_skill_ids(self, session_id: str) -> Optional[List[str]]:
+        with self.session_scope() as session:
+            state = session.get(ConversationSessionState, session_id)
+            return None if state is None else json.loads(state.selected_skill_ids_json)
 
     def get_conversation_history(self, session_id: str, limit: int = 20) -> List[Dict[str, Any]]:
         """
@@ -3549,6 +3698,11 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             session.execute(
                 delete(ConversationSummary).where(
                     ConversationSummary.session_id == session_id
+                )
+            )
+            session.execute(
+                delete(ConversationSessionState).where(
+                    ConversationSessionState.session_id == session_id
                 )
             )
             result = session.execute(

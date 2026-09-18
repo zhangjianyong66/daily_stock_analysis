@@ -3549,6 +3549,15 @@ class DataFetcherManager:
             **blocks,
         }
 
+    def build_not_supported_fundamental_context(self, stock_code: str, reason: str) -> Dict[str, Any]:
+        """Build a not-supported context for symbols without fundamental modules.
+
+        Index targets and other non-equity symbols still flow through the common
+        pipeline, so callers need the same block schema as a normal fundamental
+        response even when every block is unavailable.
+        """
+        return self._build_market_not_supported(_market_tag(stock_code), reason)
+
     def _build_offshore_fundamental_context(
         self,
         stock_code: str,
@@ -3684,9 +3693,25 @@ class DataFetcherManager:
             list(adapter_errors),
         )
 
-        # capital_flow / dragon_tiger / boards: no offshore data feed today -> not_supported.
-        for block in ("capital_flow", "dragon_tiger", "boards"):
+        # capital_flow / dragon_tiger have no offshore equivalent.  yfinance does
+        # provide sector/industry membership, however, so surface it as the
+        # boards block when the adapter returned meaningful board rows.
+        for block in ("capital_flow", "dragon_tiger"):
             result_ctx[block] = self._build_fundamental_block(
+                "not_supported",
+                {},
+                [{"provider": "fundamental_pipeline", "result": "not_supported", "duration_ms": 0}],
+                ["not supported for offshore market"],
+            )
+        if self._has_meaningful_payload(belong_boards):
+            result_ctx["boards"] = self._build_fundamental_block(
+                "ok",
+                {"belong_boards": belong_boards},
+                bundle_chain,
+                list(adapter_errors),
+            )
+        else:
+            result_ctx["boards"] = self._build_fundamental_block(
                 "not_supported",
                 {},
                 [{"provider": "fundamental_pipeline", "result": "not_supported", "duration_ms": 0}],
@@ -3771,7 +3796,7 @@ class DataFetcherManager:
             "institution": institution_status,
             "capital_flow": "not_supported",
             "dragon_tiger": "not_supported",
-            "boards": "not_supported",
+            "boards": result_ctx["boards"].get("status", "not_supported"),
         }
         result_ctx["coverage"] = block_statuses
         for block in ("valuation", "growth", "earnings", "institution", "capital_flow", "dragon_tiger", "boards"):

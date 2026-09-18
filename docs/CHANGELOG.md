@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修复] 上游合并后的分析任务、存储 canonical_id、海外基本面、搜索并发与英文别名契约恢复，并保留旧任务字段和会话调用兼容。
+- [改进] ETF 搜索画像补齐旅游、电池、游戏、房地产、银行、煤炭和光伏等确定性行业映射，未知 ETF 继续 fail-closed。
+- [修复] Web 上游新增市场、选股、桌面更新和决策校准文案补齐中英文资源，并兼容旧市场复盘响应与模型渠道编辑器参数。
 - [修复] Docker 运行时取消 HTTP/HTTPS 代理并直连外部服务；流式 LLM 连接失败会保留已脱敏的真实原因，避免误报为未配置模型。
 - [修复] LLM 分析流式请求失败时不再对同一模型回退非流式调用，直接切换下一个模型，降低中转站非流式超时导致批量报告缺失的概率。
 - [新功能] 未明确选择策略的个股分析会按最近完整日 K 线自动匹配唯一策略，强看跌冲突优先进入情绪周期风险复核，无法可靠匹配时使用冻结的服务端兜底策略。

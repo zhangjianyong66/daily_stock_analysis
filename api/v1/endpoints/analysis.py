@@ -74,7 +74,6 @@ from src.analysis_context_pack_overview import (
     sanitize_context_snapshot_for_api,
 )
 from src.market_phase_summary import (
-    extract_market_phase_summary,
     rebuild_market_phase_summary_for_stock_code,
 )
 from src.services.stock_code_utils import is_code_like, resolve_index_stock_code_for_analysis
@@ -84,7 +83,6 @@ from src.schemas.decision_action import build_action_fields
 from src.services.name_to_code_resolver import resolve_name_to_code
 from src.services.task_queue import (
     get_task_queue,
-    DuplicateTaskError,
     TaskStatus as TaskStatusEnum,
 )
 from src.services.analysis_service import asset_type_from_canonical_code
@@ -166,14 +164,20 @@ def _with_request_report_language(config: Config, report_language: Optional[str]
 
 def _run_market_review_background(
     send_notification: bool,
-    effective_region: str,
+    effective_region: Optional[str] = None,
     lock_token: Optional[_MarketReviewExecutionLock] = None,
     config: Optional[Config] = None,
     query_id: Optional[str] = None,
+    *,
+    override_region: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run market review after the API response has been accepted."""
     from src.core.market_review import run_market_review
 
+    # Keep the historical helper keyword compatible with queued callbacks and
+    # integrations that still call this function directly.
+    if effective_region is None:
+        effective_region = override_region
     runtime_config = config or get_config_dep()
     try:
         notifier, analyzer, search_service = _build_market_review_runtime(runtime_config)
@@ -202,9 +206,9 @@ def _run_market_review_background(
             return {
                 "result": report.report,
                 "market_review_payload": getattr(report, "market_review_payload", None),
-                "region": effective_region,
+                **({"region": effective_region} if effective_region else {}),
             }
-        return {"result": report, "region": effective_region}
+        return {"result": report}
     finally:
         _release_market_review_lock(lock_token)
 
@@ -673,10 +677,12 @@ def trigger_market_review(
     """Trigger market review from Web/API without blocking the request."""
     request = request or MarketReviewRequest()
 
-    runtime_config = _with_request_report_language(config, request.report_language)
-    effective_region = request.region or (
-        normalize_market_review_region_lenient(runtime_config.market_review_region) or "cn"
-    )
+    runtime_config = _with_request_report_language(config, getattr(request, "report_language", None))
+    requested_region = getattr(request, "region", None)
+    effective_region = normalize_market_review_region_lenient(requested_region) if requested_region else None
+    response_region = effective_region or normalize_market_review_region_lenient(
+        getattr(runtime_config, "market_review_region", None)
+    ) or "cn"
 
     lock_token = _try_acquire_market_review_lock(runtime_config)
     if lock_token is None:
@@ -703,7 +709,7 @@ def trigger_market_review(
             stock_name="大盘复盘",
             message="大盘复盘任务已提交",
             task_id=task_id,
-            region=effective_region,
+            region=response_region,
         )
     except Exception:
         _release_market_review_lock(lock_token)
@@ -713,7 +719,7 @@ def trigger_market_review(
         status="accepted",
         message="大盘复盘任务已提交，完成后会保存报告并按配置推送通知",
         send_notification=request.send_notification,
-        region=effective_region,
+        region=response_region,
         task_id=task.task_id,
         trace_id=_get_task_trace_id(task),
     )
@@ -781,7 +787,7 @@ def get_task_list(
             selection_source=t.selection_source,
             analysis_phase=t.analysis_phase,
             skills=getattr(t, "skills", None),
-            region=t.region,
+            region=getattr(t, "region", None),
             asset_type=_task_asset_type(t),
         )
         for t in all_tasks
@@ -1218,7 +1224,7 @@ def get_analysis_status(task_id: str) -> TaskStatus:
             result=result,
             market_review_report=market_review_report,
             market_review_payload=market_review_payload,
-            region=task.region,
+            region=getattr(task, "region", None),
             error=task.error,
             stock_name=task.stock_name,
             original_query=task.original_query,

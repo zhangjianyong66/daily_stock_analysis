@@ -160,6 +160,8 @@ interface LLMChannelEditorProps {
   items: Array<{ key: string; value: string; rawValueExists?: boolean }>;
   configVersion: string;
   maskToken: string;
+  /** Provider prefixes exposed by the backend; retained for compatibility with older callers. */
+  modelProviderPrefixes?: string[];
   onSaved: (updatedItems: Array<{ key: string; value: string }>) => void | Promise<void>;
   onDraftItemsChange?: (items: Array<{ key: string; value: string }>) => void;
   disabled?: boolean;

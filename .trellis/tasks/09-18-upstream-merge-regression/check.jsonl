@@ -1,0 +1,5 @@
+{"file":".trellis/spec/backend/error-handling.md","reason":"检查 API 状态、任务失败、数据源 fallback 和异常传播，避免用兼容层吞掉真实错误。"}
+{"file":".trellis/spec/backend/search-usage-audit.md","reason":"搜索审计、余额告警、Provider fallback 和管理接口回归验收边界。"}
+{"file":".trellis/spec/backend/strategy-execution.md","reason":"确认策略快照、自动匹配和历史/API/Web 读取仍以持久化快照为唯一事实源。"}
+{"file":".trellis/spec/backend/portfolio-image-import.md","reason":"Vision 截图导入的异步任务、全局槽位、草稿 revision 和跨层验证要求。"}
+{"file":".trellis/spec/backend/etf-capital-flow.md","reason":"ETF 日/盘中资金流、实时 fallback 和 fail-open 约束，防止上游合并回退本地数据源改进。"}
