@@ -87,7 +87,7 @@ COPY --from=web-builder /app/static ./static/
 COPY docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 # Verify runtime-only imports that must be present in clean images.
-RUN python -c "import alphasift.dsa_adapter; import orjson"
+RUN python -c "import src.services.screening.pipeline; import orjson"
 # Verify globally bundled runtime dependencies without leaving SDK logs in the image.
 RUN mkdir -p /tmp/futu-sdk-smoke-home && \
     HOME=/tmp/futu-sdk-smoke-home python -c "import src.services.screening.pipeline; import futu" && \

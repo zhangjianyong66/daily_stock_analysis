@@ -1,0 +1,3 @@
+{"file":".trellis/spec/backend/runtime-deployment.md","reason":"确认 Dockerfile 的本地验证和 Docker 构建检查。"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"确认变更范围与测试证据要求。"}
+{"file":".trellis/tasks/09-18-fix-docker-alphasift-import/prd.md","reason":"按验收标准检查实现是否完整。"}
