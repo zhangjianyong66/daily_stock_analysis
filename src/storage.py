@@ -35,6 +35,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     UniqueConstraint,
+    CheckConstraint,
     Text,
     text,
     select,
@@ -1229,6 +1230,60 @@ class DecisionSignalFeedbackRecord(Base):
     source = Column(String(16), nullable=False, default='api', index=True)
     created_at = Column(DateTime, default=utc_naive_now, index=True)
     updated_at = Column(DateTime, default=utc_naive_now, onupdate=utc_naive_now, index=True)
+
+
+class SkillOpinionSampleRecord(Base):
+    """Immutable skill opinion sample used by outcome evaluation."""
+
+    __tablename__ = 'skill_opinion_samples'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    analysis_history_id = Column(Integer, ForeignKey('analysis_history.id'), nullable=False, index=True)
+    stock_code = Column(String(16), nullable=False, index=True)
+    skill_id = Column(String(128), nullable=False, index=True)
+    skill_version = Column(String(64), index=True)
+    signal = Column(String(16), nullable=False, index=True)
+    confidence = Column(Float, nullable=False)
+    horizon = Column(String(16), index=True)
+    data_quality_level = Column(String(24), index=True)
+    opinion_created_at = Column(DateTime, index=True)
+    sample_schema_version = Column(String(32), nullable=False, index=True)
+    created_at = Column(DateTime, default=utc_naive_now, index=True)
+    __table_args__ = (
+        UniqueConstraint('analysis_history_id', 'skill_id', 'sample_schema_version', name='uix_skill_opinion_sample_key'),
+        Index('ix_skill_opinion_sample_skill_horizon_created', 'skill_id', 'horizon', 'created_at'),
+        Index('ix_skill_opinion_sample_stock_created', 'stock_code', 'created_at'),
+    )
+
+
+class SkillOpinionOutcomeRecord(Base):
+    """Forward outcome for one skill opinion sample and horizon."""
+
+    __tablename__ = 'skill_opinion_outcomes'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    skill_opinion_sample_id = Column(Integer, ForeignKey('skill_opinion_samples.id', ondelete='CASCADE'), nullable=False, index=True)
+    horizon = Column(String(16), nullable=False, index=True)
+    engine_version = Column(String(32), nullable=False, index=True)
+    eval_status = Column(String(24), nullable=False, default='pending', index=True)
+    outcome = Column(String(16), index=True)
+    direction_correct = Column(Boolean)
+    unable_reason = Column(String(64), index=True)
+    analysis_date = Column(Date, index=True)
+    start_trade_date = Column(Date, index=True)
+    end_trade_date = Column(Date, index=True)
+    start_price = Column(Float)
+    end_close = Column(Float)
+    stock_return_pct = Column(Float)
+    directional_return_pct = Column(Float)
+    created_at = Column(DateTime, default=utc_naive_now, index=True)
+    updated_at = Column(DateTime, default=utc_naive_now, onupdate=utc_naive_now, index=True)
+    __table_args__ = (
+        UniqueConstraint('skill_opinion_sample_id', 'horizon', 'engine_version', name='uix_skill_opinion_outcome_key'),
+        CheckConstraint("horizon IN ('1d', '3d', '5d', '10d')", name='ck_skill_opinion_outcome_horizon'),
+        CheckConstraint("eval_status IN ('pending', 'evaluated', 'observational', 'unable')", name='ck_skill_opinion_outcome_eval_status'),
+        CheckConstraint("outcome IS NULL OR outcome IN ('hit', 'miss', 'observational')", name='ck_skill_opinion_outcome_value'),
+        Index('ix_skill_opinion_outcome_candidate', 'engine_version', 'eval_status', 'updated_at'),
+        Index('ix_skill_opinion_outcome_horizon_status', 'engine_version', 'horizon', 'eval_status'),
+    )
 
 
 class _DatabaseManagerMeta(type):

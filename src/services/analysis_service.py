@@ -15,6 +15,9 @@ import copy
 import uuid
 from typing import Optional, Dict, Any, Callable, List
 
+# Keep the pipeline module addressable for API-level dependency injection and tests.
+import src.core.pipeline  # noqa: F401
+
 from src.repositories.analysis_repo import AnalysisRepository
 from src.report_language import (
     get_sentiment_label,
@@ -33,6 +36,20 @@ from src.services.run_diagnostics import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def asset_type_from_canonical_code(code: Any) -> Optional[str]:
+    """Return the parser-authoritative asset type for a canonical code."""
+    text = str(code or "").strip()
+    if not text or text.upper() == "MARKET":
+        return None
+    from src.services.stock_list_parser import ParseStatus, parse_analysis_target
+    target = parse_analysis_target(text)
+    if target.asset_type == ParseStatus.INDEX:
+        return "index"
+    if target.asset_type == ParseStatus.STOCK:
+        return "stock"
+    return None
 
 
 class AnalysisService:

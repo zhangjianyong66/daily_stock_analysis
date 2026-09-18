@@ -50,8 +50,14 @@ def build_decision_signal_payload_from_report(
     query_source: str,
     report_type: str,
     profile_source: ProfileSource,
+    market_override: Optional[str] = None,
 ) -> Dict[str, Any] | None:
-    """Build a DecisionSignal payload from a completed stock analysis report."""
+    """Build a DecisionSignal payload from a completed stock analysis report.
+
+    ``market_override`` lets callers supply a target-derived market (e.g.
+    ``cn`` for index targets whose canonical code would otherwise resolve to
+    ``None`` via ``get_market_for_stock``).
+    """
 
     if result is None or not getattr(result, "success", True):
         return None
@@ -66,21 +72,13 @@ def build_decision_signal_payload_from_report(
     )
     raw_action = _raw_action_from_report(result)
     guardrail_reason = _extract_guardrail_reason(result, dashboard, score=score, raw_action=raw_action)
-    action_fields = build_action_fields(
-        operation_advice=getattr(result, "operation_advice", None),
-        explicit_action=getattr(result, "action", None),
-        report_type=report_type,
-        report_language=getattr(result, "report_language", None),
-        sentiment_score=score,
-        guardrail_reason=guardrail_reason,
-        align_with_score=True,
-    )
+    action_fields = resolve_decision_signal_action_fields(result, report_type=report_type)
     action = action_fields.get("action")
     if not action:
         return None
 
     raw_code = str(getattr(result, "code", "") or "").strip()
-    market = get_market_for_stock(normalize_stock_code(raw_code))
+    market = market_override or get_market_for_stock(normalize_stock_code(raw_code))
     if not market:
         logger.warning("Skip decision signal extraction: unrecognized market stock_code=%s", raw_code)
         return None
@@ -176,6 +174,36 @@ def build_decision_signal_payload_from_report(
     return {key: value for key, value in payload.items() if value not in (None, "", [], {})}
 
 
+def resolve_decision_signal_action_fields(
+    result: AnalysisResult,
+    *,
+    report_type: str,
+) -> Dict[str, Optional[str]]:
+    """Resolve the canonical public action shared by reports and DecisionSignal."""
+    dashboard = _as_mapping(getattr(result, "dashboard", None))
+    score_calibration = _as_mapping(dashboard.get("decision_score_calibration"))
+    score = _effective_signal_score(
+        _score_from_result(getattr(result, "sentiment_score", None)),
+        score_calibration,
+    )
+    raw_action = _raw_action_from_report(result)
+    guardrail_reason = _extract_guardrail_reason(
+        result,
+        dashboard,
+        score=score,
+        raw_action=raw_action,
+    )
+    return build_action_fields(
+        operation_advice=getattr(result, "operation_advice", None),
+        explicit_action=getattr(result, "action", None),
+        report_type=report_type,
+        report_language=getattr(result, "report_language", None),
+        sentiment_score=score,
+        guardrail_reason=guardrail_reason,
+        align_with_score=True,
+    )
+
+
 def extract_and_persist_from_analysis_result(
     result: AnalysisResult,
     *,
@@ -187,6 +215,7 @@ def extract_and_persist_from_analysis_result(
     report_type: str,
     profile_source: ProfileSource,
     service: Optional[DecisionSignalService] = None,
+    market_override: Optional[str] = None,
 ) -> Dict[str, Any] | None:
     """Best-effort extract and persist a DecisionSignal from an analysis result."""
 
@@ -200,6 +229,7 @@ def extract_and_persist_from_analysis_result(
             query_source=query_source,
             report_type=report_type,
             profile_source=profile_source,
+            market_override=market_override,
         )
         if payload is None:
             return None

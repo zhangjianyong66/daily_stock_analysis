@@ -81,6 +81,7 @@ export interface SystemConfigResponse {
   configVersion: string;
   maskToken: string;
   items: SystemConfigItem[];
+  llmModelProviders?: string[];
   updatedAt?: string;
 }
 
@@ -238,6 +239,7 @@ export interface SchedulerRunNowResponse {
 export interface TestLLMChannelRequest {
   name: string;
   protocol: string;
+  apiSurface?: LLMApiSurface;
   baseUrl?: string;
   apiKey?: string;
   models: string[];
@@ -248,6 +250,8 @@ export interface TestLLMChannelRequest {
   visionApiMode?: VisionAPIMode;
   useSavedSecret?: boolean;
 }
+
+export type LLMApiSurface = 'chat_completions' | 'responses';
 
 export type LLMCapabilityCheck = 'json' | 'tools' | 'vision' | 'stream';
 export type VisionAPIMode = 'chat_completions' | 'responses';
@@ -271,6 +275,7 @@ export interface TestLLMChannelResponse {
   retryable?: boolean | null;
   details?: Record<string, unknown>;
   resolvedProtocol?: string | null;
+  resolvedApiSurface?: LLMApiSurface | null;
   resolvedModel?: string | null;
   latencyMs?: number | null;
   capabilityResults?: Partial<Record<LLMCapabilityCheck, LLMCapabilityCheckResult>>;
@@ -279,6 +284,7 @@ export interface TestLLMChannelResponse {
 export type NotificationTestChannel =
   | 'wechat'
   | 'feishu'
+  | 'dingtalk'
   | 'telegram'
   | 'email'
   | 'pushover'

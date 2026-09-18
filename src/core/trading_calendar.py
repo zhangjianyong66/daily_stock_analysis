@@ -248,6 +248,33 @@ def get_effective_trading_date(
         return fallback_date
 
 
+def resolve_historical_daily_bar_date(
+    market: Optional[str], target_date: date, phase: Optional[str]
+) -> Optional[date]:
+    """Resolve the completed daily bar available for a historical phase."""
+    if market not in MARKET_EXCHANGE or not _XCALS_AVAILABLE:
+        return None
+    normalized_phase = str(phase or "").strip().lower()
+    valid_phases = {"premarket", "intraday", "lunch_break", "closing_auction", "postmarket", "non_trading"}
+    if normalized_phase not in valid_phases:
+        return None
+    try:
+        cal = xcals.get_calendar(MARKET_EXCHANGE[market])
+        is_session = bool(cal.is_session(target_date))
+        if normalized_phase in valid_phases - {"postmarket", "non_trading"}:
+            if not is_session:
+                return None
+            return cal.previous_session(cal.date_to_session(target_date, direction="previous")).date()
+        if normalized_phase == "postmarket":
+            return target_date if is_session else None
+        if is_session:
+            return None
+        return cal.date_to_session(target_date, direction="previous").date()
+    except Exception as exc:
+        logger.warning("trading_calendar.resolve_historical_daily_bar_date fail-closed: %s", exc)
+        return None
+
+
 def get_reliable_effective_trading_date(
     market: Optional[str], current_time: Optional[datetime] = None
 ) -> Optional[date]:

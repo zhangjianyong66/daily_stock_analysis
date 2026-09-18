@@ -59,34 +59,13 @@ docker-compose -f ./docker/docker-compose.yml ps
 
 > 不知道怎么访问？→ [云服务器 Web 界面访问指南](deploy-webui-cloud.md)
 
-也可以使用仓库封装的一键脚本。脚本默认构建并启动 `server`，也就是 WebUI/API 服务；只有需要后台定时自动分析时才启动 `analyzer`。
-
-```bash
-./scripts/docker-up.sh                  # 构建并启动 server
-./scripts/docker-up.sh up               # 直接启动 server
-./scripts/docker-up.sh restart          # 构建并强制重建 server
-./scripts/docker-up.sh stop             # 停止 server
-./scripts/docker-up.sh up analyzer      # 启动定时分析服务
-./scripts/docker-up.sh up all           # 同时启动 server 和 analyzer
-./scripts/docker-up.sh down             # 停止并删除整个 compose stack
-./scripts/docker-up.sh logs server      # 查看 server 日志
-```
-
-如果 Docker build 需要通过宿主机代理访问 GitHub、Docker Hub、npm、PyPI 或 apt 源，优先使用 `scripts/docker-up.sh`。脚本默认使用 `DOCKER_BUILD_NETWORK=host`、`DOCKER_BUILD_HTTPS_PROXY=http://127.0.0.1:7890`、空 HTTP build 代理，并把 Debian apt 源切到清华 HTTPS 镜像，避免 Debian 默认 HTTP 源通过本机代理时出现 403，也避免 `deb.debian.org` HTTPS 在部分代理规则下 TLS 握手失败。需要手动覆盖时可显式设置：
-
-```bash
-DOCKER_BUILD_NETWORK=host ./scripts/docker-up.sh restart
-DOCKER_BUILD_HTTPS_PROXY=http://127.0.0.1:7890 ./scripts/docker-up.sh restart
-DEBIAN_APT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian ./scripts/docker-up.sh restart
-```
-
 ### 3.1 资源建议
 
 默认 `docker/docker-compose.yml` 为每个服务设置 `limits.memory: 1G`、`reservations.memory: 512M`，这是完整分析场景的推荐起点。
 
 - 最低可尝试：`512M`，仅适合轻量 Web/API、单股、低并发场景，建议设置 `MAX_WORKERS=1`。
 - 推荐：`1G`，适合单独运行 `server` 或 `analyzer` 的常规分析。
-- 高负载：`2G+`，适合同时启动 `server + analyzer`、多股票、默认 `MAX_WORKERS=3`、大盘复盘、新闻扩展、图片报告或 AlphaSift。
+- 高负载：`2G+`，适合同时启动 `server + analyzer`、多股票、默认 `MAX_WORKERS=3`、大盘复盘、新闻扩展、图片报告或选股。
 
 如果只能使用 `512M`，请避免同时启动 `server` 和 `analyzer`，并关闭非必要的大盘复盘、新闻扩展和图片报告能力。
 
@@ -234,7 +213,7 @@ journalctl -u stock-analyzer -f
 | 配置项 | 说明 | 获取方式 |
 |--------|------|----------|
 | `ANSPIRE_API_KEYS` / `AIHUBMIX_KEY` / `GEMINI_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | AI 模型至少配置一个；推荐优先 Anspire 或 AIHubMix | 对应服务商控制台 |
-| `STOCK_LIST` | 自选股列表 | 逗号分隔的股票代码 |
+| `STOCK_LIST` | 自选股列表 | 逗号分隔的股票代码；已登记指数显式形态（如 `sh000016`、`930606.CSI`、`sz399365`）经一次性 `--stocks` 或 GitHub Actions 入口支持（本地 `.env`/Docker 无参数默认运行保持股票语义，指数需配 `--stocks`），规则见 [指数自选股配置](full-guide.md#指数自选股配置) |
 | 通知渠道 | 至少配置一个，如企业微信、飞书、Telegram 或邮件 | 对应通知平台 |
 
 ### 可选配置项
@@ -249,8 +228,6 @@ journalctl -u stock-analyzer -f
 | `SERPAPI_API_KEYS` | - | SerpAPI 实时金融新闻搜索（推荐） |
 | `TAVILY_API_KEYS` | - | Tavily 新闻搜索（可选） |
 | `MINIMAX_API_KEYS` | - | MiniMax 搜索（可选） |
-| `SEARXNG_BASE_URLS` | - | 可选的通用 SearXNG Provider 地址；项目不再内置或自动启动私有实例 |
-| `SEARXNG_PUBLIC_INSTANCES_ENABLED` | `false` | 是否启用公共实例发现；默认关闭以避免不可信结果污染 |
 
 ---
 
@@ -320,14 +297,6 @@ find /opt/stock-analyzer/reports -mtime +30 -delete
 docker-compose -f ./docker/docker-compose.yml build --no-cache
 ```
 
-如果失败发生在 `npm ci`、`pip install -r requirements.txt` 或 `git clone https://github.com/...`，通常是构建阶段没有拿到代理。确认宿主机能访问 GitHub 后，使用仓库脚本重试：
-
-```bash
-./scripts/docker-up.sh restart
-```
-
-脚本会自动把宿主机代理整理后传给 Docker build；本地 `127.0.0.1` 代理会自动切到 host build network，并默认不把 HTTP 代理传给 apt 阶段。
-
 ### 2. API 访问超时
 
 检查代理配置，确保服务器能访问 Gemini API。
@@ -341,7 +310,7 @@ rm /opt/stock-analyzer/data/*.lock
 
 ### 4. 内存不足
 
-默认 Compose 已推荐 `1G`。如果仍出现 OOM 或平台杀掉容器，请提高 `docker-compose.yml` 中的内存限制；同时跑 `server + analyzer`、多股票、大盘复盘、图片报告或 AlphaSift 时建议 `2G+`：
+默认 Compose 已推荐 `1G`。如果仍出现 OOM 或平台杀掉容器，请提高 `docker-compose.yml` 中的内存限制；同时跑 `server + analyzer`、多股票、大盘复盘、图片报告或选股时建议 `2G+`：
 ```yaml
 deploy:
   resources:
@@ -465,8 +434,8 @@ git push -u origin main
 | `BOCHA_API_KEYS` | 博查搜索 API Key | 可选 |
 | `BRAVE_API_KEYS` | Brave Search API Key | 可选 |
 | `MINIMAX_API_KEYS` | MiniMax Coding Plan Web Search | 可选 |
-| `SEARXNG_BASE_URLS` | 可选的通用 SearXNG Provider 地址；需要自行部署并启用 JSON 输出 | 可选 |
-| `SEARXNG_PUBLIC_INSTANCES_ENABLED` | 是否启用公共实例发现；默认 `false`，不建议用于交易数据上下文 | 可选 |
+| `SEARXNG_BASE_URLS` | SearXNG 自建实例（无配额兜底，需在 settings.yml 启用 format: json）；留空时仅在显式启用公共实例发现后使用 `searx.space` | 可选 |
+| `SEARXNG_PUBLIC_INSTANCES_ENABLED` | 是否在 `SEARXNG_BASE_URLS` 为空时自动从 `searx.space` 获取公共实例（默认 `false`） | 可选 |
 | `TUSHARE_TOKEN` | Tushare Token | 可选 |
 | `GEMINI_MODEL` | 模型名称（默认 gemini-2.0-flash） | 可选 |
 

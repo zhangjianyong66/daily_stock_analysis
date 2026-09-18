@@ -101,6 +101,7 @@ class ConfigIssue:
 
 _MANAGED_LITELLM_KEY_PROVIDERS = {"gemini", "vertex_ai", "anthropic", "openai", "deepseek"}
 SUPPORTED_LLM_CHANNEL_PROTOCOLS = ("openai", "anthropic", "gemini", "vertex_ai", "deepseek", "ollama")
+SUPPORTED_LLM_CHANNEL_API_SURFACES = ("chat_completions", "responses")
 VISION_API_MODE_CHAT_COMPLETIONS = "chat_completions"
 VISION_API_MODE_RESPONSES = "responses"
 SUPPORTED_VISION_API_MODES = (VISION_API_MODE_CHAT_COMPLETIONS, VISION_API_MODE_RESPONSES)
@@ -391,6 +392,28 @@ def canonicalize_llm_channel_protocol(value: Optional[str]) -> str:
     return aliases.get(candidate, candidate)
 
 
+def canonicalize_llm_channel_api_surface(value: Optional[str]) -> str:
+    """Normalize an LLM channel endpoint surface label."""
+    candidate = (value or "").strip().lower().replace("-", "_")
+    return {
+        "chat": "chat_completions",
+        "chat_completion": "chat_completions",
+        "completions": "chat_completions",
+        "response": "responses",
+        "responses_api": "responses",
+    }.get(candidate, candidate)
+
+
+def normalize_llm_channel_api_surface(value: Optional[str]) -> str:
+    normalized = canonicalize_llm_channel_api_surface(value)
+    return normalized if normalized in SUPPORTED_LLM_CHANNEL_API_SURFACES else "chat_completions"
+
+
+def is_supported_llm_channel_api_surface_value(value: Optional[str]) -> bool:
+    canonical = canonicalize_llm_channel_api_surface(value)
+    return not canonical or canonical in SUPPORTED_LLM_CHANNEL_API_SURFACES
+
+
 def resolve_llm_channel_protocol(
     protocol: Optional[str],
     *,
@@ -425,6 +448,74 @@ def resolve_llm_channel_protocol(
         return "openai"
 
     return ""
+
+
+def get_explicit_llm_channel_model_provider(model: str) -> str:
+    """Return a recognized explicit LiteLLM provider prefix, if present."""
+    normalized_model = (model or "").strip()
+    if "/" not in normalized_model:
+        return ""
+    raw_prefix = normalized_model.split("/", 1)[0].lower()
+    canonical_prefix = canonicalize_llm_channel_protocol(raw_prefix)
+    known_providers = _MANAGED_LITELLM_KEY_PROVIDERS | set(SUPPORTED_LLM_CHANNEL_PROTOCOLS) | {
+        "minimax", "cohere", "huggingface", "bedrock", "sagemaker", "azure",
+        "replicate", "together_ai", "palm", "text-completion-openai", "command-r",
+        "groq", "cerebras", "fireworks_ai", "friendliai",
+    }
+    if raw_prefix in known_providers:
+        return raw_prefix
+    if canonical_prefix in known_providers:
+        return canonical_prefix
+    return ""
+
+
+def apply_litellm_api_surface(model: str, api_surface: Optional[str]) -> str:
+    """Encode the Responses API surface in a LiteLLM wire model."""
+    normalized_model = (model or "").strip()
+    if not normalized_model or normalize_llm_channel_api_surface(api_surface) != "responses":
+        return normalized_model
+    provider = get_explicit_llm_channel_model_provider(normalized_model)
+    if provider != "openai":
+        raise ValueError(
+            "Responses API surface requires a normalized openai/<model> route; "
+            f"got {normalized_model!r}"
+        )
+    provider, remainder = normalized_model.split("/", 1)
+    if remainder.startswith("responses/"):
+        return normalized_model
+    return f"{provider}/responses/{remainder}"
+
+
+def find_incompatible_llm_channel_models(
+    models: List[str], protocol: Optional[str], api_surface: Optional[str], base_url: Optional[str] = None
+) -> List[str]:
+    """Return model routes incompatible with the Responses API surface."""
+    if normalize_llm_channel_api_surface(api_surface) != "responses":
+        return []
+    resolved_protocol = resolve_llm_channel_protocol(protocol, base_url=base_url, models=models)
+    if resolved_protocol != "openai":
+        return [model for model in models if (model or "").strip()]
+    return [
+        model for model in models
+        if (normalized := normalize_llm_channel_model(model, resolved_protocol, base_url))
+        and get_explicit_llm_channel_model_provider(normalized) != "openai"
+    ]
+
+
+def find_llm_channel_surface_conflicts(channels: List[Dict[str, Any]]) -> Dict[str, Tuple[str, ...]]:
+    """Return model aliases configured with more than one API surface."""
+    route_surfaces: Dict[str, set[str]] = {}
+    for channel in channels:
+        if not isinstance(channel, dict) or not channel.get("enabled", True):
+            continue
+        protocol = str(channel.get("protocol") or "")
+        base_url = str(channel.get("base_url") or "")
+        surface = normalize_llm_channel_api_surface(channel.get("api_surface"))
+        for raw_model in channel.get("models") or []:
+            model = normalize_llm_channel_model(str(raw_model), protocol, base_url)
+            if model:
+                route_surfaces.setdefault(model, set()).add(surface)
+    return {model: tuple(sorted(surfaces)) for model, surfaces in route_surfaces.items() if len(surfaces) > 1}
 
 
 def channel_allows_empty_api_key(protocol: Optional[str], base_url: Optional[str]) -> bool:
