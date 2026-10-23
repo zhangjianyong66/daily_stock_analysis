@@ -193,14 +193,28 @@ def get_tool_registry():
     from src.agent.tools.search_tools import ALL_SEARCH_TOOLS
     from src.agent.tools.market_tools import ALL_MARKET_TOOLS
     from src.agent.tools.backtest_tools import ALL_BACKTEST_TOOLS
+    from src.agent.tools.fxmacrodata_tools import ALL_FXMACRODATA_TOOLS
 
     registry = ToolRegistry()
-    for tool_fn in ALL_DATA_TOOLS + ALL_ANALYSIS_TOOLS + ALL_SEARCH_TOOLS + ALL_MARKET_TOOLS + ALL_BACKTEST_TOOLS:
+    for tool_fn in (
+        ALL_DATA_TOOLS
+        + ALL_ANALYSIS_TOOLS
+        + ALL_SEARCH_TOOLS
+        + ALL_MARKET_TOOLS
+        + ALL_BACKTEST_TOOLS
+        + ALL_FXMACRODATA_TOOLS
+    ):
         registry.register(tool_fn)
 
     _TOOL_REGISTRY = registry
     logger.info("[AgentFactory] ToolRegistry cached (%d tools)", len(registry._tools) if hasattr(registry, "_tools") else -1)
     return _TOOL_REGISTRY
+
+
+def reset_tool_registry() -> None:
+    """Clear tools after runtime configuration changes."""
+    global _TOOL_REGISTRY
+    _TOOL_REGISTRY = None
 
 
 def load_skill_manager(config=None):
@@ -268,6 +282,7 @@ def resolve_default_skill_selection(
     config=None,
     *,
     skill_catalog: Optional[List[object]] = None,
+    use_builtin_defaults: bool = False,
 ) -> DefaultSkillResolution:
     """Resolve DEFAULT_ANALYSIS_SKILL > AGENT_SKILLS > metadata default."""
     if config is None:
@@ -297,7 +312,7 @@ def resolve_default_skill_selection(
         available_skill_ids=available_skill_ids or None,
     )
 
-    saved_default = str(getattr(config, "default_analysis_skill", "") or "").strip()
+    saved_default = "" if use_builtin_defaults else str(getattr(config, "default_analysis_skill", "") or "").strip()
     rejected_ids: List[str] = []
     warning = None
     if saved_default:
@@ -316,7 +331,7 @@ def resolve_default_skill_selection(
         warning = f"Saved default strategy '{saved_default}' is unavailable; a fallback default is in use."
         logger.warning("[AgentFactory] Saved default strategy is unavailable: %s", saved_default)
 
-    configured_skills = getattr(config, "agent_skills", None) or []
+    configured_skills = [] if use_builtin_defaults else (getattr(config, "agent_skills", None) or [])
     normalized_config, unknown_config = _normalize_skill_ids(
         configured_skills,
         available_skill_ids=available_skill_ids,
@@ -376,7 +391,11 @@ def resolve_skill_prompt_state(config=None, skills: Optional[List[str]] = None) 
         for skill in skill_catalog
         if str(getattr(skill, "name", "")).strip()
     }
-    default_resolution = resolve_default_skill_selection(config, skill_catalog=skill_catalog)
+    # An explicit cleared selection must not silently reactivate deployment
+    # defaults. Omitted selection still follows the configured default chain.
+    default_resolution = resolve_default_skill_selection(
+        config, skill_catalog=skill_catalog, use_builtin_defaults=skills == [],
+    )
     requested_ids = [
         str(skill_id).strip()
         for skill_id in (skills or [])
@@ -611,7 +630,7 @@ def build_agent_executor(
             strategy_execution=prompt_state.strategy_execution,
             fixed_default_skills=(
                 prompt_state.skills_to_activate
-                if prompt_state.saved_default_skill_id
+                if skills == [] or prompt_state.saved_default_skill_id
                 or prompt_state.selection_source in {"auto", "auto_fallback"}
                 else None
             ),

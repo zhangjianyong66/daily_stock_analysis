@@ -1,0 +1,6 @@
+{"file": "AGENTS.md", "reason": "仓库规则与本地能力护栏"}
+{"file": ".trellis/spec/backend/runtime-deployment.md", "reason": "运行与部署约定"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量与验证规范"}
+{"file": ".trellis/tasks/10-23-upstream-v3-33-merge/prd.md", "reason": "任务范围与用户授权"}
+{"file": ".trellis/tasks/10-23-upstream-v3-33-merge/design.md", "reason": "合并与回滚设计"}
+{"file": ".trellis/tasks/10-23-upstream-v3-33-merge/implement.md", "reason": "执行和验证计划"}

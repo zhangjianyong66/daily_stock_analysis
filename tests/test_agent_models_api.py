@@ -3,6 +3,7 @@
 
 import asyncio
 import os
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -377,6 +378,7 @@ class AgentSkillsEndpointTestCase(unittest.TestCase):
                     "id": "bull_trend",
                     "name": "多头趋势",
                     "description": "趋势跟随",
+                    "usage_scenarios": [],
                 }
             ],
         )
@@ -401,48 +403,72 @@ class AgentSkillsEndpointTestCase(unittest.TestCase):
         self.assertNotIn("skills", context)
         self.assertNotIn("strategies", context)
 
-    def test_chat_request_empty_skills_clears_context_without_triggering_activate_all(self) -> None:
-        config = SimpleNamespace(
-            is_agent_available=lambda: True,
-            report_language="zh",
+    def test_cleared_skills_bypass_both_deployment_defaults_without_mutating_config(self) -> None:
+        from src.agent.factory import build_agent_chat_executor, resolve_skill_prompt_state
+
+        config = _build_config(
+            agent_arch="multi", agent_skills=["ma_golden_cross"],
+            default_analysis_skill="chan_theory",
         )
-        executor = MagicMock()
-        executor.chat.return_value = SimpleNamespace(success=True, content="ok", error=None)
+        inherited = resolve_skill_prompt_state(config)
+        cleared = resolve_skill_prompt_state(config, skills=[])
+        self.assertEqual(inherited.skills_to_activate, ["chan_theory"])
+        self.assertEqual(cleared.skills_to_activate, ["bull_trend"])
+        self.assertEqual(cleared.strategy_execution["source"], "default")
+        self.assertEqual(cleared.strategy_execution["requested"], [])
+        self.assertEqual(config.default_analysis_skill, "chan_theory")
+        self.assertEqual(config.agent_skills, ["ma_golden_cross"])
+        executor = build_agent_chat_executor(config, skills=[])
+        self.assertEqual(executor.fixed_default_skills, ["bull_trend"])
+        from src.agent.protocols import AgentContext
+
+        executor._record_routed_strategies(AgentContext(query="test"), ["bull_trend"])
+        self.assertEqual(executor.strategy_execution["source"], "default")
+
+    def test_chat_request_empty_skills_clears_context_without_triggering_activate_all(self) -> None:
+        from src.agent.agent_backend import AgentRunResult, LiteLLMAgentBackend
+        from src.agent.factory import resolve_skill_prompt_state
+        from src.storage import DatabaseManager
+
+        config = _build_config(agent_backend="litellm", agent_arch="single",
+                               agent_skills=["ma_golden_cross"],
+                               agent_context_compression_enabled=False)
+        config.is_agent_available = lambda: True
+        run_requests = []
+
+        def controlled_run(_backend, run_request):
+            run_requests.append(run_request)
+            return AgentRunResult(success=True, final_answer="ok", backend="litellm", model="fixture")
+
         request = agent.ChatRequest(
             message="hello",
+            session_id="empty-skills",
             skills=[],
             context={"skills": ["old_skill"], "strategies": ["older_strategy"]},
         )
-        real_get_running_loop = asyncio.get_running_loop
+        with tempfile.TemporaryDirectory() as directory, patch.object(DatabaseManager, "_instance", None):
+            db = DatabaseManager(db_url=f"sqlite:///{directory}/chat.db")
+            try:
+                with patch("api.v1.endpoints.agent.get_config", return_value=config), patch(
+                    "api.v1.endpoints.agent._build_executor", wraps=agent._build_executor,
+                ) as mock_build_executor, patch.object(LiteLLMAgentBackend, "run", controlled_run):
+                    payload = asyncio.run(agent.agent_chat(
+                        request, session_service=agent.AgentChatSessionService(db),
+                    )).model_dump()
+                self.assertEqual(db.get_conversation_session_selected_skill_ids("empty-skills"), [])
+                self.assertEqual(len(db.get_conversation_messages("empty-skills")), 2)
+            finally:
+                db._engine.dispose()
 
-        class _ImmediateLoop:
-            def __init__(self, loop):
-                self._loop = loop
-
-            def run_in_executor(self, _executor, func):
-                future = self._loop.create_future()
-                future.set_result(func())
-                return future
-
-        with patch("api.v1.endpoints.agent.get_config", return_value=config), patch(
-            "api.v1.endpoints.agent._build_executor",
-            return_value=executor,
-        ) as mock_build_executor, patch(
-            "api.v1.endpoints.agent.asyncio.get_running_loop",
-            side_effect=lambda: _ImmediateLoop(real_get_running_loop()),
-        ):
-            payload = asyncio.run(
-                agent.agent_chat(
-                    request,
-                    session_service=agent.AgentChatSessionService(),
-                )
-            ).model_dump()
-
-        mock_build_executor.assert_called_once_with(config, None)
-        executor.chat.assert_called_once()
-        self.assertEqual(executor.chat.call_args.kwargs["context"]["skills"], [])
-        self.assertNotIn("strategies", executor.chat.call_args.kwargs["context"])
-        self.assertEqual(executor.chat.call_args.kwargs["selected_skill_ids"], [])
+        mock_build_executor.assert_called_once_with(config, [])
+        self.assertEqual(len(run_requests), 1)
+        self.assertIn(resolve_skill_prompt_state(config, skills=[]).skill_instructions,
+                      run_requests[0].system_prompt)
+        self.assertNotIn(resolve_skill_prompt_state(config, skills=["ma_golden_cross"]).skill_instructions,
+                         run_requests[0].system_prompt)
+        self.assertNotIn("old_skill", run_requests[0].system_prompt)
+        self.assertNotIn("older_strategy", run_requests[0].system_prompt)
+        self.assertEqual(payload["session_state"]["selected_skill_ids"], [])
         self.assertEqual(payload["content"], "ok")
 class AgentModelsSourceDetectionTestCase(unittest.TestCase):
     @patch("src.config.setup_env")

@@ -280,6 +280,7 @@ class SearchResult:
     relevance_score: Optional[int] = None
     relevance_category: Optional[str] = None
     relevance_reasons: Optional[List[str]] = None
+    retrieved_at: Optional[str] = None  # 首次实际检索完成时间（UTC）；缓存读取不刷新
     
     def to_text(self) -> str:
         """转换为文本格式"""
@@ -309,6 +310,13 @@ class SearchResponse:
         if self.error_message:
             self.error_message = sanitize_search_snapshot_text(self.error_message)[:1000]
     
+    def mark_retrieved(self) -> None:
+        """Record actual acquisition once; preserve timestamps on cached/copied results."""
+        retrieved_at = datetime.now(timezone.utc).isoformat()
+        for result in self.results:
+            if result.retrieved_at is None:
+                result.retrieved_at = retrieved_at
+
     def to_context(self, max_results: int = 5) -> str:
         """将搜索结果转换为可用于 AI 分析的上下文"""
         if not self.success or not self.results:
@@ -419,6 +427,7 @@ class BaseSearchProvider(ABC):
                 response.search_time = time.time() - start_time
 
             if response.success:
+                response.mark_retrieved()
                 self._record_success(api_key)
                 logger.info(f"[{self._name}] 搜索成功，返回 {len(response.results)} 条结果，耗时 {response.search_time:.2f}s")
             else:
@@ -2331,6 +2340,7 @@ class SearXNGSearchProvider(BaseSearchProvider):
             )
             response.search_time = time.time() - start_time
             if response.success:
+                response.mark_retrieved()
                 logger.info(
                     "[%s] 搜索成功，实例=%s，返回 %s 条结果，耗时 %.2fs",
                     self.name,
@@ -3402,6 +3412,7 @@ class SearchService:
             relevance_score=score,
             relevance_category=category,
             relevance_reasons=reasons,
+            retrieved_at=item.retrieved_at,
         )
 
     @classmethod
@@ -3764,6 +3775,7 @@ class SearchService:
                             relevance_score=item.relevance_score,
                             relevance_category=item.relevance_category,
                             relevance_reasons=item.relevance_reasons,
+                            retrieved_at=item.retrieved_at,
                         )
                     )
                     if len(filtered) >= max_results:
@@ -3788,6 +3800,7 @@ class SearchService:
                     relevance_score=item.relevance_score,
                     relevance_category=item.relevance_category,
                     relevance_reasons=item.relevance_reasons,
+                    retrieved_at=item.retrieved_at,
                 )
             )
             if len(filtered) >= max_results:
@@ -3841,6 +3854,7 @@ class SearchService:
                     relevance_score=item.relevance_score,
                     relevance_category=item.relevance_category,
                     relevance_reasons=item.relevance_reasons,
+                    retrieved_at=item.retrieved_at,
                 )
             )
 

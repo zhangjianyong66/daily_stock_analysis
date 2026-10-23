@@ -34,6 +34,7 @@ import {
   type HomeWorkspaceTab,
   type WatchlistAnalyzeMode,
 } from '../components/watchlist/HomeStockWorkspace';
+import { isWatchlistRowPendingAnalysis } from '../components/watchlist/watchlistRowState';
 import { useDashboardLifecycle, useHomeDashboardState } from '../hooks';
 import { useWatchlist } from '../hooks/useWatchlist';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
@@ -1178,7 +1179,7 @@ const HomePage: React.FC = () => {
 
   const pendingWatchlistCodes = useMemo(
     () => watchlistRows
-      .filter((row) => !row.analyzedToday && !row.isTodayStatusLoading && !row.isTodayStatusUnknown)
+      .filter(isWatchlistRowPendingAnalysis)
       .map((row) => row.code),
     [watchlistRows],
   );

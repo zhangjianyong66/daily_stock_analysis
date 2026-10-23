@@ -31,8 +31,13 @@ class _DummyFetcher:
 class TestHKRealtimeRouting(unittest.TestCase):
     """Ensure HK realtime lookup does not fan out into A-share sources."""
 
+    def setUp(self):
+        with DataFetcherManager._realtime_last_good_lock:
+            DataFetcherManager._realtime_last_good_cache.clear()
+
+    @patch("data_provider.futu_fetcher.FutuFetcher.has_configured_endpoint", return_value=False)
     @patch("src.config.get_config")
-    def test_manager_routes_hk_suffix_only_to_akshare_once(self, mock_get_config):
+    def test_manager_routes_hk_suffix_only_to_akshare_once(self, mock_get_config, mock_has_ep):
         mock_get_config.return_value = SimpleNamespace(
             enable_realtime_quote=True,
             realtime_source_priority="tencent,akshare_sina,efinance,akshare_em,tushare",

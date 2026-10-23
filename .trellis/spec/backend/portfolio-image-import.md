@@ -24,7 +24,7 @@
 - SSE：复用 `/api/v1/analysis/tasks/stream`，事件类型 `portfolio_image_task_updated`，载荷只含轻量摘要。
 - DB：`PortfolioTrade.trade_time` 为 nullable `TIME`；图片任务和草稿不新增数据库表。
 - 共享 Vision：`complete_vision(image_bytes, mime_type, prompt, *, max_tokens=1024, attempt_callback=None, deadline_monotonic=None) -> str`；持仓导入与自选股提取必须共用该入口。
-- 设置页渠道测试：`POST /api/v1/system/config/llm/channels/test` 的 `TestLLMChannelRequest` 包含 `extra_headers: Dict[str, str]` 与 `vision_api_mode: chat_completions | responses`，默认模式为 `chat_completions`。
+- 设置页渠道测试：`POST /api/v1/system/config/llm/channels/test` 的 `TestLLMChannelRequest` 包含 `extra_headers: Dict[str, str]`、`api_surface: chat_completions | responses` 与 `vision_api_mode: chat_completions | responses`，后两项默认均为 `chat_completions`。
 
 ## 3. Contracts
 
@@ -45,6 +45,7 @@
 - LiteLLM Responses 的干净安装依赖 `requirements.txt` 显式声明 `orjson`；不得假设开发机虚拟环境或 LiteLLM 的非必选 extras 已经间接安装。`docker/Dockerfile` 必须在构建阶段执行 `import orjson`，让依赖漂移在镜像构建时失败，而不是在真实图片任务中失败。
 - Responses deployment 由 `LLM_CHANNELS` 与 `LLM_<CHANNEL>_{PROTOCOL,BASE_URL,API_KEY,MODELS,ENABLED,EXTRA_HEADERS}` 定义；每日分析 workflow 还必须把全局 `VISION_API_MODE` 从同名 Actions Variable/Secret 映射到进程环境。私有自定义渠道名仍由部署者自行映射，不写入通用 workflow。
 - Chat Completions 精确匹配非 Hermes LLM Channel route 时通过 LiteLLM Router 复用 deployment；无匹配 route 时保留 legacy provider Key/Base URL 路径。Responses 必须精确匹配非 legacy、非 Hermes route，并复用其 wire model、Base URL、API Key 与 Extra Headers；缺 route 在发网前返回 `vision_not_configured`。
+- 渠道 `API_SURFACE=responses` 与图片 `VISION_API_MODE=responses` 可以同时启用。设置页连接探测使用渠道 wire model，图片探测应复用归一化后的路由，禁止重复添加 `responses/`；Extra Headers 对两条路径均生效。对应组合回归在 `tests/test_system_config_service.py`。
 - Router 内部 retry/fallback 必须关闭，外层仍统一拥有 300 秒单次上限、最多两次 attempt、整体 deadline 与取消迟到结果规则。Responses output 需兼容 Mapping/对象形状并归一化为纯文本，下游不得感知协议差异。
 - 单次调用 timeout 为 300 秒；每张最多 2 次，只对 timeout/connection 类瞬时错误重试一次。
 - rate limit、鉴权失败、模型不支持图片、无效图片、空响应和格式错误不重试，并使用低敏稳定错误码。
