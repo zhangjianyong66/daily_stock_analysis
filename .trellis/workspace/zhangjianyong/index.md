@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 37
-- **Last Active**: 2026-09-18
+- **Total Sessions**: 38
+- **Last Active**: 2026-10-23
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1154 | Active |
+| `journal-1.md` | ~1175 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 38 | 2026-10-23 | 合并上游 v3.33.0 并部署 | `da246bb8` | `main` |
 | 37 | 2026-09-18 | 修复 Docker 选股模块导入校验 | `8b96b13b` | `main` |
 | 36 | 2026-09-18 | 完成上游合并回归修复与验收 | `60fc2426` | `main` |
 | 35 | 2026-09-04 | 修复 LLM 代理与错误传递 | `9ff5be6` | `main` |

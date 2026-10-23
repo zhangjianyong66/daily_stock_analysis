@@ -1152,3 +1152,24 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 38: 合并上游 v3.33.0 并部署
+
+**Date**: 2026-10-23
+**Task**: 合并上游 v3.33.0 并部署
+**Branch**: `main`
+
+### Summary
+
+合并最新正式版并保留本地行情、搜索、ETF、策略与图片导入契约；定向验证和镜像构建通过，现有测试基线缺口已记录。部署 stock-server 至原端口 8001，本地及公网健康、静态资源、认证保护与数据库完整性检查通过；保留旧镜像和切换前数据库备份，未推送。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `da246bb8` | (see git log) |
+
+### Status
+
+[OK] **Completed**
