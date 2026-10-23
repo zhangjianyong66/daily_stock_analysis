@@ -4,7 +4,7 @@
 
 目标：ZhuLinsen/daily_stock_analysis 的正式 Release v3.33.0，发布于 2026-10-15。标签指向 bba8bf51bdbd3badc75a832c52ede058ef5ab871。
 合并前 HEAD：89b54f0f；备份分支：backup/upstream-v3.33.0-before-merge。
-真实三方合并的 18 个冲突文件均已解决，索引无 unmerged entries。代码处于 main 的未提交合并状态；未执行 commit、push、部署或服务重启。
+真实三方合并的 18 个冲突文件均已解决，索引无 unmerged entries。已按用户后续授权提交合并，工作提交 da246bb8；新镜像已部署到本机 stock-server，未执行 push。
 
 ## 主要整合
 
@@ -32,11 +32,21 @@
 - 独立 worktree /tmp/dsa-merge-baseline 在合并前 HEAD 复现 Pipeline 16 项失败（__new__ 测试对象未初始化 skill_prompt_state）和搜索 2 项失败（断言漏掉现有 call_source=agent）。它们不是新增回归；没有为过期 fixture 修改业务流程。
 - HomeStockWorkspace 的 StockBar 滚动测试在同一合并前 worktree 也失败；实际 StockBar 源文件未被此次上游修改。日志 /tmp/dsa-merge-web-baseline.log。
 - 扩展审查另发现 test_agent_pipeline 的历史诊断 fixture 进入真实资讯/行情路径，未将该结果算作离线通过。
-- 未执行完整 ci_gate.sh、GitHub Actions、在线供应商 smoke、Docker 镜像构建或 Electron 完整安装包构建；未创建 PR，因此未上传 PR 页面截图。现有服务和数据库未进行升级验证。
+- 未执行完整 ci_gate.sh、GitHub Actions、在线供应商 smoke 或 Electron 完整安装包构建；未创建 PR，因此未上传 PR 页面截图。
+
+## 部署验证
+
+- Docker 镜像构建成功，前端构建及筛选模块、Futu、orjson 运行依赖导入检查通过。
+- stock-server 使用新镜像 a0e144b54247，端口保持 8001；启动日志无 ERROR 或 Traceback。
+- 本地及 https://stock.zhangjianyong.top 首页、健康接口与 /data 返回 200；公网 JS/CSS 资源全部返回 200。
+- 管理员认证仍启用，未登录访问 /api/v1/data/overview 返回 401；未执行真实股票分析、通知或第三方供应商请求。
+- 数据库 PRAGMA quick_check 返回 ok。启动前已在停止旧服务后再次备份数据。
+- 首次启动因 Compose 未显式加载根目录 .env 而尝试 8000，已改用 --env-file .env 保持既有 8001 配置；未修改真实 .env。
 
 ## 回滚
 
-在没有后续工作且仍处于当前未提交合并状态时执行 git merge --abort，可恢复合并前受版本控制的代码。任务记录等新建未跟踪文件和 .venv 新依赖不受该命令影响。
-备份分支仍固定指向合并前 HEAD。真实 .env 和业务数据库未修改。
+合并已提交，不再适用 git merge --abort。代码恢复请以备份分支创建独立恢复分支，或评估 git revert -m 1 da246bb8；不要直接覆盖后续改动。
+备份分支仍固定指向合并前 HEAD。部署启动可执行数据库迁移，已保留一致性备份。
+部署备份目录：/home/zhangjianyong/backups/daily_stock_analysis/v3.33.0-20261023-124514；旧镜像 daily-stock-analysis-server:rollback-20261023-124514。目录内 README.txt 提供回滚命令，pre-cutover-data 为切换前最终备份。恢复数据库前先停止服务并备份部署后新增数据。
 
 中文本地多策略文档和 Trellis 内部规范没有对应英文镜像；上游已有中英配置文档变更均已保留。
