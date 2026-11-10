@@ -298,10 +298,10 @@ describe('systemConfigApi', () => {
   it('loads the flat Agent backend compatibility status', async () => {
     get.mockResolvedValueOnce({
       data: {
-        backend: 'codex_app_server',
+        backend: 'litellm',
         available: true,
-        experimental: true,
-        version: 'codex-cli test',
+        experimental: false,
+        version: null,
         error_code: null,
         message: null,
       },
@@ -311,10 +311,10 @@ describe('systemConfigApi', () => {
 
     expect(get).toHaveBeenCalledWith('/api/v1/system/config/agent-backends/status');
     expect(result).toEqual({
-      backend: 'codex_app_server',
+      backend: 'litellm',
       available: true,
-      experimental: true,
-      version: 'codex-cli test',
+      experimental: false,
+      version: null,
       errorCode: null,
       message: null,
     });
@@ -325,10 +325,10 @@ describe('systemConfigApi', () => {
       data: {
         backend: 'codex_app_server',
         available: false,
-        experimental: true,
+        experimental: false,
         version: null,
-        error_code: 'unsupported_agent_arch',
-        message: 'single only',
+        error_code: 'backend_removed',
+        message: 'Codex App Server has been removed',
       },
     });
 
@@ -347,7 +347,7 @@ describe('systemConfigApi', () => {
       ],
       mask_token: '***',
     });
-    expect(result.errorCode).toBe('unsupported_agent_arch');
-    expect(result.message).toBe('single only');
+    expect(result.errorCode).toBe('backend_removed');
+    expect(result.message).toBe('Codex App Server has been removed');
   });
 });

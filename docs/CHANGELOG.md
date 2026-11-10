@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [改进] 同步上游 v3.34.0 及后续修复，保留本地策略快照、搜索审计、行情超时隔离和异步截图导入；修复合并后的配置注册、钉钉通知识别与本地免密 Vision 渠道兼容。
 - [改进] 合并上游 v3.33.0 正式版，整合服务端问股会话、ETF 轮动、持仓风险和数据中心，并保留本地行情超时护栏、搜索审计、策略快照及异步图片导入。
 - [修复] 上游合并后的分析任务、存储 canonical_id、海外基本面、搜索并发与英文别名契约恢复，并保留旧任务字段和会话调用兼容。
 - [改进] ETF 搜索画像补齐旅游、电池、游戏、房地产、银行、煤炭和光伏等确定性行业映射，未知 ETF 继续 fail-closed。
@@ -71,6 +72,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] Codex 问股只接受 App Server 明确完成的终态回答，并统一整体时限、累计输出/事件/工具预算和进程回收边界；停止、超时、断连或异常时先终止并回收 Codex 与独立工具进程，再向 Web 返回唯一最终状态。
 - [修复] `codex_cli` 普通分析显式固定无人值守批准策略与只读沙箱，避免新版 Codex 在非交互任务中因请求人工批准而中断。
 
+- [修复] Agent 工具消息内容与工具调用参数序列化不再透传 NaN/±Infinity：`LLMToolAdapter._convert_messages` 序列化前将非有限浮点递归归一化为 `null`，并以 `allow_nan=False` 输出严格 RFC 8259 JSON，避免 LiteLLM 以 `"NaN" is not valid JSON` 拒绝请求（#2471）。
+
+- [修复] 启动日志不再对 `--stocks` / `--portfolio` / `--no-notify` 已覆盖的配置项告警；单一日线数据源失败（含 Eastmoney 股票与 ETF 请求）降为 WARNING，普通股票及 A 股指数全部日线数据源失败仍为 ERROR；LLM 返回与调试日志显示实际响应模型（含流式响应），依据实际调用路由标注回退，避免将别名、供应商前缀和日期版本差异误报为回退
+- [文档] 修正 DeepSeek 默认模型说明，明确 Gemini API 与 Vertex AI 的模型生命周期及验证边界。
+- [修复] 深度研究合成阶段预算增至受剩余整体预算限制的 120 秒；阶段/provider 超时保留阶段、实际耗时与原始原因，研究 API 不再误报整体预算耗尽或清零已知 token 用量（#2475）。
+
+- [改进] 更新默认模型：Gemini 主模型 `gemini-3.6-flash`、备用 `gemini-3.5-flash-lite`，选股默认同步；OpenAI 默认 `gpt-6.1-sol`（选股与 PR 审查兜底同步，不再回落到 `gpt-4o-mini`）；仅配置 `DEEPSEEK_API_KEY` 时默认 `deepseek-v4-flash`。未显式配置模型的用户将自动切换，显式配置不受影响
+- [修复] GPT-6 系列请求时省略 `temperature`，与 GPT-5 / o 系列一致，避免服务端拒绝非默认采样参数
+- [修复] Anthropic 已退役 `claude-3-5-sonnet-20241022` / `claude-3-7-sonnet-20250219`：GitHub Actions 默认 `ANTHROPIC_MODEL` 与 LiteLLM 配置示例改为 `claude-sonnet-4-6`。该模型默认不启用 thinking，仍接受 `temperature` 与指定 `tool_choice`，现有请求参数与 Agent 工具往返无需调整；已通过 `ANTHROPIC_MODEL` Variable / Secret 显式配置旧模型的用户需手动更新。
+- [修复] 依赖锁定 `akshare<1.20.0`，避免上游目录与 HTTP 层重构导致 CI 与桌面打包失败；Python 3.10 新装限制 `litellm<1.98.0`，修复 `NotRequired` 导入错误
+- [修复] 自选及其他无关配置保存不再被已有 LLM 渠道或模型错误阻断，模型相关修改仍校验完整依赖；仅更新自选时保留运行时单例与容器环境覆盖，并补齐增删、删空和校验回归。凡本次保存会启用 Agent 路径的，同样校验完整模型依赖：切到 LiteLLM Agent 后端（`AGENT_BACKEND` / `AGENT_GENERATION_BACKEND` 解析为 litellm）、开启 Agent 分析（`AGENT_MODE=true`）、或配置了非 `all` 的 `AGENT_SKILLS`——后两者走普通分析的 Agent 分支，自带 `LLMToolAdapter`，不受 `AGENT_BACKEND` 决定。仅关闭 `AGENT_MODE`、将 `AGENT_SKILLS` 设为 `all` 或空值、以及无关键保存仍不受 LLM 配置影响；显式保存或导入已退役的 `codex_app_server` 仍被拒绝。
+- [改进] 移除实验性 Codex App Server 问股后端及专属探针、取消与启动链；旧配置明确提示退役并可主动修正，保留默认 LiteLLM、会话接受事务及独立 Codex CLI 报告。
+- [修复] Agent 状态面板在缺少可用主模型时显示中英文配置指引，保留技术错误码；配置指南明确区分已移除后端与历史 Gate 记录。
+- [chore] Default new MiniMax channels to MiniMax-M3.1-Flash and MiniMax-M3, filter older text recommendations while retaining saved/custom models, and refresh fallback pricing.
+
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 - [新功能] 飞书推送新增文件上传能力：`FeishuSender.send_feishu_file(file_path)` 通过 App Bot SDK (`im.v1.file.create`) 上传文件并发送文件消息；Webhook 模式回退为发送文件内容文本；新增 `FEISHU_SEND_AS_FILE=true` 配置开关，开启后飞书以文件形式发送报告而非文字消息。
@@ -78,6 +94,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] 持仓与成交截图识别改为可恢复的进程内异步任务，新增全局防重、真实文件进度、取消、60 分钟截止、服务端草稿 revision 与刷新/SSE 恢复，避免浏览器 30 秒超时误判仍在执行的 Vision 请求。
 - [修复] 资讯源抓取为每次请求独立复制禁用代理映射，避免 Requests 原地补入环境代理后污染后续抓取。
 - [修复] 修复自然日与目标交易日不一致时批量个股分析重复生成大盘上下文的问题，并保持报告生成日与内部缓存目标日语义独立。
+- [新功能] 新增可选的 fastapi-guard 安全中间件（`GUARD_ENABLED=true`，默认关闭）：按 IP 限流、IP 白/黑名单、请求特征拦截与扫描器自动封禁，与登录失败限流叠加；客户端 IP 取值与 `TRUST_X_FORWARDED_FOR` 保持一致，启用后内置启动入口的 Uvicorn 代理头处理只信任同一组代理，默认不扫描请求体，详见 `docs/full-guide.md`。
+- [修复] Telegram 推送按 UTF-16 长度判断与分段，修复含大量 emoji 的报告超出 4096 限制导致发送失败的问题。
+
+- [新功能] 定时模式启动立即执行的当日去重（`SCHEDULE_STARTUP_DEDUP`，默认开启）：`python main.py --schedule` 在 `SCHEDULE_RUN_IMMEDIATELY=true` 触发启动补跑前检查标记文件（位于 `DATABASE_PATH` 所在目录，默认 `data/analysis_run_state.json`），当天已有成功且覆盖当前应分析清单的全量分析（日期 + scope=full + 覆盖面子集判定）则跳过，否则照常补跑；每日定时任务与手动/API/GitHub Actions 触发永不去重；标记缺失、损坏、schema 未知或覆盖不全一律 fail-open 执行（绝不漏跑）；大盘复盘完成度仅记录、不参与判定（复盘补齐由每日定时任务覆盖）；设 `SCHEDULE_STARTUP_DEDUP=false` 可回到此前"每次容器重启都全量重跑"的行为；`--force-run` 可绕过启动去重检查（明确要求立即全量分析）。
+- [修复] Web 设置-数据源 中 Futu OpenD 地址/端口、妙想（MX_API）API Key 与妙想数据源优先级四项缺失中文文案，回退显示英文标题与说明的问题。
+- [修复] 港股实时数据源优先级（`FUTU_HK_REALTIME_SOURCE_PRIORITY`）的中文名称与说明改由前端维护，后端注册表恢复英文文案，英文界面不再显示中文。
+- [改进] Web 设置-数据源 配置项排序收敛：通用配置置顶（股票索引远程更新、盘中实时技术面、启用实时行情、启用筹码分布分析、实时数据源优先级、新闻最大时效、新闻策略窗口档位、BIAS 阈值），同一厂商的配置项连续排列（TickFlow、Futu、妙想、SearXNG 等），厂商之间的相对顺序保持不变。
+- [修复] 收紧定时模式启动去重：仅当全部应分析标的都成功时才记录当日标记（部分失败或全败、即使大盘复盘成功也不得记录，避免重启漏跑）；跳过判定改为覆盖面子集校验并升版 schema 2（v1 旧标记一律 fail-open 重跑一次以升级），`SCHEDULE_STARTUP_DEDUP` 进程环境变量与 .env 值不同时以进程为准（与 `SCHEDULE_RUN_IMMEDIATELY` 同权）。
+- [修复] 定时模式启动去重检查的预期清单改为与运行入口一致的真实目标解析链（Futu 持仓优先、其次 .env 热更新 `STOCK_LIST`、再按交易日过滤）：`--portfolio futu` 新增持仓、纯持仓部署自选为空、以及进程 env 启动后 .env 热更新三类场景不再误跳过；持仓解析失败或解析为空一律 fail-open 照常执行（绝不漏跑），非持仓空清单保持既有当日去重语义。
+
+- [文档] 文档中心补充 `market-support.md` 入口，与 README / 完整指南的市场支持链接保持一致。
+- [修复] 美股社交舆情 Reddit 个股端点切换至现行 Adanos 契约 `/reddit/stocks/v1/stock/{ticker}`（旧 `/reddit/stocks/v1/report/{ticker}` 已下线、固定 404，导致 Reddit 段落始终显示无数据）；适配官方契约 200+`found=false` 无数据语义：`get_social_context` 在证据登记前将空报告归一化为平台无数据，三源全空返回 `None` 且不再误置 `news_evidence_present`（X/Polymarket 有数据时贡献保留）；mention 正文按 `text_snippet`→`text`→`title` 回退，日线情绪 `sentiment_score` 优先且保留真实零值，旧字段 `avg_sentiment` 兼容回退（#2448）。
+- [修复] Futu OpenD 未运行或协议未就绪时，FutuFetcher 改为异步连接并最多等待 5 秒，失败后关闭连接、只记录一条警告并在 5 分钟内跳过 Futu，港股请求回退到其他数据源，不再因 SDK 同步构造无限重连而卡住整轮分析（#2447）。
+- [改进] 持仓风险的板块集中度按股票代码在进程内缓存所属板块 24 小时（仅缓存成功结果），重复打开或刷新持仓页时不再对每只 A 股持仓重新经过数据源限速请求；此前多只持仓时每次加载风险模块都要等待数十秒，容易触发前端 30 秒超时降级（Refs #1945）。
+- [修复] 大盘 Market Light 评分和中英文指数均值排除 VIX 波动率涨跌幅，保留原始行情展示；仅有 VIX 时指数维度标为不可用，告警沿用跳过语义（#2472）。
+
+- [改进] Agent 轨迹评估增加独立股票范围诊断与干扰股票样例，区分越界请求、运行时拦截和无法判定调用，支持多股对比及阶段明细，不改变原指标或退出码。
 
 ## [3.33.0] - 2026-10-15
 

@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 39
+- **Total Sessions**: 40
 - **Last Active**: 2026-11-10
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1196 | Active |
+| `journal-1.md` | ~1217 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 40 | 2026-11-10 | 合并上游 v3.34.0 并保留本地能力 | - | `main` |
 | 39 | 2026-11-10 | mini-trellis 迁移规则收敛 | - | `main` |
 | 38 | 2026-10-23 | 合并上游 v3.33.0 并部署 | `da246bb8` | `main` |
 | 37 | 2026-09-18 | 修复 Docker 选股模块导入校验 | `8b96b13b` | `main` |

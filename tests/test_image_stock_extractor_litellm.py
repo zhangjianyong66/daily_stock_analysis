@@ -60,7 +60,7 @@ def _cfg(**kwargs) -> Config:
         anthropic_api_keys=[],
         anthropic_model="claude-sonnet-4-6",
         openai_api_keys=[],
-        openai_model="gpt-5.5",
+        openai_model="gpt-6.1-sol",
         openai_base_url=None,
         openai_vision_model=None,
         deepseek_api_keys=[],
@@ -133,7 +133,7 @@ class TestGetApiKeysForModel:
 
     def test_returns_anthropic_keys_for_anthropic_model(self):
         cfg = _cfg(anthropic_api_keys=[_ANTHROPIC_KEY], openai_api_keys=[_OPENAI_KEY])
-        keys = _get_api_keys_for_model("anthropic/claude-3-5-sonnet-20241022", cfg)
+        keys = _get_api_keys_for_model("anthropic/claude-sonnet-4-6", cfg)
         assert _ANTHROPIC_KEY in keys
 
     def test_returns_openai_keys_for_openai_model(self):
@@ -204,12 +204,14 @@ class TestCallLitellmVision:
                 "model_info": {"dsa_api_surface": "responses"},
             }],
         )
+        router = MagicMock()
+        router.completion.return_value = self._good_response()
         with patch("src.services.image_stock_extractor.get_config", return_value=cfg), \
-             patch("src.services.image_stock_extractor.litellm.completion",
-                   return_value=self._good_response()) as mock_comp:
+             patch("src.services.vision_extraction_service._build_vision_router", return_value=router) as build_router:
             _call_litellm_vision("b64", "image/jpeg")
 
-        kwargs = mock_comp.call_args.kwargs
+        kwargs = build_router.call_args.args[0][0]["litellm_params"]
+        assert router.completion.call_args.kwargs["model"] == "openai/gpt-5.6-sol"
         assert kwargs["model"] == "openai/responses/gpt-5.6-sol"
         assert kwargs["api_key"] == "sk-channel-test-value"
         assert kwargs["api_base"] == "https://responses.example/v1"
@@ -228,12 +230,14 @@ class TestCallLitellmVision:
                 "model_info": {"dsa_api_surface": "responses"},
             }],
         )
+        router = MagicMock()
+        router.completion.return_value = self._good_response()
         with patch("src.services.image_stock_extractor.get_config", return_value=cfg), \
-             patch("src.services.image_stock_extractor.litellm.completion",
-                   return_value=self._good_response()) as mock_comp:
+             patch("src.services.vision_extraction_service._build_vision_router", return_value=router) as build_router:
             _call_litellm_vision("b64", "image/jpeg")
 
-        kwargs = mock_comp.call_args.kwargs
+        kwargs = build_router.call_args.args[0][0]["litellm_params"]
+        assert router.completion.call_args.kwargs["model"] == "openai/gpt-5.6-sol"
         assert kwargs["model"] == "openai/responses/gpt-5.6-sol"
         assert kwargs["api_base"] == "http://127.0.0.1:8642/v1"
         assert "api_key" not in kwargs
@@ -471,10 +475,11 @@ class TestExtractStockCodesFromImage:
         jpeg = _make_jpeg_bytes()
         with patch("src.services.image_stock_extractor.get_config", return_value=cfg), \
              patch("src.services.image_stock_extractor.litellm.completion",
-                   side_effect=RuntimeError("network down")) as mock_completion, \
-             patch("src.services.image_stock_extractor.time.sleep") as mock_sleep:
-            with pytest.raises(ValueError, match="Vision API 调用失败"):
+                   side_effect=ConnectionError("network down")) as mock_completion, \
+             patch("src.services.vision_extraction_service.time.sleep") as mock_sleep:
+            with pytest.raises(ValueError, match="Vision API 调用失败") as error:
                 extract_stock_codes_from_image(jpeg, "image/jpeg")
 
-        assert mock_completion.call_count == 3
-        assert [item.args[0] for item in mock_sleep.call_args_list] == [1, 2]
+        assert error.value.code == "vision_network_error"
+        assert mock_completion.call_count == 2
+        mock_sleep.assert_called_once_with(1)

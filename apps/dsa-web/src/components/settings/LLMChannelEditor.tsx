@@ -12,6 +12,7 @@ import {
   MODELFLARE_APP_REGISTRATION_URL,
   MODELFLARE_DEFAULT_MODEL,
   MODEL_PLACEHOLDERS_BY_PROTOCOL,
+  filterDiscoveredTextModels,
   getProviderTemplate,
   isKnownProviderTemplate,
 } from './llmProviderTemplates';
@@ -431,7 +432,7 @@ const ChannelRow: React.FC<ChannelRowProps> = ({
   const runtimeCapabilityOptions = isHermesChannel(channel)
     ? RUNTIME_CAPABILITY_OPTIONS.filter((option) => option.value === 'json')
     : RUNTIME_CAPABILITY_OPTIONS;
-  const discoveredModels = discoveryState?.models || [];
+  const discoveredModels = filterDiscoveredTextModels(discoveryState?.models || []);
   const manualOnlyModels = selectedModels.filter(
     (model) => !discoveredModels.some((discoveredModel) => (
       areModelsEquivalent(model, discoveredModel, channel.protocol, modelProviderPrefixes, channel.baseUrl)
@@ -2664,7 +2665,7 @@ export const LLMChannelEditor: React.FC<LLMChannelEditorProps> = ({
                       label="备选模型"
                       fieldKey="LITELLM_FALLBACK_MODELS"
                       helpKey="settings.llm_channel.fallback_models"
-                      examples={['LITELLM_FALLBACK_MODELS=deepseek/deepseek-v4-pro,gemini/gemini-3-flash-preview']}
+                      examples={['LITELLM_FALLBACK_MODELS=deepseek/deepseek-v4-pro,gemini/gemini-3.5-flash-lite']}
                       compact
                     />
                     <div className="space-y-2 rounded-xl border settings-border-strong settings-surface-overlay-soft p-3">
@@ -2692,7 +2693,7 @@ export const LLMChannelEditor: React.FC<LLMChannelEditorProps> = ({
                       label="Vision 模型"
                       fieldKey="VISION_MODEL"
                       helpKey="settings.llm_channel.vision_model"
-                      examples={['VISION_MODEL=gemini/gemini-3.1-pro-preview']}
+                      examples={['VISION_MODEL=gemini/gemini-3.6-flash']}
                       compact
                     />
                     <Select

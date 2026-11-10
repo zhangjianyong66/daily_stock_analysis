@@ -13,7 +13,6 @@ from typing import Any, Dict, List, Optional
 from src.config import (
     AGENT_CONTEXT_COMPRESSION_PROFILES,
     AGENT_MAX_STEPS_DEFAULT,
-    DEFAULT_ALPHASIFT_INSTALL_SPEC,
 )
 from src.notification_noise import NOTIFICATION_SEVERITIES
 from src.notification_routing import ROUTABLE_NOTIFICATION_CHANNELS
@@ -76,8 +75,8 @@ WEB_SETTINGS_HIDDEN_FROM_UI = {
     # when a tool runs; it is not a Web settings or model-input field.
     "FXMACRODATA_API_KEY",
     "DATABASE_PATH",
-    "DINGTALK_WEBHOOK_URL",
-    "DINGTALK_SECRET",
+    "ALPHASIFT_ENABLED",
+    "ALPHASIFT_INSTALL_SPEC",
     "SQLITE_WAL_ENABLED",
     "SQLITE_BUSY_TIMEOUT_MS",
     "SQLITE_WRITE_RETRY_MAX",
@@ -85,6 +84,10 @@ WEB_SETTINGS_HIDDEN_FROM_UI = {
     "USE_PROXY",
     "PROXY_HOST",
     "PROXY_PORT",
+    "SEARXNG_TIMEOUT_SECONDS",
+    # CLI-only schedule-mode behavior (python main.py --schedule); the WebUI
+    # runtime scheduler does not consult the startup dedup gate.
+    "SCHEDULE_STARTUP_DEDUP",
 }
 
 _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
@@ -303,7 +306,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     },
     "LITELLM_MODEL": {
         "title": "Primary Model",
-        "description": "Primary model in provider/model format (e.g. gemini/gemini-3.1-pro-preview, deepseek/deepseek-v4-flash, anthropic/claude-sonnet-4-6). If empty, it is auto-inferred from available API keys or channel declarations.",
+        "description": "Primary model in provider/model format (e.g. gemini/gemini-3.6-flash, deepseek/deepseek-v4-flash, anthropic/claude-sonnet-4-6). If empty, it is auto-inferred from available API keys or channel declarations.",
         "category": "ai_model",
         "data_type": "string",
         "ui_control": "text",
@@ -317,7 +320,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "help_key": "settings.ai_model.LITELLM_MODEL",
         "examples": [
             "LITELLM_MODEL=deepseek/deepseek-v4-flash",
-            "LITELLM_MODEL=gemini/gemini-3.1-pro-preview",
+            "LITELLM_MODEL=gemini/gemini-3.6-flash",
             "LITELLM_MODEL=ollama/qwen3:8b",
         ],
         "docs": [
@@ -360,7 +363,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "help_key": "settings.ai_model.AGENT_LITELLM_MODEL",
         "examples": [
             "AGENT_LITELLM_MODEL=deepseek/deepseek-v4-pro",
-            "AGENT_LITELLM_MODEL=gemini/gemini-3.1-pro-preview",
+            "AGENT_LITELLM_MODEL=gemini/gemini-3.6-flash",
         ],
         "docs": [
             {
@@ -376,7 +379,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     },
     "LITELLM_FALLBACK_MODELS": {
         "title": "Fallback Models",
-        "description": "Comma-separated fallback models tried when the primary model fails (e.g. anthropic/claude-sonnet-4-6,openai/gpt-5.4-mini). Useful for cross-provider redundancy.",
+        "description": "Comma-separated fallback models tried when the primary model fails (e.g. anthropic/claude-sonnet-4-6,openai/gpt-6.1-terra). Useful for cross-provider redundancy.",
         "category": "ai_model",
         "data_type": "string",
         "ui_control": "text",
@@ -389,8 +392,8 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "display_order": 2,
         "help_key": "settings.ai_model.LITELLM_FALLBACK_MODELS",
         "examples": [
-            "LITELLM_FALLBACK_MODELS=deepseek/deepseek-v4-pro,gemini/gemini-3-flash-preview",
-            "LITELLM_FALLBACK_MODELS=openai/gpt-5.4-mini",
+            "LITELLM_FALLBACK_MODELS=deepseek/deepseek-v4-pro,gemini/gemini-3.5-flash-lite",
+            "LITELLM_FALLBACK_MODELS=openai/gpt-6.1-terra",
         ],
         "docs": [
             {
@@ -712,7 +715,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     },
     "AIHUBMIX_KEY": {
         "title": "AIHubmix Key",
-        "description": "AIHubmix one-stop API key – access all mainstream models with a single key, no VPN required. Auto-sets base URL to aihubmix.com/v1. Get key: https://aihubmix.com/?aff=CfMq",
+        "description": "AIHubmix one-stop API key – access all mainstream models with a single key, no VPN required. Auto-sets base URL to aihubmix.com/v1. Get key: https://inferera.com/?aff=CfMq",
         "category": "ai_model",
         "data_type": "string",
         "ui_control": "password",
@@ -786,7 +789,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     # ------------------------------------------------------------------
     "DEEPSEEK_API_KEY": {
         "title": "DeepSeek API Key",
-        "description": "Official DeepSeek API key (from https://platform.deepseek.com). For compatibility, a key set alone still auto-infers deepseek/deepseek-chat and logs a deprecation warning; new configs should migrate to deepseek/deepseek-v4-flash. Also works in multi-channel mode.",
+        "description": "Official DeepSeek API key (from https://platform.deepseek.com). A key set alone auto-infers deepseek/deepseek-v4-flash unless a higher-priority model configuration is present. Also works in multi-channel mode.",
         "category": "ai_model",
         "data_type": "string",
         "ui_control": "password",
@@ -840,7 +843,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "default_value": None,
         "options": [],
         "validation": {},
-        "display_order": 10,
+        "display_order": 13,
         "help_key": "settings.data_source.TUSHARE_TOKEN",
         "examples": [
             "TUSHARE_TOKEN=your_tushare_token",
@@ -925,7 +928,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "default_value": None,
         "options": [],
         "validation": {},
-        "display_order": 20,
+        "display_order": 23,
     },
     "MX_PRIORITY": {
         "title": "MiaoXiang Data Source Priority",
@@ -939,7 +942,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "default_value": "6",
         "options": [],
         "validation": {"min": 0, "max": 99},
-        "display_order": 21,
+        "display_order": 24,
     },
     "TICKFLOW_BATCH_SIZE": {
         "title": "TickFlow Batch Size",
@@ -955,6 +958,75 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "validation": {"min": 1, "max": 500},
         "display_order": 19,
     },
+    "FUTU_OPEND_HOST": {
+        "title": "Futu OpenD Host",
+        "description": "IPv4 address or IPv4-resolvable hostname of the Futu OpenD service. Leave empty to disable Futu.",
+        "category": "data_source",
+        "data_type": "string",
+        "ui_control": "text",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": None,
+        "options": [],
+        "validation": {},
+        "display_order": 20,
+        "help_key": "settings.data_source.FUTU_OPEND_HOST",
+        "examples": ["FUTU_OPEND_HOST=127.0.0.1"],
+        "docs": [
+            {
+                "label": "数据源配置指南",
+                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/full-guide.md#数据源配置",
+            },
+        ],
+        "warning_codes": [],
+    },
+    "FUTU_OPEND_PORT": {
+        "title": "Futu OpenD Port",
+        "description": "TCP port of the Futu OpenD service.",
+        "category": "data_source",
+        "data_type": "integer",
+        "ui_control": "number",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": "11111",
+        "options": [],
+        "validation": {"min": 1, "max": 65535},
+        "display_order": 21,
+        "help_key": "settings.data_source.FUTU_OPEND_PORT",
+        "examples": ["FUTU_OPEND_PORT=11111"],
+        "docs": [
+            {
+                "label": "数据源配置指南",
+                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/full-guide.md#数据源配置",
+            },
+        ],
+        "warning_codes": [],
+    },
+    "FUTU_HK_REALTIME_SOURCE_PRIORITY": {
+        "title": "Futu HK Realtime Source Priority",
+        "description": "HK realtime quote provider order: futu, longbridge, akshare, or yfinance, comma-separated. futu is skipped when OpenD is not configured.",
+        "category": "data_source",
+        "data_type": "string",
+        "ui_control": "text",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": "futu,longbridge,akshare,yfinance",
+        "options": [],
+        "validation": {},
+        "display_order": 22,
+        "help_key": "settings.data_source.FUTU_HK_REALTIME_SOURCE_PRIORITY",
+        "examples": ["FUTU_HK_REALTIME_SOURCE_PRIORITY=futu,longbridge,akshare,yfinance"],
+        "docs": [
+            {
+                "label": "数据源配置指南",
+                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/full-guide.md#数据源配置",
+            },
+        ],
+        "warning_codes": ["provider_priority_order"],
+    },
     "STOCK_INDEX_REMOTE_UPDATE_ENABLED": {
         "title": "Remote Stock Index Updates",
         "description": "Automatically refresh the local stock autocomplete index from the built-in GitHub main source.",
@@ -967,7 +1039,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "default_value": "true",
         "options": [],
         "validation": {},
-        "display_order": 16,
+        "display_order": 5,
         "help_key": "settings.data_source.stock_index_remote",
         "examples": [
             "STOCK_INDEX_REMOTE_UPDATE_ENABLED=true",
@@ -981,10 +1053,10 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         ],
         "warning_codes": [],
     },
-    "ALPHASIFT_ENABLED": {
-        "title": "AlphaSift Screening",
-        "description": "Enable the built-in AlphaSift stock screening tab. Disabled by default. This switch only affects the AlphaSift screening path; it does not migrate, sanitize, or clear existing LLM/runtime fields in `.env`.",
-        "category": "data_source",
+    "SCREENING_ENABLED": {
+        "title": "Built-in Stock Screening",
+        "description": "Enable DSA's built-in stock screening tab. The implementation is based on AlphaSift and maintained as part of DSA. Disabled by default.",
+        "category": "base",
         "data_type": "boolean",
         "ui_control": "switch",
         "is_sensitive": False,
@@ -994,10 +1066,10 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "options": [],
         "validation": {},
         "display_order": 17,
-        "help_key": "settings.data_source.ALPHASIFT_ENABLED",
+        "help_key": "settings.base.SCREENING_ENABLED",
         "examples": [
-            "ALPHASIFT_ENABLED=false",
-            "ALPHASIFT_ENABLED=true",
+            "SCREENING_ENABLED=false",
+            "SCREENING_ENABLED=true",
         ],
         "docs": [
             {
@@ -1013,36 +1085,8 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
                 "href": "https://platform.openai.com/docs/api-reference/authentication",
             },
             {
-                "label": "AlphaSift 集成说明",
-                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/alphasift-integration.md",
-            },
-        ],
-    },
-    "ALPHASIFT_INSTALL_SPEC": {
-        "title": "AlphaSift Install Spec",
-        "description": "Pinned AlphaSift pip source used for explicit repair installs and source verification. It is not used for normal runtime calls after startup dependency installation; runtime compatibility is built from DSA's resolved LLM/runtime context.",
-        "category": "data_source",
-        "data_type": "string",
-        "ui_control": "password",
-        "is_sensitive": True,
-        "is_required": False,
-        "is_editable": True,
-        "default_value": DEFAULT_ALPHASIFT_INSTALL_SPEC,
-        "options": [],
-        "validation": {},
-        "display_order": 18,
-        "help_key": "settings.data_source.ALPHASIFT_INSTALL_SPEC",
-        "examples": [
-            f"ALPHASIFT_INSTALL_SPEC={DEFAULT_ALPHASIFT_INSTALL_SPEC}",
-        ],
-        "docs": [
-            {
-                "label": "requirements.txt（版本与依赖边界）",
-                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/requirements.txt",
-            },
-            {
-                "label": "AlphaSift 集成说明",
-                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/alphasift-integration.md",
+                "label": "选股说明",
+                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/screening-engine.md",
             },
         ],
     },
@@ -1058,7 +1102,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "default_value": "tencent,akshare_sina,efinance,akshare_em",
         "options": [],
         "validation": {},
-        "display_order": 20,
+        "display_order": 9,
         "help_key": "settings.data_source.REALTIME_SOURCE_PRIORITY",
         "examples": [
             "REALTIME_SOURCE_PRIORITY=tencent,akshare_sina,efinance,akshare_em",
@@ -1083,7 +1127,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "default_value": "true",
         "options": [],
         "validation": {},
-        "display_order": 21,
+        "display_order": 6,
         "help_key": "settings.data_source.realtime_quotes",
         "examples": [
             "ENABLE_REALTIME_TECHNICAL_INDICATORS=true",
@@ -1178,7 +1222,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "default_value": None,
         "options": [],
         "validation": {"multi_value": True, "delimiter": ","},
-        "display_order": 22,
+        "display_order": 25,
         "help_key": "settings.data_source.search_api_keys",
         "examples": [
             "ANSPIRE_API_KEYS=key1,key2",
@@ -1271,7 +1315,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "default_value": None,
         "options": [],
         "validation": {"multi_value": True, "delimiter": ","},
-        "display_order": 53,
+        "display_order": 54,
     },
     "SEARXNG_BASE_URLS": {
         "title": "SearXNG Base URLs",
@@ -1330,7 +1374,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "default_value": "true",
         "options": [],
         "validation": {},
-        "display_order": 22,
+        "display_order": 7,
         "help_key": "settings.data_source.realtime_quotes",
         "examples": [
             "ENABLE_REALTIME_QUOTE=true",
@@ -1356,7 +1400,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "default_value": "true",
         "options": [],
         "validation": {},
-        "display_order": 23,
+        "display_order": 8,
         "help_key": "settings.data_source.ENABLE_CHIP_DISTRIBUTION",
         "examples": [
             "ENABLE_CHIP_DISTRIBUTION=true",
@@ -1382,7 +1426,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "default_value": "3",
         "options": [],
         "validation": {"min": 1, "max": 30},
-        "display_order": 60,
+        "display_order": 10,
         "help_key": "settings.data_source.news_window",
         "examples": [
             "NEWS_MAX_AGE_DAYS=3",
@@ -1408,7 +1452,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "default_value": "short",
         "options": ["ultra_short", "short", "medium", "long"],
         "validation": {"enum": ["ultra_short", "short", "medium", "long"]},
-        "display_order": 61,
+        "display_order": 11,
         "help_key": "settings.data_source.news_window",
         "examples": [
             "NEWS_STRATEGY_PROFILE=short",
@@ -1434,7 +1478,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "default_value": "5.0",
         "options": [],
         "validation": {"min": 0.0, "max": 50.0},
-        "display_order": 62,
+        "display_order": 12,
     },
     "PYTDX_HOST": {
         "title": "Pytdx Host",
@@ -1494,7 +1538,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "help_key": "settings.ai_model.provider_keys",
         "examples": [
             "GEMINI_API_KEY=your_gemini_api_key",
-            "LITELLM_MODEL=gemini/gemini-3.1-pro-preview",
+            "LITELLM_MODEL=gemini/gemini-3.6-flash",
         ],
         "docs": [
             {
@@ -1531,7 +1575,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "is_sensitive": False,
         "is_required": False,
         "is_editable": True,
-        "default_value": "gemini-3.1-pro-preview",
+        "default_value": "gemini-3.6-flash",
         "options": [],
         "validation": {},
         "display_order": 20,
@@ -1545,7 +1589,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "is_sensitive": False,
         "is_required": False,
         "is_editable": True,
-        "default_value": "gemini-3-flash-preview",
+        "default_value": "gemini-3.5-flash-lite",
         "options": [],
         "validation": {},
         "display_order": 21,
@@ -1581,7 +1625,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "examples": [
             "OPENAI_API_KEY=sk-xxxx",
             "OPENAI_BASE_URL=https://api.example.com/v1",
-            "LITELLM_MODEL=openai/gpt-5.5",
+            "LITELLM_MODEL=openai/gpt-6.1-sol",
         ],
         "docs": [
             {
@@ -1648,7 +1692,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "is_sensitive": False,
         "is_required": False,
         "is_editable": True,
-        "default_value": "gpt-5.5",
+        "default_value": "gpt-6.1-sol",
         "options": [],
         "validation": {},
         "display_order": 60,
@@ -1847,6 +1891,59 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             },
         ],
         "warning_codes": ["not_webhook_delivery", "restart_required"],
+    },
+    "DINGTALK_WEBHOOK_URL": {
+        "title": "DingTalk Bot Webhook",
+        "description": "DingTalk group robot webhook URL. This is separate from App/Stream mode.",
+        "category": "notification",
+        "data_type": "string",
+        "ui_control": "password",
+        "is_sensitive": True,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": None,
+        "options": [],
+        "validation": {
+            "item_type": "url",
+            "allowed_schemes": ["http", "https"],
+        },
+        "display_order": 18,
+        "help_key": "settings.notification.DINGTALK_WEBHOOK_URL",
+        "examples": [
+            "DINGTALK_WEBHOOK_URL=https://oapi.dingtalk.com/robot/send?access_token=your_token",
+        ],
+        "docs": [
+            {
+                "label": "完整指南：通知渠道配置",
+                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/full-guide.md#通知渠道详细配置",
+            },
+        ],
+        "warning_codes": ["webhook_secret_value"],
+    },
+    "DINGTALK_SECRET": {
+        "title": "DingTalk Signing Secret",
+        "description": "Signing secret for a DingTalk group robot. Leave empty when signing is disabled.",
+        "category": "notification",
+        "data_type": "string",
+        "ui_control": "password",
+        "is_sensitive": True,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": None,
+        "options": [],
+        "validation": {},
+        "display_order": 19,
+        "help_key": "settings.notification.DINGTALK_SECRET",
+        "examples": [
+            "DINGTALK_SECRET=your_dingtalk_signing_secret",
+        ],
+        "docs": [
+            {
+                "label": "完整指南：通知渠道配置",
+                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/full-guide.md#通知渠道详细配置",
+            },
+        ],
+        "warning_codes": ["secret_value"],
     },
     "PUSHPLUS_TOKEN": {
         "title": "PushPlus Token",
@@ -3174,6 +3271,60 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         ],
         "warning_codes": ["local_timezone"],
     },
+    "DSA_RUNTIME_SCHEDULER_TIMEOUT_SECONDS": {
+        "title": "Runtime Scheduler Timeout",
+        "description": "Hard timeout in seconds for each Web/API scheduled analysis.",
+        "category": "system",
+        "data_type": "integer",
+        "ui_control": "number",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": "2700",
+        "options": [],
+        "validation": {"min": 60},
+        "display_order": 12,
+        "help_key": "settings.system.schedule",
+        "examples": [
+            "DSA_RUNTIME_SCHEDULER_TIMEOUT_SECONDS=2700",
+        ],
+        "docs": [
+            {
+                "label": "Full guide: configuration",
+                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/full-guide.md#其他配置",
+            },
+        ],
+        "warning_codes": [],
+    },
+    "DSA_TIMEOUT_PARTIAL_NOTIFY": {
+        "title": "Timeout Partial Notification",
+        "description": (
+            "After a Web/API runtime scheduler hard timeout, send a partial "
+            "notification for analyses already saved to history."
+        ),
+        "category": "system",
+        "data_type": "boolean",
+        "ui_control": "switch",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": "true",
+        "options": [],
+        "validation": {},
+        "display_order": 13,
+        "help_key": "settings.system.schedule",
+        "examples": [
+            "DSA_TIMEOUT_PARTIAL_NOTIFY=true",
+            "DSA_TIMEOUT_PARTIAL_NOTIFY=false",
+        ],
+        "docs": [
+            {
+                "label": "Full guide: configuration",
+                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/full-guide.md#其他配置",
+            },
+        ],
+        "warning_codes": [],
+    },
     "HTTP_PROXY": {
         "title": "HTTP Proxy",
         "description": "Optional HTTP proxy endpoint.",
@@ -3938,7 +4089,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     },
     "AGENT_BACKEND": {
         "title": "Ask-Stock Backend",
-        "description": "Choose how the ask-stock Chat runs. Auto keeps the current default-model route and never selects experimental Codex automatically.",
+        "description": "Choose how the ask-stock Chat runs. Auto keeps the current default-model route.",
         "category": "agent",
         "data_type": "string",
         "ui_control": "select",
@@ -3949,15 +4100,13 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "options": [
             {"label": "Auto (recommended)", "value": "auto"},
             {"label": "Default model settings", "value": "litellm"},
-            {"label": "Codex local Agent (experimental)", "value": "codex_app_server"},
         ],
-        "validation": {"enum": ["auto", "litellm", "codex_app_server"]},
+        "validation": {"enum": ["auto", "litellm"]},
         "display_order": 2,
         "help_key": "settings.agent.AGENT_BACKEND",
         "examples": [
             "AGENT_BACKEND=auto",
             "AGENT_BACKEND=litellm",
-            "AGENT_BACKEND=codex_app_server",
         ],
         "docs": [
             {
@@ -3998,7 +4147,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     },
     "AGENT_MAX_STEPS": {
         "title": "Agent Max Steps",
-        "description": f"Maximum reasoning-step limit for the default-model Agent and per-turn tool-call limit for Codex. At the default ({AGENT_MAX_STEPS_DEFAULT}), each default-model sub-agent keeps its own preset. When raised above {AGENT_MAX_STEPS_DEFAULT}, all sub-agents adopt this value. When lowered below a sub-agent's preset, that sub-agent is capped at this value.",
+        "description": f"Maximum reasoning-step limit for the default-model Agent. At the default ({AGENT_MAX_STEPS_DEFAULT}), each default-model sub-agent keeps its own preset. When raised above {AGENT_MAX_STEPS_DEFAULT}, all sub-agents adopt this value. When lowered below a sub-agent's preset, that sub-agent is capped at this value.",
         "category": "agent",
         "data_type": "integer",
         "ui_control": "number",
@@ -4189,7 +4338,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     },
     "AGENT_ORCHESTRATOR_TIMEOUT_S": {
         "title": "Agent Timeout",
-        "description": "Shared timeout budget in seconds for Agent execution. Single-agent runs use it as the overall ReAct loop budget; multi-agent mode uses it as the cooperative pipeline budget. Set to 0 to disable only for the default LiteLLM path; Codex requires a positive value so every request ends within a known time.",
+        "description": "Shared timeout budget in seconds for Agent execution. Single-agent runs use it as the overall ReAct loop budget; multi-agent mode uses it as the cooperative pipeline budget. Set to 0 to disable the timeout.",
         "category": "agent",
         "data_type": "integer",
         "ui_control": "number",
@@ -4230,6 +4379,32 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "examples": [
             "AGENT_RISK_OVERRIDE=true",
             "AGENT_RISK_OVERRIDE=false",
+        ],
+        "docs": [
+            {
+                "label": "完整指南：Agent 配置",
+                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/full-guide.md#环境变量完整列表",
+            },
+        ],
+        "warning_codes": [],
+    },
+    "AGENT_SKILL_CONCURRENCY": {
+        "title": "Strategy Skill Concurrency",
+        "description": "Maximum number of specialist strategy-skill agents to run concurrently in specialist mode.",
+        "category": "agent",
+        "data_type": "integer",
+        "ui_control": "number",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": "3",
+        "options": [],
+        "validation": {"min": 1, "max": 4},
+        "display_order": 64,
+        "help_key": "settings.agent.AGENT_SKILL_CONCURRENCY",
+        "examples": [
+            "AGENT_SKILL_CONCURRENCY=3",
+            "AGENT_SKILL_CONCURRENCY=4",
         ],
         "docs": [
             {
@@ -4669,7 +4844,7 @@ _FIELD_HELP_METADATA: Dict[str, Dict[str, Any]] = {
         "help_key": "settings.ai_model.provider_keys",
         "examples": [
             "GEMINI_API_KEYS=your_gemini_key_1,your_gemini_key_2",
-            "LITELLM_MODEL=gemini/gemini-3.1-pro-preview",
+            "LITELLM_MODEL=gemini/gemini-3.6-flash",
         ],
         "docs": _DOC_LLM_CONFIG,
         "warning_codes": ["secret_value", "comma_separated_keys"],
@@ -4677,8 +4852,8 @@ _FIELD_HELP_METADATA: Dict[str, Dict[str, Any]] = {
     "GEMINI_MODEL": {
         "help_key": "settings.ai_model.legacy_provider_params",
         "examples": [
-            "GEMINI_MODEL=gemini-3.1-pro-preview",
-            "LITELLM_MODEL=gemini/gemini-3.1-pro-preview",
+            "GEMINI_MODEL=gemini-3.6-flash",
+            "LITELLM_MODEL=gemini/gemini-3.6-flash",
         ],
         "docs": _DOC_LLM_CONFIG,
         "warning_codes": ["legacy_provider_setting"],
@@ -4686,8 +4861,8 @@ _FIELD_HELP_METADATA: Dict[str, Dict[str, Any]] = {
     "GEMINI_MODEL_FALLBACK": {
         "help_key": "settings.ai_model.legacy_provider_params",
         "examples": [
-            "GEMINI_MODEL_FALLBACK=gemini-3-flash-preview",
-            "LITELLM_FALLBACK_MODELS=gemini/gemini-3-flash-preview",
+            "GEMINI_MODEL_FALLBACK=gemini-3.5-flash-lite",
+            "LITELLM_FALLBACK_MODELS=gemini/gemini-3.5-flash-lite",
         ],
         "docs": _DOC_LLM_CONFIG,
         "warning_codes": ["legacy_provider_setting"],
@@ -4713,8 +4888,8 @@ _FIELD_HELP_METADATA: Dict[str, Dict[str, Any]] = {
     "OPENAI_MODEL": {
         "help_key": "settings.ai_model.legacy_provider_params",
         "examples": [
-            "OPENAI_MODEL=gpt-5.5",
-            "LITELLM_MODEL=openai/gpt-5.5",
+            "OPENAI_MODEL=gpt-6.1-sol",
+            "LITELLM_MODEL=openai/gpt-6.1-sol",
         ],
         "docs": _DOC_LLM_CONFIG,
         "warning_codes": ["legacy_provider_setting"],
@@ -4722,8 +4897,8 @@ _FIELD_HELP_METADATA: Dict[str, Dict[str, Any]] = {
     "OPENAI_VISION_MODEL": {
         "help_key": "settings.ai_model.legacy_provider_params",
         "examples": [
-            "OPENAI_VISION_MODEL=gpt-5.5",
-            "VISION_MODEL=openai/gpt-5.5",
+            "OPENAI_VISION_MODEL=gpt-6.1-sol",
+            "VISION_MODEL=openai/gpt-6.1-sol",
         ],
         "docs": _DOC_LLM_CONFIG,
         "warning_codes": ["legacy_provider_setting"],

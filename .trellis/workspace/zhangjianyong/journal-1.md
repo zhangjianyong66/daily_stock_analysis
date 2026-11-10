@@ -1194,3 +1194,24 @@ Topics: [.trellis/research/mini-trellis-migration.md](../../research/mini-trelli
 ### Status
 
 [OK] **Completed**
+
+
+## Session 40: 合并上游 v3.34.0 并保留本地能力
+<!-- trellis-session: v=2 fp=ca96502826c1e523 -->
+
+**Date**: 2026-11-10
+**Task**: 合并上游 v3.34.0 并保留本地能力
+**Branch**: `main`
+
+### Summary
+
+合并 upstream/main 15c7cdc0；现有开发与集成分支均已包含在 main，无额外待合提交。备份分支 backup/main-before-upstream-20261110-8c8533cc。保留本地策略、搜索审计、行情护栏和异步截图；接入后端退役及配置修复，恢复配置注册契约，Vision 共享服务接入免密端点规则。完成定向离线回归、Web 构建与治理检查；未推送或部署。
+Topics: [.trellis/spec/backend/portfolio-image-import.md](../../spec/backend/portfolio-image-import.md)
+
+### Git Commits
+
+(No commits - planning session)
+
+### Status
+
+[OK] **Completed**

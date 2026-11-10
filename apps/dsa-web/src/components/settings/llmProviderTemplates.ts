@@ -7,6 +7,19 @@ export type LLMProviderCapability =
   | 'vision'
   | 'local-runtime';
 
+/** Filter recommendations only; saved and hand-typed model IDs stay in channel state. */
+export function filterDiscoveredTextModels(models: string[]): string[] {
+  const miniMaxId = (model: string) => model.split('/').at(-1)?.toLowerCase() || '';
+  const current = (model: string) => /^minimax-m(?:3|3\.1-flash(?::free|-free)?)$/.test(miniMaxId(model));
+  const filtered = models.filter((model) => !/^minimax-(?:m\d|(?:text|vl)-01)/.test(miniMaxId(model)) || current(model));
+  const miniMaxModels = filtered.filter(current).sort((left, right) => (
+    Number(miniMaxId(right).startsWith('minimax-m3.1-flash'))
+    - Number(miniMaxId(left).startsWith('minimax-m3.1-flash'))
+  ));
+  let index = 0;
+  return filtered.map((model) => current(model) ? miniMaxModels[index++] : model);
+}
+
 export const MODELFLARE_APP_REGISTRATION_URL =
   'https://modelflare.dev/sign-up?utm_source=daily_stock_analysis&utm_campaign=app';
 export const MODELFLARE_DEFAULT_MODEL = 'gpt-6.1-sol';
@@ -73,7 +86,7 @@ export const LLM_PROVIDER_TEMPLATES: LLMProviderTemplate[] = [
     label: 'AIHubmix（聚合平台）',
     protocol: 'openai',
     baseUrl: 'https://aihubmix.com/v1',
-    placeholderModels: 'gpt-5.5,claude-sonnet-4-6,gemini-3.1-pro-preview',
+    placeholderModels: 'gpt-6.1-sol,claude-sonnet-4-6,gemini-3.6-flash',
     capabilities: ['openai-compatible', 'aggregator'],
     officialSources: [{ label: 'AIHubmix', url: 'https://inferera.com/?aff=CfMq' }],
   },
@@ -82,7 +95,7 @@ export const LLM_PROVIDER_TEMPLATES: LLMProviderTemplate[] = [
     label: 'Anspire Open',
     protocol: 'openai',
     baseUrl: 'https://open-gateway.anspire.cn/v6',
-    placeholderModels: 'Doubao-Seed-2.0-lite,Doubao-Seed-2.0-pro,qwen3.5-flash,MiniMax-M2.7',
+    placeholderModels: 'Doubao-Seed-2.0-lite,Doubao-Seed-2.0-pro,qwen3.5-flash',
     capabilities: ['openai-compatible'],
     configHint:
       '同一 ANSPIRE_API_KEYS 可复用到搜索与 LLM 渠道。以下模型与网关为配置示例，实际可用性请以账号权限和控制台为准；建议先点“测试连接”确认。',
@@ -137,7 +150,7 @@ export const LLM_PROVIDER_TEMPLATES: LLMProviderTemplate[] = [
     label: 'MiniMax 官方',
     protocol: 'openai',
     baseUrl: 'https://api.minimax.io/v1',
-    placeholderModels: 'MiniMax-M3,MiniMax-M2.7,MiniMax-M2.7-highspeed',
+    placeholderModels: 'MiniMax-M3.1-Flash,MiniMax-M3',
     capabilities: ['openai-compatible'],
     officialSources: [
       { label: 'MiniMax OpenAI API', url: 'https://platform.minimax.io/docs/api-reference/text-chat' },
@@ -184,7 +197,7 @@ export const LLM_PROVIDER_TEMPLATES: LLMProviderTemplate[] = [
     label: 'Requesty',
     protocol: 'openai',
     baseUrl: 'https://router.requesty.ai/v1',
-    placeholderModels: 'claude-sonnet-4-6,gpt-5.4',
+    placeholderModels: 'claude-sonnet-4-6,gpt-6.1-sol',
     capabilities: ['openai-compatible', 'aggregator', 'model-discovery'],
     configHint: '模型列表和模型可见性依赖账号权限与 API Key；EU 区域可将 Base URL 改为 https://router.eu.requesty.ai/v1。',
     officialSources: [
@@ -196,7 +209,7 @@ export const LLM_PROVIDER_TEMPLATES: LLMProviderTemplate[] = [
     label: 'Gemini 官方',
     protocol: 'gemini',
     baseUrl: '',
-    placeholderModels: 'gemini-3.1-pro-preview,gemini-3-flash-preview',
+    placeholderModels: 'gemini-3.6-flash,gemini-3.5-flash-lite',
     capabilities: ['official-api', 'vision'],
     officialSources: [{ label: 'Gemini Models', url: 'https://ai.google.dev/gemini-api/docs/models' }],
   },
@@ -216,7 +229,7 @@ export const LLM_PROVIDER_TEMPLATES: LLMProviderTemplate[] = [
     label: 'OpenAI 官方',
     protocol: 'openai',
     baseUrl: 'https://api.openai.com/v1',
-    placeholderModels: 'gpt-5.5,gpt-5.4-mini',
+    placeholderModels: 'gpt-6.1-sol,gpt-6.1-terra',
     capabilities: ['official-api', 'openai-compatible', 'model-discovery'],
     officialSources: [{ label: 'OpenAI Models', url: 'https://platform.openai.com/docs/models' }],
   },
@@ -257,10 +270,10 @@ export function isKnownProviderTemplate(channelId: string): boolean {
 }
 
 export const MODEL_PLACEHOLDERS_BY_PROTOCOL: Record<ChannelProtocol, string> = {
-  openai: 'gpt-5.5,qwen3.6-plus',
+  openai: 'gpt-6.1-sol,qwen3.6-plus',
   deepseek: 'deepseek-v4-flash,deepseek-v4-pro',
-  gemini: 'gemini-3.1-pro-preview,gemini-3-flash-preview',
+  gemini: 'gemini-3.6-flash,gemini-3.5-flash-lite',
   anthropic: 'claude-sonnet-4-6,claude-opus-4-7',
-  vertex_ai: 'gemini-3.1-pro-preview',
+  vertex_ai: 'gemini-3.6-flash',
   ollama: 'llama3.2,qwen2.5',
 };

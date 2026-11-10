@@ -63,7 +63,7 @@ daily_stock_analysis/
 | `ANTHROPIC_API_KEY` | Anthropic Claude API Key | 可选 |
 | `OPENAI_API_KEY` | OpenAI 兼容 API Key（支持 DeepSeek、通义千问等） | 可选 |
 | `OPENAI_BASE_URL` | OpenAI 兼容 API 地址（如 `https://api.deepseek.com`） | 可选 |
-| `OPENAI_MODEL` | 模型名称（如 `gemini-3.1-pro-preview`、`deepseek-v4-flash`、`gpt-5.5`） | 可选 |
+| `OPENAI_MODEL` | 模型名称（如 `gemini-3.6-flash`、`deepseek-v4-flash`、`gpt-6.1-sol`） | 可选 |
 | `ANSPIRE_API_KEYS` | Anspire 搜索与 LLM 共用 Key 的 legacy 兼容入口；模型权限以控制台为准 | 可选 |
 
 > *注：以上模型 Key / 渠道至少配置一个。Modelflare 只需填写 `MODELFLARE_KEY`，单渠道默认模型为 `openai/gpt-6.1-sol`（可通过 `LITELLM_MODEL` 覆盖），接入地址默认使用 `https://modelflare.dev/v1`，完整示例见 [LLM 配置指南](LLM_CONFIG_GUIDE.md#示例modelflare)。实际模型以账号权限为准。启动时配置校验会在缺少可用 AI 模型 Key 或模型渠道时给出明确错误提示。
@@ -250,14 +250,14 @@ daily_stock_analysis/
 | `GENERATION_BACKEND_MAX_OUTPUT_BYTES` | 单次本地 CLI backend 诊断 stdout/stderr 与最终响应捕获总上限；`--output-last-message` 重复打印到 stdout 的最终响应不重复计入；范围 `1-33554432` | `1048576` | 否 |
 | `GENERATION_BACKEND_MAX_CONCURRENCY` | generation backend 全局并发上限；范围 `1-16`，不改变 LiteLLM Router / `MAX_WORKERS` 行为 | `1` | 否 |
 | `LOCAL_CLI_BACKEND_MAX_CONCURRENCY` | 本地 CLI backend 并发上限；范围 `1-4`，有效并发取它与 `GENERATION_BACKEND_MAX_CONCURRENCY` 的较小值 | `1` | 否 |
-| `AGENT_BACKEND` | 现有问股 Chat 的运行方式：`auto`（推荐，保持默认模型）、`litellm` 或 `codex_app_server`（实验，仅 single-agent Chat） | `auto` | 否 |
+| `AGENT_BACKEND` | 问股 Chat 执行方式：`auto`（推荐，保持默认 LiteLLM）或 `litellm` | `auto` | 否 |
 | `AGENT_GENERATION_BACKEND` | Agent Chat 生成后端；Web 设置页仅暴露 `auto|litellm`，手写 local CLI backend 会返回 unsupported tool-calling 诊断 | `auto` | 否 |
 | `AGENT_SKILL_CONCURRENCY` | `specialist` 模式策略专家 worker 并发上限，范围 `1-4`；最多选择 4 个策略，默认 3 个并发，第 4 个进入下一批次并共享整体超时预算 | `3` | 否 |
 | `AGENT_DATA_TOOL_TIMEOUT_S` | Agent `data` 类工具默认超时秒数；同时作为 `market` 类工具（`get_market_indices` / `get_sector_rankings` 等网络数据调用）的类别默认；`0` 表示关闭，回退到全局预算；有效超时按 first-wins 解析：显式 per-run `tool_call_timeout_seconds` > 单工具显式 `timeout_seconds` > 类别默认 > 无限制，剩余 wall-clock 预算仅作不可突破的外层 cap，`inf`/`nan`/负数降级为「无限制」；超时为 best-effort 软中断：Python 线程无法被强制停止，handler 可能在超时后继续运行，超时结果标记 `retriable: false` 并写入 `non_retriable_tool_results` 阻断重试，且为仍在后台的 handler 武装协作取消信号（`is_tool_cancellation_requested()` 与既有 `check_tool_execution()` 检查点均响应，handler 从不轮询则行为不变）以尽量减小副作用 | `0` | 否 |
 | `AGENT_SEARCH_TOOL_TIMEOUT_S` | Agent `search` 类工具默认超时秒数；`0` 表示关闭，回退到全局预算 | `0` | 否 |
 | `AGENT_ANALYSIS_TOOL_TIMEOUT_S` | Agent `analysis` 类工具默认超时秒数；`0` 表示关闭，回退到全局预算 | `0` | 否 |
 | `AGENT_ACTION_TOOL_TIMEOUT_S` | Agent `action` 类工具默认超时秒数；`0` 表示关闭，回退到全局预算 | `0` | 否 |
-| `LITELLM_MODEL` | 主模型，格式 `provider/model`（如 `gemini/gemini-3.1-pro-preview`），推荐优先使用 | - | 否 |
+| `LITELLM_MODEL` | 主模型，格式 `provider/model`（如 `gemini/gemini-3.6-flash`），推荐优先使用 | - | 否 |
 | `AGENT_LITELLM_MODEL` | 「默认模型」问股的主模型（可选）；留空继承主模型，无 provider 前缀按 `openai/<model>` 解析；Codex 不使用此项 | - | 否 |
 | `AGENT_CONTEXT_COMPRESSION_ENABLED` | 「默认模型」问股可见历史的 LLM 压缩开关；Codex 使用最近 20 条可见对话且保留该配置 | `false` | 否 |
 | `AGENT_CONTEXT_COMPRESSION_PROFILE` | 问股上下文压缩策略：`cost` / `balanced` / `long_context_raw_first` | `balanced` | 否 |
@@ -283,12 +283,12 @@ daily_stock_analysis/
 | `ANSPIRE_API_KEYS` | [Anspire](https://open.anspire.cn/dsa?share_code=QFBC0FYC) API Key，一 Key 同时启用大模型网关和搜索 | - | 可选 |
 | `AIHUBMIX_KEY` | [AIHubmix](https://inferera.com/?aff=CfMq) API Key，一 Key 切换使用全系模型，无需额外配置 Base URL | - | 可选 |
 | `GEMINI_API_KEY` | Google Gemini API Key | - | 可选 |
-| `GEMINI_MODEL` | 主模型名称（legacy，`LITELLM_MODEL` 优先） | `gemini-3.1-pro-preview` | 否 |
-| `GEMINI_MODEL_FALLBACK` | 备选模型（legacy） | `gemini-3-flash-preview` | 否 |
+| `GEMINI_MODEL` | 主模型名称（legacy，`LITELLM_MODEL` 优先） | `gemini-3.6-flash` | 否 |
+| `GEMINI_MODEL_FALLBACK` | 备选模型（legacy） | `gemini-3.5-flash-lite` | 否 |
 | `OPENAI_API_KEY` | OpenAI 兼容 API Key | - | 可选 |
 | `OPENAI_BASE_URL` | OpenAI 兼容 API 地址 | - | 可选 |
 | `OLLAMA_API_BASE` | Ollama 本地服务地址（如 `http://localhost:11434`），详见 [LLM 配置指南](LLM_CONFIG_GUIDE.md) | - | 可选 |
-| `OPENAI_MODEL` | OpenAI 模型名称（legacy，AIHubmix 用户可填如 `gemini-3.1-pro-preview`、`gpt-5.5`） | `gpt-5.5` | 可选 |
+| `OPENAI_MODEL` | OpenAI 模型名称（legacy，AIHubmix 用户可填如 `gemini-3.6-flash`、`gpt-6.1-sol`） | `gpt-6.1-sol` | 可选 |
 | `ANTHROPIC_API_KEY` | Anthropic Claude API Key | - | 可选 |
 | `ANTHROPIC_MODEL` | Claude 模型名称 | `claude-sonnet-4-6` | 可选 |
 | `ANTHROPIC_TEMPERATURE` | Claude 温度参数（0.0-1.0） | `0.7` | 可选 |
@@ -302,7 +302,7 @@ daily_stock_analysis/
 
 > 问股 single-agent 路径会在后台为 DeepSeek V4 thinking + tool-call 保存最近 3 条 provider trace，并按原时序回放 `reasoning_content` / tool 结果；该能力不新增配置项，不进入 Web 历史 API，Claude extended thinking 仅覆盖离线 plumbing，multi-agent trace 注入留作后续增强。
 
-> `AGENT_BACKEND=codex_app_server` 是仅作用于现有问股 Chat 的实验入口：需在运行 DSA 的设备安装并登录 Codex，Web 路径为「设置 → Agent 设置 → 问股生成方式」，选择后保持 `AGENT_ARCH=single`，并设置大于 0 的整体时限。设置页只检查配置、Codex 命令和所需协议是否允许尝试，不登录、不调用模型或读取股票数据；保存后可直接提问，第一次问题就是第一次真实执行。Codex 当前只能读取已保存的分析上下文和回测汇总；实时行情、新闻、市场热点、技术指标重算、个股回测明细和持仓工具请改用「默认模型」。点击停止后，页面会显示“正在停止”；只有 Codex 与本轮工具任务均已退出，才显示最终“已停止”。它当前支持 macOS、Linux 和完整运行于 WSL 的 DSA 后端，暂不支持原生 Windows；Phase 2 `codex_cli` 生成能力不受影响。它不支持 Codex Multi Agent / Codex Deep Research，也不改变现有 LiteLLM Multi Agent、Deep Research、普通报告或定时任务。Codex 不是离线模型，股票问题和脱敏工具结果可能由 Codex 配置的服务处理；DSA 不读取或保存 Codex 凭据。Docker、远程服务器和 Desktop 必须分别保证其后端进程 PATH 可见 Codex。详见 [LLM 配置指南](LLM_CONFIG_GUIDE.md#codex-本地-agentphase-6-实验原型)。
+> Codex App Server 问股后端已移除。`AGENT_BACKEND` 仅支持 `auto`（推荐，保持默认 LiteLLM）或 `litellm`。旧 `codex_app_server` 可加载、显示和导出，但执行请求在准备与接受提交前返回 `backend_removed`，不会自动切换模型、账号或 provider。请在「设置 → Agent 设置 → 问股生成方式」主动选择合法值并保存；已有旧值不阻止无关设置保存，显式保存或导入旧值则拒绝且不部分写入。状态与草稿预览只检查配置，不启动 Codex 命令或 schema/version 探针，也不调用模型。历史会话、股票身份、Skill、单/多 Agent 与 provider trace 保持原契约。独立 `GENERATION_BACKEND=codex_cli` 普通报告及其他 generation-only 不受此移除影响，仍需各自 CLI 及其原有依赖。
 
 ### 通知渠道配置
 
@@ -499,6 +499,12 @@ daily_stock_analysis/
 | `ADMIN_AUTH_ENABLED` | Web 登录：设为 `true` 启用密码保护；首次访问在网页设置初始密码，可在「系统设置 > 修改密码」修改；忘记密码执行 `python -m src.auth reset_password`。Web 的 `.env` 备份导入导出仅在开启该开关后可用（桌面端不受此限制）。 | `false` |
 | `TRUST_X_FORWARDED_FOR` | 单层可信反向代理部署时设为 `true`，取 `X-Forwarded-For` 最右值作为真实客户端 IP（用于登录限流等）；直连公网时保持 `false` 防伪造。多级代理/CDN 场景下限流 key 可能退化为边缘代理 IP，需额外评估 | `false` |
 | `MAX_WORKERS` | 并发线程数 | `3` |
+| `GUARD_ENABLED` | 启用可选的 [fastapi-guard](https://github.com/Guard-Core/fastapi-guard) 安全中间件：按 IP 限流、IP 白/黑名单、路径/查询参数/请求头特征拦截（除 `ssrf` 外的全部检测类别：浏览器会把页面地址作为 `Referer` 发送，而 guard-core 4.4.0 会把其中的 localhost 和局域网地址判为 ssrf）、扫描器自动封禁。与登录失败限流叠加而非替代；状态在进程内存中，无需 Redis；修改后需重启。CORS 仍由原 CORS 中间件处理（位于 guard 外层，429/403 也带 CORS 头）。需要依赖 `fastapi-guard`（已在 `requirements.txt`，未安装时启用会报错） | `false` |
+| `GUARD_RATE_LIMIT` / `GUARD_RATE_LIMIT_WINDOW` | 每个 IP 在窗口（秒）内的最大请求数，静态资源与健康检查同样计数，冷缓存加载一个 WebUI 页面约 14 至 34 个请求 | `300` / `60` |
+| `GUARD_WHITELIST` / `GUARD_BLACKLIST` | IP 白/黑名单（逗号分隔，支持 CIDR）。白名单非空时，名单外 IP 一律 403；名单内 IP 不受限流约束 | 空 |
+| `GUARD_TRUSTED_PROXIES` | 仅在 `TRUST_X_FORWARDED_FOR=true` 时生效：可信反向代理地址，默认仅本机回环。只有来自这些地址的连接才采信 `X-Forwarded-For` 最右值，其它来源伪造的该首部被忽略（登录限流的 `get_client_ip()` 同样取最右值，但不校验代理来源）；`TRUST_X_FORWARDED_FOR` 为 `false` 时一律使用 TCP 对端地址。启用 guard 后，内置启动入口（`main.py`、`server.py`、`webui.py`）让 Uvicorn 只信任同一组代理，`TRUST_X_FORWARDED_FOR=false` 时关闭 Uvicorn 的代理头处理，因此反向代理后部署请设 `TRUST_X_FORWARDED_FOR=true`；启用 guard 且 `TRUST_X_FORWARDED_FOR=false` 时 Uvicorn 的代理头处理被关闭，HTTPS 反向代理后登录 cookie 会不带 `Secure` 标志（`_cookie_params()` 读取的是 `request.url.scheme`），因此 HTTPS 代理后请设 `TRUST_X_FORWARDED_FOR=true`；自行用 `uvicorn` 命令启动时，请让 `FORWARDED_ALLOW_IPS` 与本项一致或加 `--no-proxy-headers`。Docker 中代理不在回环时请填代理地址，否则所有用户会共用同一个限流 key | `127.0.0.1,::1` |
+| `GUARD_SCAN_BODY` | 是否同时扫描请求体（默认只检查路径、查询参数和请求头） | `false` |
+| `GUARD_PASSIVE_MODE` | 仅记录日志不拦截，便于先观察 | `false` |
 | `MARKET_REVIEW_ENABLED` | 启用大盘复盘 | `true` |
 | `DAILY_MARKET_CONTEXT_ENABLED` | 将当日大盘环境摘要注入个股分析 Prompt，并在高风险/退潮环境下软化激进买入建议；默认开启，设为 `false` 后仍可运行大盘复盘 | `true` |
 | `MARKET_REVIEW_REGION` | 大盘复盘市场区域：cn(A股)、hk(港股)、us(美股)、jp(日股)、kr(韩股)、both(五市场)，us/jp/kr 适合仅关注单区域用户 | `cn` |
@@ -906,6 +912,7 @@ python main.py --schedule --no-run-immediately
 | `DSA_RUNTIME_SCHEDULER_TIMEOUT_SECONDS` | Web/API runtime scheduler 单次分析硬超时（秒，最小 60 秒） | `2700` | `3600` |
 | `DSA_TIMEOUT_PARTIAL_NOTIFY` | **默认开启（行为变化）**：硬超时后是否推送已落库个股的部分完成通知；此前超时不推送 | `true` | `false` |
 | `SCHEDULE_RUN_IMMEDIATELY` | 定时模式启动时是否立即运行一次；未显式设置时沿用 `RUN_IMMEDIATELY` 的运行时覆盖语义 | `true` | `false` |
+| `SCHEDULE_STARTUP_DEDUP` | 定时模式启动立即执行的当日去重：当天已有成功且覆盖当前应分析清单的全量分析记录（日期 + scope=full + 覆盖面子集判定；标记位于 `DATABASE_PATH` 所在目录，默认 `data/analysis_run_state.json`）时跳过本次启动补跑；每日定时任务与手动/API/GitHub Actions 触发永不去重；标记缺失、损坏、schema 未知或覆盖不全一律放行执行（fail-open），v1 旧标记同样放行一次以完成升级；股票清单指纹仅作观测、不参与判定；大盘复盘完成度仅记录、不参与判定 | `true` | `false` |
 | `RUN_IMMEDIATELY` | 非定时模式启动时是否立即运行一次；同时作为未显式设置 `SCHEDULE_RUN_IMMEDIATELY` 时的 legacy 回退 | `true` | `false` |
 | `TRADING_DAY_CHECK_ENABLED` | 交易日检查：非交易日跳过执行；设为 `false` 可强制执行 | `true` | `false` |
 
@@ -1424,6 +1431,12 @@ PUSHOVER_API_TOKEN=your_api_token
 
 ## 高级功能
 
+### 深度研究的阶段预算与超时诊断
+
+`/research` 和 `/api/v1/agent/research` 使用 `AGENT_DEEP_RESEARCH_TIMEOUT` 作为整体研究预算。规划阶段的单次模型调用上限仍为 15 秒，报告合成上限为 120 秒；两者都会被剩余整体预算进一步限制。提高整体预算不等于每个阶段都能使用全部剩余时间，SDK 的网络重试也不代表严格的墙钟终止保证。
+
+阶段或 provider 超时会保留阶段、实际累计耗时、整体预算和原始原因，不再将阶段失败误报为整体预算已耗尽。`ResearchResult.timed_out` 继续表示阶段/provider 或整体 deadline 超时，调用方应结合 `error` 判断；HTTP 研究响应结构不变，失败时保留已知的 `token_usage`，该值不包含失败调用未返回的用量。超时仍返回 `success=false`，不会将失败材料冒充完整报告。
+
 ### 港股支持
 
 使用 `hk` 前缀指定港股代码：
@@ -1445,13 +1458,13 @@ STOCK_LIST=600519,hk00700,hk01810
 ```bash
 # Gemini（主力）
 GEMINI_API_KEY=xxx
-GEMINI_MODEL=gemini-3.1-pro-preview
+GEMINI_MODEL=gemini-3.6-flash
 
 # OpenAI 兼容（备选）
 OPENAI_API_KEY=xxx
 OPENAI_BASE_URL=https://api.deepseek.com
 OPENAI_MODEL=deepseek-v4-flash
-# deepseek-chat / deepseek-reasoner 仍兼容，但官方已标记为 2026/07/24 后废弃
+# deepseek-chat / deepseek-reasoner 已被官方公告于 2026/07/24 停用，请迁移
 ```
 
 ### 高级模型路由（底层由 LiteLLM 驱动）
@@ -1465,11 +1478,11 @@ OPENAI_MODEL=deepseek-v4-flash
 ```env
 # 主模型：3 个 Gemini Key 轮换，任一 429 时 Router 自动切换下一个 Key
 GEMINI_API_KEYS=key1,key2,key3
-LITELLM_MODEL=gemini/gemini-3.1-pro-preview
+LITELLM_MODEL=gemini/gemini-3.6-flash
 
 # 跨模型降级：主模型全部 Key 均失败时，按序尝试 Claude → GPT
 # 需配置对应 API Key：ANTHROPIC_API_KEY、OPENAI_API_KEY
-LITELLM_FALLBACK_MODELS=anthropic/claude-sonnet-4-6,openai/gpt-5.4-mini
+LITELLM_FALLBACK_MODELS=anthropic/claude-sonnet-4-6,openai/gpt-6.1-terra
 ```
 
 **预期行为**：首次请求用 `key1`；若 429，Router 下次用 `key2`；若 3 个 Key 均不可用，则切换到 Claude，再失败则切换到 GPT。
@@ -1494,7 +1507,7 @@ LITELLM_FALLBACK_MODELS=anthropic/claude-sonnet-4-6,openai/gpt-5.4-mini
 
 - **模型优先级**：`VISION_MODEL` > `LITELLM_MODEL` > 根据已有 API Key 推断（`OPENAI_VISION_MODEL` 已废弃，请改用 `VISION_MODEL`）
 - **Provider 回退**：主模型失败时，按 `VISION_PROVIDER_PRIORITY`（默认 `gemini,anthropic,openai`）自动切换到下一个可用 provider
-- **主模型不支持 Vision 时**：若主模型为 DeepSeek 等非 Vision 模型，可显式配置 `VISION_MODEL=openai/gpt-5.5` 或 `gemini/gemini-3.1-pro-preview` 供图片提取使用
+- **主模型不支持 Vision 时**：若主模型为 DeepSeek 等非 Vision 模型，可显式配置 `VISION_MODEL=openai/gpt-6.1-sol` 或 `gemini/gemini-3.6-flash` 供图片提取使用
 - **配置校验**：若配置了 `VISION_MODEL` 但未配置对应 provider 的 API Key，启动时会输出 warning，图片提取功能将不可用
 
 ### 调试模式
@@ -1870,6 +1883,8 @@ A: AkShare 使用爬虫机制，可能被临时限流。系统已配置重试机
 ### Q: 如何添加自选股？
 A: 修改 `STOCK_LIST` 环境变量，多个代码推荐用英文逗号分隔。系统也会识别中文逗号、顿号、分号、空格和换行，并在 Web 设置页保存或自选增删后规范为英文逗号。
 
+自选增删及仅保存 `STOCK_LIST` 时，只热更新股票列表，保留其他运行时配置和容器环境覆盖。部分配置保存不会被已有的无关 LLM 渠道或模型选择错误阻断；修改模型、渠道、路由文件或相关凭据时仍会检查整个模型依赖关系。凡本次保存会启用 Agent 路径的也同样检查：把 `AGENT_BACKEND` / `AGENT_GENERATION_BACKEND` 切到 LiteLLM（含 `auto`）、设 `AGENT_MODE=true`、或配置非 `all` 的 `AGENT_SKILLS`——后两者走普通分析的 Agent 分支，自带 `LLMToolAdapter`，不受 `AGENT_BACKEND` 决定。仅关闭 `AGENT_MODE`、将 `AGENT_SKILLS` 设为 `all` 或空值、以及无关键保存不受 LLM 配置影响。已有的退役 `codex_app_server` 配置可保留，不阻断无关保存；显式保存或导入该退役值仍会被拒绝。已有模型错误需要另行修正，保存自选成功不代表模型配置有效。
+
 ### Q: GitHub Actions 没有执行？
 A: 检查是否启用了 Actions，以及 cron 表达式是否正确（注意是 UTC 时间）。
 
@@ -1958,7 +1973,7 @@ worker 会把 `triggered`、`skipped`、`degraded`、`failed` 写入 `alert_trig
 - 持仓快照的 `positions[]` 会返回 `price_source`、`price_date`、`price_stale`、`price_available` 等价格元信息；当天快照默认会先尝试实时行情，实时价不可用或非正值时再回退到 `as_of` 当天或之前最近的历史收盘价；传入 `include_realtime=false` 时会跳过实时行情并直接使用本地历史收盘价回退路径，Web 持仓页用该模式优先渲染持仓列表，避免外部实时行情源变慢时阻塞首屏。历史 `as_of` 快照不会拉取实时价，也不会再把成本价静默当作现价；缺价持仓会标记 `price_available=false` 并从市值与未实现盈亏汇总中排除。
 - 汇率刷新会先尝试在线源；若在线获取失败，则回退到最近一次缓存并标记 `is_stale=true`，避免快照和风险页整体不可用。
 - 当 `PORTFOLIO_FX_UPDATE_ENABLED=false` 时，手动刷新接口会明确返回“在线刷新已禁用”，页面不会误导为“当前没有可刷新的汇率对”。
-- 风险摘要包含集中度、回撤、止损接近度等信息；`sector_concentration` 会优先尝试按板块归类，失败时降级到 `UNCLASSIFIED`，不会阻断风险结果返回。
+- 风险摘要包含集中度、回撤、止损接近度等信息；`sector_concentration` 会优先尝试按板块归类，失败时降级到 `UNCLASSIFIED`，不会阻断风险结果返回。成功获取的所属板块会按股票代码在进程内缓存 24 小时，重复打开持仓页时不再逐只重新请求数据源；获取失败或为空的结果不缓存，下次请求会重试。
 
 ### Agent 读取持仓
 

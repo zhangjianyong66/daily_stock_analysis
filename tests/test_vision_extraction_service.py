@@ -10,6 +10,7 @@ from src.config import Config
 from src.services.vision_extraction_service import (
     MAX_SIZE_BYTES,
     VISION_API_TIMEOUT,
+    VisionExtractionError,
     complete_vision,
     extract_vision_responses_text,
     resolve_vision_model,
@@ -413,3 +414,28 @@ def test_complete_vision_redacts_channel_extra_header_values(caplog) -> None:
     combined = f"{exc_info.value}\n{caplog.text}"
     assert header_secret not in combined
     assert "[REDACTED]" in combined
+
+
+@pytest.mark.parametrize("api_mode", ["chat_completions", "responses"])
+@pytest.mark.parametrize("api_base, allowed", [("http://127.0.0.1:8642/v1", True), ("https://relay.example/v1", False)])
+def test_keyless_vision_route_obeys_channel_endpoint_policy(api_mode, api_base, allowed) -> None:
+    cfg = _route_config(api_mode=api_mode)
+    params = cfg.llm_model_list[0]["litellm_params"]
+    params.pop("api_key")
+    params["api_base"] = api_base
+    router = MagicMock()
+    router.responses.return_value = {"output_text": "[]"}
+    router.completion.return_value = {"choices": [{"message": {"content": "[]"}}]}
+    module = SimpleNamespace(Router=MagicMock(return_value=router), completion=MagicMock())
+    if allowed:
+        assert complete_vision(_image_bytes("image/jpeg"), "image/jpeg", "return []",
+                               _config=cfg, _completion_module=module) == "[]"
+        module.Router.assert_called_once()
+        assert "api_key" not in module.Router.call_args.kwargs["model_list"][0]["litellm_params"]
+    else:
+        with pytest.raises(VisionExtractionError) as error:
+            complete_vision(_image_bytes("image/jpeg"), "image/jpeg", "return []",
+                            _config=cfg, _completion_module=module)
+        assert error.value.code == "vision_not_configured"
+        module.Router.assert_not_called()
+    module.completion.assert_not_called()

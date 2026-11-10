@@ -15,6 +15,7 @@ from src.config import (
     VISION_API_MODE_RESPONSES,
     Config,
     extra_litellm_params,
+    channel_allows_empty_api_key,
     get_config,
     get_exact_llm_route_deployments,
 )
@@ -116,6 +117,17 @@ def get_vision_api_keys(model: str, config: Config) -> List[str]:
     return list(dict.fromkeys(
         key for key in [*deployment_keys, *keys] if key and len(key) >= 8
     ))
+
+
+def _has_keyless_vision_deployment(deployments: Sequence[Dict[str, Any]]) -> bool:
+    """Reuse channel policy for explicitly configured local endpoints."""
+    for deployment in deployments:
+        params = deployment.get("litellm_params") or {}
+        wire_model = str(params.get("model") or "").strip()
+        protocol = wire_model.split("/", 1)[0] if "/" in wire_model else None
+        if not params.get("api_key") and channel_allows_empty_api_key(protocol, params.get("api_base")):
+            return True
+    return False
 
 
 def _load_litellm():
@@ -247,12 +259,12 @@ def _call_vision_once(
             "VISION_API_MODE=responses 需要 VISION_MODEL 精确匹配一个 LLM Channel route。",
             code="vision_not_configured",
         )
-    if not keys:
+    if not keys and not _has_keyless_vision_deployment(deployments):
         raise VisionExtractionError(
             f"No API key found for vision model {model}",
             code="vision_not_configured",
         )
-    key = api_key if api_key and api_key in keys else random.choice(keys)
+    key = (api_key if api_key and api_key in keys else random.choice(keys)) if keys else None
 
     data_url = f"data:{mime_type};base64,{image_b64}"
     timeout = timeout_seconds if timeout_seconds is not None else VISION_API_TIMEOUT
@@ -333,7 +345,7 @@ def complete_vision(
             "VISION_API_MODE=responses 需要 VISION_MODEL 精确匹配一个 LLM Channel route。",
             code="vision_not_configured",
         )
-    if not get_vision_api_keys(model, cfg):
+    if not get_vision_api_keys(model, cfg) and not _has_keyless_vision_deployment(deployments):
         raise VisionExtractionError(
             f"No API key found for vision model {model}",
             code="vision_not_configured",

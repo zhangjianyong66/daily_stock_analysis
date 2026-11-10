@@ -241,6 +241,7 @@ def test_multi_agent_keeps_auto_match_fallback_fixed(monkeypatch):
 def test_orchestrator_records_auto_routing_and_strategy_degradation():
     orchestrator = object.__new__(AgentOrchestrator)
     orchestrator.config = SimpleNamespace(agent_skill_routing="auto")
+    orchestrator.fixed_default_skills = None
     orchestrator.skill_manager = _skill_manager()
     orchestrator.strategy_execution = build_strategy_execution_snapshot(
         effective=[{"id": "bull_trend", "display_name": "默认多头趋势"}],

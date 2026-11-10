@@ -5,7 +5,7 @@
 ===================================
 
 从截图/图片中提取股票代码，使用 Vision LLM。
-优先级：Gemini -> Anthropic -> OpenAI（首个可用）。
+仅使用显式配置的 Vision 模型，复用共享 Vision 服务。
 """
 
 from __future__ import annotations
@@ -209,8 +209,8 @@ def extract_stock_codes_from_image(
     """
     从图片中提取股票代码及名称（使用 Vision LLM）。
 
-    优先级：Gemini -> Anthropic -> OpenAI（首个可用）。
-    支持多 Key 轮询与重试（最多 3 次，指数退避）。
+    仅使用显式配置的 Vision 模型，复用共享 Vision 服务。
+    瞬时网络错误最多尝试 2 次；协议与路由由共享 Vision 服务统一处理。
 
     Args:
         image_bytes: 原始图片字节
