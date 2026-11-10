@@ -27,7 +27,8 @@
 | Python/TypeScript 风格、测试要求、文档同步 | [Quality Guidelines](./quality-guidelines.md) |
 | SQLite / SQLAlchemy / 仓储层改动 | [Database Guidelines](./database-guidelines.md) |
 | 搜索供应商调用审计、余额告警、用量 API / Web 联动 | [Search Usage Audit](./search-usage-audit.md) |
-| API 错误、异常传播、fallback 语义 | [Error Handling](./error-handling.md) |
+| 大盘/ETF/普通股票综合搜索、可信准入、缓存、隔离 | [Search Intelligence](./search-intelligence.md) |
+| API 错误、异常传播、实时行情路由/超时/hedge/stale、fallback | [Error Handling](./error-handling.md) |
 | 日志初始化、级别、敏感信息 | [Logging Guidelines](./logging-guidelines.md) |
 | 分析实际策略快照、历史/API/Web/报告跨层契约 | [Strategy Execution](./strategy-execution.md) |
 | 日线形态快照、策略推荐及跨层读取契约 | [Kline Pattern Report](./kline-pattern-report.md) |
@@ -41,14 +42,14 @@
 - 先查现有实现、测试、脚本和文档，再新增实现；不要创建平行模块来绕开现有层次。
 - 新配置项必须同步 `.env.example` 和相关文档。
 - 用户可见行为、CLI/API、部署、通知、报告结构、Web UI 变化必须同步 `docs/CHANGELOG.md` 的 `[Unreleased]` 扁平条目。
-- 修改 AI 协作治理资产时执行 `python scripts/check_ai_assets.py`。
+- 修改 AI 协作治理资产（包括 `.agents/skills/`）时执行 `python3 scripts/check_ai_assets.py`。
 - 未经明确确认，不执行 `git commit`、`git tag`、`git push`。
 
 ## 常用验证入口
 
-- 后端完整本地门禁：`./scripts/ci_gate.sh`
+- 后端默认本地验证：改动文件语法检查和覆盖直接上下游的定向 pytest；完整 `./scripts/ci_gate.sh` 默认由 CI 执行，本地执行须用户明确要求或同意。
 - 后端最低语法检查：`python -m py_compile <changed_python_files>`
-- 离线测试：`python -m pytest -m "not network"`
+- 定向离线测试：`python -m pytest <affected_test_files> -m "not network"`
 - Web：`cd apps/dsa-web && npm ci && npm run lint && npm run build`
 - Desktop：先构建 Web 和后端产物，再在 `apps/dsa-desktop` 执行 `npm install && npm run build`
 

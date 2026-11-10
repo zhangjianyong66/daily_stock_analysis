@@ -31,8 +31,9 @@
 ### 3.1 上传、任务与恢复
 
 - 只支持活跃 `cn/CNY` 账户、6 位证券代码、每批 1-5 张 JPEG/PNG/WebP/GIF，单文件最大 5MB。
+- 成交增量只接受实际成交记录。
 - 新任务上传只完成账户、日期、数量、MIME、大小和魔数校验，快速返回 HTTP 202；Vision 不占用原始 HTTP 请求。
-- 全服务全局只有一个阻塞槽，持仓/成交和所有账户共享。阻塞状态：`pending/processing/cancel_requested/review_required/committing`。
+- 图片识别使用进程内单 worker，全服务全局只有一个阻塞槽，持仓/成交和所有账户共享。阻塞状态：`pending/processing/cancel_requested/review_required/committing`。
 - 重复提交返回 HTTP 409 `portfolio_image_task_active`、`existing_task_id/existing_status`，不得启动第二次 Vision。
 - 正常状态：`pending -> processing -> review_required -> committing -> committed(清除)`；全部文件失败进入 `failed`。
 - `review_required` 表示识别完成但未写账本，不按时间过期。确认导入或放弃后清除；服务重启自然丢失任务、草稿和槽位。
@@ -40,6 +41,7 @@
 
 ### 3.2 Vision 预算、顺序与取消
 
+- Hermes Vision 尚未验证，不以兼容声明代替真实验证。
 - Vision 只使用显式 `VISION_MODEL`，兼容废弃别名 `OPENAI_VISION_MODEL`；不得使用 `LITELLM_MODEL` 文本主模型顶替。
 - `VISION_API_MODE` 只允许 `chat_completions`（默认）或 `responses`。不得按域名/模型推断模式，不得跨协议 fallback 或重复发送同一图片。
 - LiteLLM Responses 的干净安装依赖 `requirements.txt` 显式声明 `orjson`；不得假设开发机虚拟环境或 LiteLLM 的非必选 extras 已经间接安装。`docker/Dockerfile` 必须在构建阶段执行 `import orjson`，让依赖漂移在镜像构建时失败，而不是在真实图片任务中失败。
@@ -69,7 +71,7 @@
 - 成交提交接受可空 `trade_time`、非负 `fee/tax` 和稳定 `occurrence_index`；客户端 fingerprint/hash 不可信。
 - 成交插入、账本重放、超卖校验和列表查询统一按 `trade_date -> known trade_time -> null -> stable order`。
 - 日志只记录 task_id、mode、account_id、文件序号、尝试、状态和低敏错误码；不得记录原图、base64、完整 prompt、模型响应、Key、Authorization 或 provider body。
-- deployment API Key 与 Extra Header 值必须进入异常脱敏集合；设置页 Vision 探针只使用不含业务数据、宽高至少 32px 的内置图片。
+- deployment API Key 与 Extra Header 值必须进入异常脱敏集合；设置页连接及 JSON/Tools/Stream/Vision 能力检测均携带渠道 Extra Headers，Vision 探针只使用不含业务数据的 32×32 内置空白图。
 - 客户端 Axios `ECONNABORTED` 必须与服务端 Vision timeout 分开提示。
 
 ## 4. Validation & Error Matrix
@@ -100,7 +102,7 @@
 - Good：从空缓存构建 Docker 镜像时，`requirements.txt` 安装 `orjson`，Dockerfile 导入检查通过，内置 32×32 探针可完成一次真实 Responses smoke。
 - Base：单图成功进入 review，确认提交后原子写入并清除 current task。
 - Base：未配置 `VISION_API_MODE` 时继续走 Chat Completions；没有匹配 route 时仍可使用既有 provider Key/Base URL。
-- Base：旧同步 parse 保持成功响应，但运行期间占用同一全局槽。
+- Base：旧同步 parse 标记 deprecated，保持成功响应，但运行期间占用同一全局槽。
 - Bad：Web 仍调用同步 parse 或为图片请求单纯放大 Axios timeout。
 - Bad：失败/取消后迟到 worker 覆盖终态，或 `review_required` 自动 TTL 清理。
 - Bad：草稿保存并发发送相同 revision，旧响应把后续编辑误标为已保存。
@@ -119,6 +121,7 @@
 - 必须覆盖：202、全局防重、状态转移、部分/全部失败、300 秒/两次尝试、错误重试矩阵、60 分钟 deadline、取消迟到结果、draft revision、两阶段 commit、旧 API 兼容、SSE 事件隔离。
 - Vision 协议测试必须断言：默认 Chat 兼容、精确 route、Router 内部 retry/fallback 关闭、Responses 请求形状、Mapping/对象文本提取、缺 route 零网络调用、空 output 不重试，以及 Key/Extra Header/provider body 脱敏。
 - 配置与部署测试必须断言：registry/API/Web snake-camel 往返、设置页所有能力测试透传 Extra Headers、32×32 低敏探针、`requirements.txt` 显式安装 `orjson`、Dockerfile 构建阶段可导入 `orjson`，以及 `.github/workflows/00-daily-analysis.yml` 同时引用 `vars.VISION_API_MODE` 和 `secrets.VISION_API_MODE`。
+- Web 定向回归：`cd apps/dsa-web && npm run test -- src/api/__tests__/error.test.ts src/api/__tests__/portfolio.test.ts src/components/portfolio/__tests__/PortfolioImageImportDialog.test.tsx src/pages/__tests__/PortfolioPage.test.tsx src/hooks/__tests__/useTaskStream.test.tsx src/utils/__tests__/portfolioFormat.test.ts`。
 - Web：API snake/camel 映射、任务恢复横幅、SSE 后 REST 刷新、关闭抽屉继续执行、草稿串行防抖保存、revision 冲突、取消/放弃/commit、服务重启提示。
 - 可视：桌面和 390px 移动视口验证任务横幅、文件进度、review 行和 footer；截图只作 PR 外部证据，不入库。
 

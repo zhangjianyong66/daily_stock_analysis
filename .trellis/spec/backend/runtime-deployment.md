@@ -43,7 +43,7 @@ uvicorn server:app --reload --host 0.0.0.0 --port 8000
 
 ## 后端验证
 
-完整后端门禁：
+本地默认按改动面运行语法检查和受影响 pytest，覆盖直接上下游；不机械执行全量离线测试。完整门禁由 CI 兜底，只有用户明确要求或同意后才在本地执行：
 
 ```bash
 ./scripts/ci_gate.sh
@@ -58,18 +58,18 @@ uvicorn server:app --reload --host 0.0.0.0 --port 8000
 ./scripts/ci_gate.sh offline-tests
 ```
 
-CI 中 `backend-gate` 实际执行：
+CI 的 `backend-tests` 分片实际执行下列检查，`backend-gate` 汇总分片结果：
 
 - `./scripts/ci_gate.sh syntax`
 - `./scripts/ci_gate.sh flake8`
 - `./scripts/ci_gate.sh deterministic`
 - `./scripts/ci_gate.sh offline-tests`
 
-最低本地检查：
+最低本地检查（将占位符替换为受影响文件）：
 
 ```bash
 python -m py_compile <changed_python_files>
-python -m pytest -m "not network"
+python -m pytest <affected_test_files> -m "not network"
 ```
 
 `scripts/test.sh` 还提供场景测试：
@@ -84,6 +84,12 @@ python -m pytest -m "not network"
 
 其中 `quick`、`dry-run`、行情/新闻/LLM 相关场景可能依赖网络和 API 配置；交付时要说明是否执行在线验证。
 
+## 隔离本地部署配置
+
+- 本机真实 `.env` 启用管理员认证或配置 LLM 路由时，LiteLLM 导入会自行读取仓库 `.env`，可能让离线 API/配置测试误报 401 或模型契约失败。需要隔离部署配置执行完整门禁时，使用：`tmp_env=$(mktemp); trap 'rm -f "$tmp_env"' EXIT; ENV_FILE="$tmp_env" LITELLM_MODE=PRODUCTION PATH="$PWD/.venv/bin:$PATH" ./scripts/ci_gate.sh`。
+
+该完整门禁命令仍受显式授权约束。普通定向测试可沿用相同 ENV_FILE/LITELLM_MODE 隔离方式；本机没有 python 命令时使用项目虚拟环境或 python3。
+
 ## Web 验证
 
 Web 工作目录是 `apps/dsa-web/`，要求 Node `>=20.19.0 <27`、npm `>=10`。
@@ -96,7 +102,7 @@ npm run build
 npm run test
 ```
 
-CI 的 `web-gate` 只在 `apps/dsa-web/**` 变更时触发，并执行 `npm ci`、`npm run lint`、`npm run build`。
+CI 的 `web-gate` 按 `changes` 的前端代码过滤结果触发（排除纯 Markdown），执行 `npm ci`、lint、build、默认 smoke 和确定性 UI fixtures，并上传 UI 证据。
 
 ## 股票自动补全索引
 
@@ -147,6 +153,16 @@ docker-compose -f ./docker/docker-compose.yml exec -u dsa stock-analyzer python 
 
 不要把 `../.env` 作为单文件 volume 挂载到 `/app/.env`，否则会破坏配置保存时的原子替换。Compose 使用 `env_file` 加载 `.env`。
 
+## Docker 构建与运行代理
+
+以下默认值属于现有脚本行为，使用前检查脚本与显式环境覆盖值。
+
+- Docker Compose 的 `server` 端口优先使用 `.env` 中的 `WEBUI_PORT`；旧部署仍可通过 `API_PORT` 兼容覆盖。排查 8000 端口冲突时，先确认 `WEBUI_PORT`、`API_PORT` 与 `docker-compose config` 渲染结果是否一致。
+- `scripts/docker-up.sh` 当前默认设置 `DOCKER_BUILD_NETWORK=host`、`DOCKER_BUILD_HTTPS_PROXY=http://127.0.0.1:7890`、空 `DOCKER_BUILD_HTTP_PROXY` / `DOCKER_BUILD_http_proxy`，并把 Debian apt 源切到清华 HTTPS 镜像。代理默认值以脚本中的 `DEFAULT_DOCKER_BUILD_PROXY` 为准，不能据此假设本机服务已监听。
+- `scripts/docker-up.sh` 仍会补齐宿主机 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 及小写同名变量，构建代理以脚本默认值为准；显式导出的 `DOCKER_BUILD_*`、`DEBIAN_APT_MIRROR`、`DEBIAN_SECURITY_APT_MIRROR` 优先级高于脚本默认值。
+- 如需覆盖构建网络，可显式执行：`DOCKER_BUILD_NETWORK=default ./scripts/docker-up.sh restart` 或 `DOCKER_BUILD_NETWORK=host ./scripts/docker-up.sh restart`。
+- 运行中的 Docker 容器不会自动继承宿主机系统代理；Linux bridge 网络下访问宿主机本地代理通常使用 `172.17.0.1:<端口>`，例如在 `.env` 中配置 `HTTP_PROXY=http://172.17.0.1:10808` / `HTTPS_PROXY=http://172.17.0.1:10808`，重启容器后生效。
+
 ## 场景：Docker 启动与搜索基础设施解耦
 
 - `scripts/docker-up.sh` 只操作显式的 `server` / `analyzer` 目标，不读取 `SEARCH_ROUTING_MODE`，不附加 SearXNG profile，也不隐式启动搜索容器。
@@ -166,6 +182,16 @@ docker-compose -f ./docker/docker-compose.yml exec -u dsa stock-analyzer python 
 - `.github/workflows/auto-tag.yml`、`create-release.yml`：版本和 Release。
 
 自动 tag 默认 opt-in：只有 commit title 含 `#patch`、`#minor`、`#major` 才触发版本号更新。
+
+## PR / CI 证据
+
+```bash
+gh pr view <pr_number>
+gh pr checks <pr_number>
+gh run view <run_id> --log-failed
+```
+
+已有对应 CI 证据可直接引用；缺失覆盖或本地环境差异需说明，不把定向测试描述为全量通过。`network-smoke` 和 `pr-review` 为非阻断观测/辅助项。
 
 ## 配置约定
 

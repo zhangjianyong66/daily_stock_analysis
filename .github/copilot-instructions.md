@@ -24,15 +24,17 @@ If any instruction in this file conflicts with `AGENTS.md`, follow `AGENTS.md`.
 
 ## Validation
 
-- Backend changes: prefer `./scripts/ci_gate.sh`; at minimum run `python -m py_compile` on changed Python files and the closest deterministic tests.
+- Backend changes: run `python -m py_compile` on changed Python files and targeted deterministic tests covering affected behavior and direct consumers. Full `./scripts/ci_gate.sh` is a CI responsibility by default; local execution requires the user's explicit request or agreement. Expand relevant tests for high-risk contracts; if impact remains unclear, explain the risk and obtain agreement before a local full run. Report actual coverage and gaps.
 - Web changes: run `cd apps/dsa-web && npm ci && npm run lint && npm run build`.
 - Desktop changes: build web first, then desktop if feasible.
 - Review work should prioritize CI evidence (`gh pr checks`, workflow logs) before re-running local validation.
-- AI governance changes: run `python scripts/check_ai_assets.py`.
+- AI governance changes (including `.agents/skills/`): run `python3 scripts/check_ai_assets.py`.
 
 ## AI Asset Governance
 
 - `AGENTS.md` is the single source of truth for repository AI collaboration rules.
 - `CLAUDE.md` must remain a symlink to `AGENTS.md`.
 - Use `.github/instructions/*.instructions.md` for path-specific guidance.
-- Current repository collaboration skills live in `.claude/skills/`; keep them aligned with `AGENTS.md`.
+- Project-owned collaboration skills live in `.claude/skills/`; keep them aligned with `AGENTS.md`.
+- mini-trellis installs managed skills under `.claude/skills/mini-trellis-*/` and `.agents/skills/mini-trellis-*/`. The tool and its manifest own generated copies; preview updates with `mini-trellis refresh --dry-run`, rather than maintaining platform copies manually.
+- mini-trellis is a memory layer, not a task workflow. Keep `session_auto_commit: false`; local hooks, runtime state and backups remain local artifacts.

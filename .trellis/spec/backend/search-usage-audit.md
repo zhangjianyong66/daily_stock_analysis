@@ -34,16 +34,10 @@
 
 ## 3. Contracts
 
+- 所有搜索 provider 的网络出口必须经过 `src/services/search_request_audit_service.py`；新增或替换 SDK 必须证明每次物理请求可被观察，不能仅在逻辑 `SearchResponse` 返回层补记录。
 - 计数真源是物理网络请求。自动重试、备用 Key、provider fallback 和 SearXNG 多实例尝试必须逐次记录；缓存、数据库读取、本地过滤、文章正文补抓和公共实例目录刷新不计数。
 - 显式配置的 SearXNG 是独立审计边界：DSA → SearXNG 的一次 `/search` 记一条 `search_api_calls`；SearXNG 内部引擎扇出不逐条导入 DSA 数据库。仓库不内置或自动启动私有 SearXNG。
-- 单市场大盘复盘必须按 profile 顺序去重并合并三个主题，只执行一次 `search_stock_news(call_source="market_review", max_results=6)`；Provider 候选上限为 12。失败或成功空结果都不得追加隐式查询。
-- ETF 综合情报在 Anspire 可用时按 `fresh_events` / `analysis` 两个逻辑组调用，冷启动最多两次物理请求且禁用 transport retry；缓存命中、本地分流和可信准入不计数。任一组失败不得自动调用 SearXNG 或其他 Provider。
-- 非 ETF、`call_source=analysis` 的标准 Pipeline 在 Anspire 可用时按市场保留既有五维：A 股近期组为最新消息/风险/公告、分析组为机构分析/业绩；海外近期组为最新消息/风险、分析组为机构分析/业绩/行业。健康冷启动最多两次物理请求，固定 `top_k=18`、10 秒 timeout、禁用 transport retry。Anspire 成功但无可信数据不 fallback；只有物理失败的组按既有逻辑维度调用非 Anspire Provider，每次 fallback 继续逐次审计。`call_source=agent` 保持逐维请求。
-- ETF 与普通股票的已准入非空分组结果使用进程级共享缓存：近期 TTL 15 分钟、分析 TTL 6 小时。键必须区分路径类型、模板版本、股票身份、组、窗口、语言和启用维度；读取返回深拷贝。失败、空结果、`no_trusted_data` 和 Provider 原始响应不缓存。
-- 同键并发 miss 使用 singleflight：一个 owner 发出物理请求，等待者只读取 owner 写入的可信缓存；owner 失败、空结果或等待超时时，等待者本轮返回空且不立即重试。owner 必须在 `finally` 释放 event。缓存命中和 waiter 均不得新增 `search_api_calls`。
-- 同一 URL 在组内和跨组只能进入一个最具体维度；近期结果拒绝未知或超窗日期，分析结果保留未知日期但拒绝已知的 180 天窗外日期。
-- ETF 底层映射只接受股票索引中 `asset_type=etf` 的受控别名，或代码内白名单认可的无歧义名称词；不能把任意 `xxxETF` 去掉 `ETF` 后的 `xxx` 自动视为可信底层。未知名称必须降为 `generic_etf` 并关闭 `underlying_driver`。
-- `news_intel` 隔离是显式证据决策：`save_news_intel()` 遇到已隔离 URL 时不得更新内容、Provider 或解除隔离。只有 `rollback_news_intel_quarantine(batch=...)` 可以恢复该批次，避免其他 Provider 的 URL 碰撞复活旧污染标题。
+- 综合搜索分组、准入、共享缓存和隔离写入的唯一详细契约见[搜索情报](./search-intelligence.md)；缓存与等待命中不计物理请求。
 - 上层业务入口应传播 `business_search_id`、`logical_request_id`、`call_source`、股票和搜索维度；缺少上层上下文的 provider 直接调用使用 `call_source=direct`。
 - 物理请求完成后同步写入审计记录，再把供应商结果返回上层。审计写入 fail-open，不得改变搜索成功、失败或 fallback 结果，但必须记录低敏错误并暴露 audit gap。
 - 请求/响应先递归脱敏，再以明文 JSON 永久保存。请求上限 256 KiB，响应上限 2 MiB；超限保存预览、完整脱敏字节数和 SHA-256。
@@ -67,7 +61,7 @@
 | 非 ETF 标准 Pipeline Anspire 健康冷启动 | 最多新增 2 条，维度为 `fresh_events` / `analysis` |
 | 非 ETF Anspire 组成功但无可信结果 | 记录该次成功物理调用，不追加逐维 fallback |
 | 非 ETF Anspire 某组物理失败 | 仅该组的启用维度走非 Anspire fallback，真实请求逐次记录 |
-| Agent 六维综合搜索 | 保持既有逐维请求和 `call_source=agent` 语义 |
+| 非 ETF Agent 六维综合搜索 | 保持既有逐维请求和 `call_source=agent` 语义；ETF 使用两组综合请求 |
 | 无索引元数据的 `未知ETF` / 非白名单名称 | `generic_etf`，不开放底层驱动 |
 | 新 Provider 结果与已隔离 URL 相同 | 保持原记录隔离且内容不变，不自动恢复 |
 | 一次 DSA → 显式 SearXNG 聚合请求 | 新增 1 条 `SearXNG` 调用记录；内部引擎扇出不进入 DSA 表 |
@@ -113,7 +107,7 @@
 - 截断测试断言：请求 256 KiB、响应 2 MiB 边界，以及 preview、size、SHA-256 字段。
 - 持久化测试断言：旧数据库启动自动建表；同步写入发生在业务返回前；写入失败 fail-open 且 audit gap 可见。
 - ETF 准入测试断言：索引别名和受控名称规则可建立映射；任意/未知名称降为 `generic_etf`；普通价格涨跌复述和仅 URL 命中产品代码的内容拒绝。
-- 请求压缩测试断言：大盘只调用一次且 `max_results=6/top_k=12`；ETF 跨实例命中为 0 次、仅近期过期为 1 次；非 ETF Pipeline 五维健康路径为 2 次、成功空结果不 fallback、物理失败仅降级失败组；Agent 路径保持逐维调用。
+- 请求压缩测试断言：大盘只调用一次且 `max_results=6/top_k=12`；ETF 跨实例命中为 0 次、仅近期过期为 1 次；非 ETF Pipeline 五维健康路径为 2 次、成功空结果不 fallback、物理失败仅降级失败组；非 ETF Agent 路径保持逐维调用，ETF Agent 使用两组请求。
 - singleflight 测试断言：跨两个 `SearchService` 的同键并发冷启动每组只有一个 owner；成功 waiter 复用深拷贝，owner 失败时 waiter 不形成请求风暴，所有异常路径释放 inflight event。
 - 隔离测试断言：默认读取排除隔离记录；同 URL 的其他 Provider 写入不能修改或恢复隔离记录；只有显式批次 rollback 恢复可见。
 - 故障测试断言：立即故障、10 分钟连续 3 次、24 小时通知冷却、成功恢复、配置移除恢复和一次恢复通知。

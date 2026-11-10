@@ -127,6 +127,7 @@ Endpoint 应优先使用这些 helper。参考 `api/v1/endpoints/portfolio.py`�
 - singleflight 测试必须断言：并发 ETF 全量 cache miss 只调用一次 AkShare/efinance 上游，等待者复用结果或在自身预算内超时。
 - 跨层测试必须断言：ProviderRun 的 `route_source/physical_source/attempt/retry/budget_remaining_ms`，以及 quote 的 `available/fallback/stale/fetch_failed/missing` 映射和低敏摘要。
 - 配置测试必须断言：新增环境变量默认值、解析、registry help key 和前端 locale help key 一致。
+- 实时行情目标回归：`python3 -m pytest tests/test_realtime_types.py tests/test_realtime_quote_fallback_logging.py tests/test_akshare_realtime_quote.py tests/test_etf_realtime_singleflight.py tests/test_fetcher_source_optimization.py tests/test_hk_realtime_routing.py tests/test_tw_market_support.py tests/test_run_diagnostics_p1.py tests/test_analysis_context_builder.py tests/test_pipeline_market_phase_context.py -q`。
 
 ### 7. Wrong vs Correct
 

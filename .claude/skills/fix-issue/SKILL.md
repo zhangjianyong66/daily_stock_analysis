@@ -52,8 +52,8 @@ git pull --ff-only
 
 按 `AGENTS.md` 的验证矩阵执行最接近的检查：
 
-- 后端优先：`./scripts/ci_gate.sh`
-- 最低后端要求：`python -m py_compile <changed_python_files>`
+- 后端：`python -m py_compile <changed_python_files>` 和受影响的定向 pytest，覆盖直接上下游；高风险契约扩大相关回归。
+- 完整 `./scripts/ci_gate.sh` 默认由 CI 执行，本地仅在用户明确要求或同意后运行；影响范围仍不明确时先说明风险并征得同意，不把定向验证称为完整门禁通过。
 - 前端：`cd apps/dsa-web && npm ci && npm run lint && npm run build`
 - 桌面端：先构建 Web，再构建桌面端
 

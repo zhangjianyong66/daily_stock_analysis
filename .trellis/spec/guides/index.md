@@ -8,6 +8,7 @@
 | --- | --- |
 | [Code Reuse Thinking Guide](./code-reuse-thinking-guide.md) | 新增 helper、配置项、字段、payload 解析、重复逻辑前先读 |
 | [Cross-Layer Thinking Guide](./cross-layer-thinking-guide.md) | 改动跨 CLI/API/Web/Desktop/DB/Workflow/Docs 多层时先读 |
+| [Mini-Trellis Memory Layer](./mini-memory.md) | 回忆既有决定、整理专题知识或记录会话时读取 |
 
 ## 本项目触发点
 
@@ -27,4 +28,4 @@
 
 ## 使用方式
 
-开始改动前按任务选择阅读；发现指南中的 Trellis 通用示例与本仓库不一致时，以本仓库 `backend/` 规范、实际代码、脚本和 workflow 为准。
+开始改动前按任务选择阅读；指南不创建任务或要求旧工具命令。与项目行为不一致时，以 `AGENTS.md`、`backend/` 规范及核实后的代码、脚本和 workflow 为准。

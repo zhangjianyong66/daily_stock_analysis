@@ -22,6 +22,7 @@
 - 日流网络调用已有明确异常且无 payload 时使用 `failed`，不能伪装为 `not_supported`；本轮跳过同属 Eastmoney 的逐笔调用并记录 `intraday_skipped_after_daily_source_failure`。
 - 盘中只聚合供应商逐笔的买盘、卖盘和中性盘；手数乘 100，中性和未知方向不进入主动净流入。`intraday_flow` 必须标记 `scope=intraday`、`classification=vendor_classified`、`is_estimated=true`。
 - ETF 与其他标的一样进入通用分析和市场环境护栏。资金流可作为 Prompt 和通用稳定性校准的参考，但不得触发 ETF 专用状态机，强制修改评分、买卖动作、仓位、止损止盈或持有期限。
+- ETF 流动性信息仅用于限价单、滑点和折溢价风险提示，不升级为强制交易结论。
 - 不新增环境变量或密钥；资金流和盘中流单源失败保持 fail-open。
 
 ## 4. Validation & Error Matrix

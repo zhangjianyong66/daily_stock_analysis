@@ -51,14 +51,15 @@ const handleKeyDown = useCallback((event: KeyboardEvent) => {
 - `[Unreleased]` 使用扁平格式：`- [类型] 描述`，类型为 `新功能`、`改进`、`修复`、`文档`、`测试`、`chore`。
 - README 只放项目定位、核心能力、快速开始、主要入口、赞助/合作等首页级内容；细节优先写入 `docs/*.md`。
 - 修改中英双语文档之一时，要评估另一份是否同步；未同步要在交付说明中说明原因。
-- 修改 AI 协作治理资产时执行 `python scripts/check_ai_assets.py`。
+- 修改 AI 协作治理资产（包括 `.claude/skills/`、`.agents/skills/`）时执行 `python3 scripts/check_ai_assets.py`。
 
 ## 测试要求
 
 按改动面选择最接近的验证：
 
-- Python 后端：优先 `./scripts/ci_gate.sh`；最低 `python -m py_compile <changed_python_files>`。
-- 离线测试：`python -m pytest -m "not network"`。
+- Python 后端：最低 `python -m py_compile <changed_python_files>`，并运行受影响 pytest，覆盖直接上下游；高风险契约扩大相关回归。
+- 定向离线测试：`python -m pytest <affected_test_files> -m "not network"`。失败后先重跑失败及相关用例，通过后无新改动或疑点不重复扩大检查。
+- 完整 `./scripts/ci_gate.sh` 默认由 GitHub CI 兜底；本地仅在用户明确要求或同意后执行。影响范围无法判断时先说明风险并征得同意，不把定向测试称为完整门禁通过。
 - 数据源、网络、LLM、通知相关：先跑离线确定性检查；未执行在线验证时说明原因。
 - Web：`cd apps/dsa-web && npm ci && npm run lint && npm run build`。
 - Desktop：先构建 Web，再构建桌面；平台受限时说明未覆盖内容。

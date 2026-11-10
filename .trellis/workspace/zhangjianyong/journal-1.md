@@ -1173,3 +1173,24 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 39: mini-trellis 迁移规则收敛
+<!-- trellis-session: v=2 fp=6d96b7deaa7aff2b -->
+
+**Date**: 2026-11-10
+**Task**: mini-trellis 迁移规则收敛
+**Branch**: `main`
+
+### Summary
+
+精简 AGENTS.md 为 145 行，迁移专题契约和历史运维线索，同步跨平台技能归属与定向验证规则；治理检查及 8 个定向测试通过，保留既有卸载安装改动。
+Topics: [.trellis/research/mini-trellis-migration.md](../../research/mini-trellis-migration.md)
+
+### Git Commits
+
+(No commits - planning session)
+
+### Status
+
+[OK] **Completed**

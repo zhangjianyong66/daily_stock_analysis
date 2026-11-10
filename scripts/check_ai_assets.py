@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -97,6 +98,42 @@ def ensure_gitignore_rules() -> None:
             fail(f".gitignore is missing required AI asset rule: {snippet}")
 
 
+def ensure_mini_trellis_assets() -> None:
+    manifest_path = ROOT / ".trellis" / ".mini-trellis-manifest.json"
+    if not manifest_path.exists():
+        return
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError) as exc:
+        fail(f"cannot read mini-trellis manifest: {exc}")
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("files"), dict):
+        fail("mini-trellis manifest must contain a files object")
+
+    # Only shared skill assets are CI inputs; hooks and host configs remain local.
+    prefixes = (".claude/skills/", ".agents/skills/")
+    for relative_path in manifest["files"]:
+        if not relative_path.startswith(prefixes):
+            continue
+        path = ROOT / relative_path
+        skill_root = ROOT / next(prefix for prefix in prefixes if relative_path.startswith(prefix))
+        if not path.resolve().is_relative_to(skill_root.resolve()):
+            fail(f"mini-trellis skill path escapes its directory: {relative_path}")
+        if not path.is_file():
+            fail(f"missing mini-trellis skill asset: {relative_path}")
+
+    copilot = ROOT / ".github" / "copilot-instructions.md"
+    governance = ROOT / ".github" / "instructions" / "governance.instructions.md"
+    for path in (copilot, governance):
+        ensure_file_exists(path, "mini-trellis governance instructions")
+        content = path.read_text(encoding="utf-8")
+        if ".agents/skills/" not in content:
+            fail(f"{path.relative_to(ROOT)} must cover .agents/skills/")
+        if path == governance:
+            front_matter = content.split("---", 2)
+            if len(front_matter) < 3 or ".agents/skills/**" not in front_matter[1]:
+                fail("governance applyTo must cover .agents/skills/**")
+
+
 def ensure_no_tracked_claude_artifacts() -> None:
     result = subprocess.run(
         ["git", "ls-files", "--", ".claude"],
@@ -119,6 +156,7 @@ def main() -> None:
     ensure_instruction_files()
     ensure_skill_files()
     ensure_gitignore_rules()
+    ensure_mini_trellis_assets()
     ensure_no_tracked_claude_artifacts()
     print("[ai-assets] OK")
 
