@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 40
-- **Last Active**: 2026-11-10
+- **Total Sessions**: 42
+- **Last Active**: 2026-11-23
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1217 | Active |
+| `journal-1.md` | ~1259 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,8 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 42 | 2026-11-23 | 个股分析默认多头趋势 | - | `main` |
+| 41 | 2026-11-10 | 本机 Web/API 从 Docker 迁移为用户级 systemd | - | `main` |
 | 40 | 2026-11-10 | 合并上游 v3.34.0 并保留本地能力 | - | `main` |
 | 39 | 2026-11-10 | mini-trellis 迁移规则收敛 | - | `main` |
 | 38 | 2026-10-23 | 合并上游 v3.33.0 并部署 | `da246bb8` | `main` |

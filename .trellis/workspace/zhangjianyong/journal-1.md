@@ -1215,3 +1215,45 @@ Topics: [.trellis/spec/backend/portfolio-image-import.md](../../spec/backend/por
 ### Status
 
 [OK] **Completed**
+
+
+## Session 41: 本机 Web/API 从 Docker 迁移为用户级 systemd
+<!-- trellis-session: v=2 fp=42610510d2001280 -->
+
+**Date**: 2026-11-10
+**Task**: 本机 Web/API 从 Docker 迁移为用户级 systemd
+**Branch**: `main`
+
+### Summary
+
+用户确认使用当前 main 和用户级 systemd；已启用 stock-server.service，保留 8001 和原数据配置，完成受限目录备份、认证/API/静态资源及受控重启验证。旧容器停止且 restart=no。main.py 端口探测受 TIME_WAIT 影响，用户服务持续重试后恢复；未验证整机重启及付费外部调用。
+Topics: [.trellis/research/local-ecs2-operations.md](../../research/local-ecs2-operations.md)
+
+### Git Commits
+
+(No commits - planning session)
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 42: 个股分析默认多头趋势
+<!-- trellis-session: v=2 fp=fb97c8e4d71609a0 -->
+
+**Date**: 2026-11-23
+**Task**: 个股分析默认多头趋势
+**Branch**: `main`
+
+### Summary
+
+个股分析未指定策略时使用现有配置链，未配置采用多头趋势。首页将多头趋势排在首位，日 K 线自动匹配仅通过首页或 API 显式开启。
+Topics: [.trellis/spec/backend/strategy-execution.md](../../spec/backend/strategy-execution.md)
+
+### Git Commits
+
+(No commits - planning session)
+
+### Status
+
+[OK] **Completed**

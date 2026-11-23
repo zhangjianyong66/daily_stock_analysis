@@ -2,9 +2,21 @@
 
 ## 来源与时效
 
-2026-11-09 从 AGENTS.md 的“本机 / ECS2 当前部署备注”迁入；下列内容是旧文档记录，迁移时未查询真实 .env、容器、远程服务或证书状态。端口、路径、代理和域名必须在操作前重新核实，不能据此直接重启服务或执行管理员操作。
+2026-11-09 从 AGENTS.md 的“本机 / ECS2 当前部署备注”迁入；“历史记录”及“搜索配置历史”小节是旧文档记录，迁入时未查询真实 .env、容器、远程服务或证书状态。后续核验单独标注日期。端口、路径、代理和域名必须在操作前重新核实，不能据此直接重启服务或执行管理员操作。
 
 外部运维记录入口：`/home/zhangjianyong/project/server_environment/docs/ecs2-environment.md`；此处只保留本项目转发链路的历史线索，不替代该文档。
+
+## 本机 Docker 迁移为用户服务（2026-11-10 主机时间核验）
+
+- 用户确认使用当前本地代码和用户级 systemd。此次部署基于本地 HEAD `3fc2de94`，服务为 `stock-server.service`，unit 位于 `~/.config/systemd/user/stock-server.service`；后续操作前仍须核实当前状态。
+- unit 使用项目 `.venv/bin/python`（此次为 Python 3.12），在项目根目录运行 `main.py --serve-only --host 0.0.0.0 --port 8001`；应用通过 `ENV_FILE` 读取项目 `.env`，时区为 `Asia/Shanghai`，`WEBUI_AUTO_BUILD=false`，前端需在部署时预先构建。
+- 已执行用户级 enable，核实 `Linger=yes`；使用 `systemctl --user status/restart stock-server.service` 管理，使用 `journalctl --user -u stock-server.service -f` 查看日志。未重启主机验证开机行为。
+- 数据库、认证文件、日志和报告继续使用项目原目录；`~/.longbridge` 链接到项目 `longbridge_tokens`，复用原 Docker 挂载的 OAuth 缓存。此次未触发付费分析或通知，也未进行长桥在线认证验证。
+- 原 `stock-server` 容器已停止，restart policy 改为 `no`，容器及镜像保留。不要再通过 Docker 启动脚本启动它，否则会与本地服务争用端口。
+- 切换前配置、认证文件、OAuth 缓存、容器元数据和 SQLite backup API 生成的数据库备份位于 `~/.local/state/daily-stock-analysis/backups/20261110T052124Z/`，该目录含敏感信息，不得提交。SQLite 备份与迁移后数据库均通过 `quick_check`，35 张既有表的行数保持一致。
+- 已验证健康检查、首页及引用的静态资源、现有签名登录会话、未认证 API 返回 401、历史报告/持仓账户/设置读取及同值设置保存；配置值未变。Web 通过 npm 10 的安装、lint 和 build，lint 有一条既有 Hook 依赖警告。
+- 受控重启曾因服务器旧连接处于 `TIME_WAIT` 而触发 `main.py` 的端口探测失败：实测普通 bind 返回 EADDRINUSE，启用 SO_REUSEADDR 后可绑定。此次不修改业务代码；unit 设置 `StartLimitIntervalSec=0`、`Restart=on-failure`、`RestartSec=5`，等待连接释放后自动恢复健康，重启可能需要约一分钟。
+- 回滚先停止并禁用用户服务，再恢复旧容器 `unless-stopped` 策略并启动。回滚到旧代码前检查数据库兼容性；如需恢复切换前备份，先保存切换后的数据库和新增写入，不直接覆盖正在使用的数据。
 
 ## 历史记录（未重新验证）
 
