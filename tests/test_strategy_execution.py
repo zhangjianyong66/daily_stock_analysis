@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from api.v1.endpoints.analysis import _build_analysis_report
 from src.agent import factory
 from src.agent.orchestrator import AgentOrchestrator
@@ -236,6 +238,26 @@ def test_multi_agent_keeps_auto_match_fallback_fixed(monkeypatch):
     )
 
     assert captured["fixed_default_skills"] == ["bull_trend"]
+
+
+def test_stock_default_does_not_route_again_or_record_auto_source(monkeypatch):
+    from src.agent.skills.router import SkillRouter
+
+    monkeypatch.setattr(factory, "get_skill_manager", lambda _config: _skill_manager())
+    monkeypatch.setattr(factory, "get_tool_registry", lambda: object())
+    monkeypatch.setattr("src.agent.llm_adapter.LLMToolAdapter", lambda _config: object())
+    monkeypatch.setattr(SkillRouter, "_detect_regime", lambda *_args: pytest.fail("default tried to route again"))
+    config = SimpleNamespace(agent_arch="multi", agent_skill_routing="auto")
+    state = factory.resolve_skill_prompt_state(config)
+    executor = factory.build_agent_executor(config, prompt_state=state, pin_default_skills=True)
+    context = AgentContext(query="分析")
+
+    selected = SkillRouter(executor.fixed_default_skills).select_skills(context)
+    executor._record_routed_strategies(context, selected)
+
+    assert selected == ["bull_trend"]
+    assert context.meta["strategy_execution"]["source"] == "default"
+    assert "selection_context" not in context.meta["strategy_execution"]
 
 
 def test_orchestrator_records_auto_routing_and_strategy_degradation():

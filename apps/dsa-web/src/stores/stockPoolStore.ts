@@ -31,6 +31,7 @@ type SubmitAnalysisOptions = {
   notify?: boolean;
   forceRefresh?: boolean;
   skills?: string[];
+  autoMatch?: boolean;
   reportLanguage?: ReportLanguage;
 };
 
@@ -932,6 +933,7 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
         notify,
         forceRefresh,
         ...(skills !== undefined && { skills }),
+        ...(options?.autoMatch !== undefined && { autoMatch: options.autoMatch }),
         ...(options?.reportLanguage !== undefined && { reportLanguage: options.reportLanguage }),
       });
 

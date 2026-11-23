@@ -10,6 +10,17 @@ vi.mock('../index', () => ({
   },
 }));
 
+it.each(['analyze', 'analyzeAsync'] as const)('serializes auto match for %s only when requested', async (method) => {
+  post.mockClear();
+  post.mockResolvedValue({ status: 202, data: {} });
+
+  await analysisApi[method]({ stockCode: '600519' });
+  await analysisApi[method]({ stockCode: '600519', autoMatch: true });
+
+  expect(post.mock.calls[0][1]).not.toHaveProperty('auto_match');
+  expect(post.mock.calls[1][1]).toHaveProperty('auto_match', true);
+});
+
 describe('analysisApi.triggerMarketReview', () => {
   beforeEach(() => {
     post.mockReset();

@@ -507,6 +507,8 @@ def _handle_async_analysis_batch(
         submit_kwargs["report_language"] = report_language
     if skills is not None:
         submit_kwargs["skills"] = skills
+    if getattr(request, "auto_match", False):
+        submit_kwargs["auto_match"] = True
     # 仅当存在非 None 的结构化 target（如指数）时才传递，保持纯股票请求
     # 的既有 kwargs 契约不变。
     if analysis_targets is not None and any(t is not None for t in analysis_targets):
@@ -614,7 +616,8 @@ def _handle_sync_analysis(
             skills=getattr(request, "skills", None),
             analysis_phase=request.analysis_phase,
             report_language=getattr(request, "report_language", None),
-            analysis_target=analysis_target,
+            **({"analysis_target": analysis_target} if analysis_target is not None else {}),
+            **({"auto_match": True} if getattr(request, "auto_match", False) else {}),
         )
 
         if result is None:

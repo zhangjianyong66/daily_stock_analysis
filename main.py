@@ -1129,7 +1129,11 @@ def run_full_analysis(
                 send_notification=not args.no_notify,
                 merge_notification=merge_notification,
                 current_time=analysis_reference_time,
-                analysis_targets=analysis_targets,
+                **(
+                    {"analysis_targets": analysis_targets}
+                    if analysis_targets and any(target.asset_type == ParseStatus.INDEX for target in analysis_targets)
+                    else {}
+                ),
             )
 
         if should_use_daily_market_context and not market_context_summary:

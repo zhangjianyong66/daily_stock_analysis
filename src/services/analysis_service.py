@@ -79,6 +79,7 @@ class AnalysisService:
         query_source: str = "api",
         portfolio_context: Optional[Dict[str, Any]] = None,
         report_language: Optional[str] = None,
+        auto_match: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """
         执行股票分析
@@ -135,6 +136,7 @@ class AnalysisService:
                 skill_prompt_state=skill_prompt_state,
                 analysis_phase=analysis_phase,
                 portfolio_context=portfolio_context,
+                **({"auto_match": True} if auto_match else {}),
             )
             
             # 确定报告类型 (API: simple/detailed/full/brief -> ReportType)

@@ -578,6 +578,7 @@ def build_agent_executor(
     skills: Optional[List[str]] = None,
     *,
     prompt_state: Optional[SkillPromptState] = None,
+    pin_default_skills: bool = False,
 ):
     """Build and return a configured AgentExecutor (or future orchestrator).
 
@@ -630,7 +631,7 @@ def build_agent_executor(
             strategy_execution=prompt_state.strategy_execution,
             fixed_default_skills=(
                 prompt_state.skills_to_activate
-                if skills == [] or prompt_state.saved_default_skill_id
+                if pin_default_skills or skills == [] or prompt_state.saved_default_skill_id
                 or prompt_state.selection_source in {"auto", "auto_fallback"}
                 else None
             ),

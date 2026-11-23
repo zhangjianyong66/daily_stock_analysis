@@ -4172,8 +4172,8 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "warning_codes": [],
     },
     "DEFAULT_ANALYSIS_SKILL": {
-        "title": "Auto-match Fallback Strategy",
-        "description": "Single fallback used when daily-bar auto matching cannot select a reliable strategy. Leave empty to follow AGENT_SKILLS and the built-in fallback.",
+        "title": "Default Analysis Strategy",
+        "description": "Strategy used by default and when requested daily-bar auto matching finds no match. Leave empty to follow AGENT_SKILLS and the built-in Bull Trend strategy.",
         "category": "agent",
         "data_type": "string",
         "ui_control": "select",

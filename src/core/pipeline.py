@@ -191,6 +191,7 @@ class StockAnalysisPipeline:
         portfolio_context: Optional[Dict[str, Any]] = None,
         daily_market_context_enabled: Optional[bool] = None,
         daily_market_context_allow_generate: bool = True,
+        auto_match: bool = False,
     ):
         """
         初始化调度器
@@ -210,6 +211,7 @@ class StockAnalysisPipeline:
         )
         self.progress_callback = progress_callback
         self.analysis_skills = list(analysis_skills) if analysis_skills is not None else None
+        self.auto_match = auto_match
         if skill_prompt_state is None:
             from src.agent.factory import resolve_skill_prompt_state
 
@@ -384,9 +386,9 @@ class StockAnalysisPipeline:
         )
 
         frozen_state = self.skill_prompt_state
-        if self.analysis_skills:
+        if self.analysis_skills or not self.auto_match:
             return AutoStrategyResolution(
-                mode="explicit",
+                mode="explicit" if self.analysis_skills else "default",
                 skills=tuple(frozen_state.skills_to_activate),
                 prompt_state=frozen_state,
                 pattern_report=None,
@@ -483,7 +485,7 @@ class StockAnalysisPipeline:
                 code,
                 self.analysis_skills,
             )
-        if not use_agent and getattr(strategy_resolution, "mode", None) not in {"matched", "fallback"}:
+        if not use_agent and getattr(strategy_resolution, "mode", None) in {None, "explicit"}:
             configured_skills = self.skill_prompt_state.skills_to_activate
             if (
                 self.skill_prompt_state.selection_source in {"saved", "agent_skills"}
@@ -1520,10 +1522,12 @@ class StockAnalysisPipeline:
             )
 
             # Build executor from shared factory (ToolRegistry and SkillManager prototype are cached)
+            use_fixed_default = getattr(strategy_resolution, "mode", None) == "default"
             executor = build_agent_executor(
                 self.config,
                 runtime_skills,
                 prompt_state=prompt_state,
+                **({"pin_default_skills": True} if use_fixed_default else {}),
             )
 
             # Build initial context to avoid redundant tool calls
@@ -1536,7 +1540,7 @@ class StockAnalysisPipeline:
             }
             if isinstance(portfolio_context, dict):
                 initial_context["portfolio_context"] = dict(portfolio_context)
-            if runtime_skills is not None:
+            if runtime_skills is not None and not use_fixed_default:
                 initial_context["skills"] = runtime_skills
             if market_phase_context is not None:
                 initial_context["market_phase_context"] = market_phase_context

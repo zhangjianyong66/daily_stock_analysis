@@ -1,6 +1,8 @@
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
+import pytest
+
 from src.agent.factory import SkillPromptState
 from src.agent.skills.base import Skill, SkillManager
 from src.core.pipeline import StockAnalysisPipeline
@@ -41,10 +43,11 @@ def _prompt_state():
     )
 
 
-def _pipeline():
+def _pipeline(*, auto_match=False):
     pipeline = StockAnalysisPipeline.__new__(StockAnalysisPipeline)
     pipeline.config = SimpleNamespace(report_language="zh")
     pipeline.analysis_skills = None
+    pipeline.auto_match = auto_match
     pipeline.skill_prompt_state = _prompt_state()
     return pipeline
 
@@ -70,7 +73,7 @@ def _match(skill_id, pattern):
 
 
 def test_two_concurrent_stocks_keep_independent_auto_prompt_states(monkeypatch):
-    pipeline = _pipeline()
+    pipeline = _pipeline(auto_match=True)
     monkeypatch.setattr("src.core.pipeline.get_reliable_effective_trading_date", lambda *args, **kwargs: "2026-07-27")
     monkeypatch.setattr(
         "src.services.kline_pattern_service.build_runtime_pattern_match",
@@ -95,7 +98,7 @@ def test_two_concurrent_stocks_keep_independent_auto_prompt_states(monkeypatch):
 
 
 def test_auto_match_failure_uses_the_frozen_fallback_and_context(monkeypatch):
-    pipeline = _pipeline()
+    pipeline = _pipeline(auto_match=True)
     monkeypatch.setattr("src.core.pipeline.get_reliable_effective_trading_date", lambda *args, **kwargs: "2026-07-27")
     monkeypatch.setattr(
         "src.services.kline_pattern_service.build_runtime_pattern_match",
@@ -115,8 +118,24 @@ def test_auto_match_failure_uses_the_frozen_fallback_and_context(monkeypatch):
     assert resolution.prompt_state.strategy_execution["selection_context"]["fallback_reason"] == "no_reliable_pattern"
 
 
-def test_explicit_strategy_is_not_replaced_by_auto_match(monkeypatch):
+def test_default_resolution_uses_frozen_strategy_without_running_auto_match(monkeypatch):
     pipeline = _pipeline()
+    monkeypatch.setattr(
+        "src.services.kline_pattern_service.build_runtime_pattern_match",
+        lambda *args, **kwargs: pytest.fail("daily-bar auto match ran in default mode"),
+    )
+
+    resolution = pipeline._resolve_stock_strategy("600519", current_time=None)
+
+    assert resolution.mode == "default"
+    assert resolution.skills == ("bull_trend",)
+    assert resolution.prompt_state is pipeline.skill_prompt_state
+    assert resolution.prompt_state.strategy_execution["source"] == "default"
+    assert resolution.selection_context is None
+
+
+def test_explicit_strategy_is_not_replaced_by_auto_match(monkeypatch):
+    pipeline = _pipeline(auto_match=True)
     pipeline.analysis_skills = ["box_oscillation"]
     pipeline.skill_prompt_state = _prompt_state()
     pipeline.skill_prompt_state.skill_manager.activate(["box_oscillation"])

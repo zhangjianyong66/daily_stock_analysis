@@ -92,6 +92,7 @@ class TaskInfo:
     asset_type: Optional[str] = None
     trace_id: Optional[str] = None
     flow_events: List[Dict[str, Any]] = field(default_factory=list)
+    auto_match: bool = False
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert task info into an API-friendly dictionary."""
@@ -142,6 +143,7 @@ class TaskInfo:
             asset_type=self.asset_type,
             trace_id=self.trace_id or self.task_id,
             flow_events=copy.deepcopy(self.flow_events),
+            auto_match=self.auto_match,
         )
 
 
@@ -471,6 +473,7 @@ class AnalysisTaskQueue:
         notify: bool = True,
         skills: Optional[List[str]] = None,
         report_language: Optional[str] = None,
+        auto_match: bool = False,
     ) -> Tuple[List[TaskInfo], List[DuplicateTaskError]]:
         """
         Submit analysis tasks in batch.
@@ -526,6 +529,7 @@ class AnalysisTaskQueue:
                     skills=task_skills,
                     skill_prompt_state=task_prompt_state,
                     report_language=report_language,
+                    auto_match=auto_match,
                 )
                 self._tasks[task_id] = task_info
                 self._analyzing_stocks[dedupe_key] = task_id
@@ -830,6 +834,7 @@ class AnalysisTaskQueue:
                 return None
             trace_id = task.trace_id or task_id
             analysis_phase = task.analysis_phase
+            auto_match = task.auto_match
             query_source = task.query_source or "api"
             portfolio_context = dict(task.portfolio_context) if isinstance(task.portfolio_context, dict) else None
             task.status = TaskStatus.PROCESSING
@@ -873,6 +878,7 @@ class AnalysisTaskQueue:
                 query_source=query_source,
                 portfolio_context=portfolio_context,
                 report_language=report_language,
+                **({"auto_match": True} if auto_match else {}),
             )
             reset_run_diagnostic_context(diag_token)
             diag_token = None

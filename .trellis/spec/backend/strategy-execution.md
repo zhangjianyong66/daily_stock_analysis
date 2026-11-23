@@ -27,10 +27,10 @@
 - `status`：`normal`、`partial`、`fallback`、`degraded`、`unrecorded`。
 - `source`：`request`、`default`、`config`、`auto`、`fallback`、`unknown`。
 - 每个策略项保存稳定 `id`、历史快照名称 `display_name` 和 `status`（`selected`/`degraded`/`not_executed`）。
-- 个股分析统一优先级：单次明确 `skills` > 最近完整日 K 线自动匹配 > 有效 `DEFAULT_ANALYSIS_SKILL` > `AGENT_SKILLS` > 内置 metadata 默认；问股与大盘复盘不进入 K 线自动匹配。
-- `DEFAULT_ANALYSIS_SKILL` 是自动匹配失败后的部署级单值兜底；保存值存在时，兜底阶段使用冻结后的固定结果，不再被执行期配置或行情路由替换。
-- 首页首项固定为“自动匹配”，初始与清空选择必须省略 `skills`；具体策略发送单值列表。问股仍可视觉选中 `default_skill_id`，清空时保留显式 `skills=[]` 以清理旧上下文。
-- 异步分析在入队时解析并深拷贝兜底 `SkillPromptState` 和策略目录；配置热更新只影响之后创建的任务。每股匹配状态作为局部不可变对象传递，不得写回共享 Pipeline/Analyzer。
+- 个股分析优先使用非空 `skills`。API 显式传 `auto_match=true` 才按最近完整日 K 线匹配。其余请求和未命中的匹配按有效 `DEFAULT_ANALYSIS_SKILL`、`AGENT_SKILLS`、内置默认多头趋势的顺序解析。显式 `skills=[]` 使用内置默认作为默认或兜底。问股与大盘复盘使用各自的策略入口。
+- 普通个股分析的默认策略使用冻结后的固定结果。执行期配置和多 Agent 行情路由不得替换该结果。
+- 首页首项为多头趋势，其后为自动匹配。默认选中 `default_skill_id` 并省略策略参数，其他具体策略发送单值 `skills`，自动匹配发送 `auto_match=true`。配置列表批量跟随服务端默认。问股清空时保留显式 `skills=[]` 以清理旧上下文。
+- 异步分析在入队时保存 `auto_match`，并解析、深拷贝 `SkillPromptState` 和策略目录。配置热更新只影响之后创建的任务。每股匹配状态作为局部不可变对象传递，不得写回共享 Pipeline/Analyzer。
 - 快照可选 `selection_context`：`mode=auto_match`、`status=matched|fallback`、`as_of`、`matched_patterns`、`candidates`、`selected_skill_id`、`fallback_reason`。保持 `schema_version=1`，旧快照缺失该字段时正常读取。
 - 策略列表接口中 `default_skill_source` 取 `saved/agent_skills/builtin/fallback`；保存值失效时 `saved_default_skill_id` 保留原值，`default_skill_warning` 给出非敏感提示。
 - 后端生成的快照是唯一事实来源；历史缺少或非法快照时返回空值，展示层显示“策略未记录”，不得根据当前配置推断。
@@ -63,7 +63,7 @@
 - 默认解析：保存默认优先于 `AGENT_SKILLS`、显式请求优先于保存默认、保存值失效可解释回退。
 - 配置/API：动态候选包含跟随系统默认；无效保存返回 `unavailable_strategy`；skills/legacy strategies 接口字段一致。
 - 任务/router：队列冻结 prompt state；保存默认优先于自动行情路由。
-- Web：首页初始自动匹配不发送 `skills`，具体选择后显式发送；快捷保存、恢复和失败不误更新兜底标记。问股保持原默认范围。
+- Web：首页默认使用服务端配置，多头趋势排第一。显式自动匹配、具体策略、恢复默认发送对应参数。快捷保存和恢复核对默认标记与错误状态。
 - API：从持久化 `raw_result` 重建报告时断言 `report.meta.strategy_execution.source` 和嵌套策略项属性可用。
 - 跨层：历史报告、通知、Markdown、Web 实时/历史展示使用同一名称、来源和状态语义。
 - 重新分析：始终按首页当前菜单；自动匹配重新判断最新合格 K 线，具体策略发送单值，不隐式复用历史 effective strategy。

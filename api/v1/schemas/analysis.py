@@ -92,6 +92,10 @@ class AnalyzeRequest(BaseModel):
         description="本次分析使用的策略 skill ID 列表；兼容 legacy strategies 字段",
         json_schema_extra={"example": ["bull_trend", "growth_quality"]},
     )
+    auto_match: bool = Field(
+        False,
+        description="显式启用完整日 K 线自动匹配；非空 skills 优先，匹配失败时使用默认策略",
+    )
 
     model_config = ConfigDict(json_schema_extra={
         "example": {

@@ -1619,6 +1619,10 @@ describe('HomePage', () => {
   });
 
   it('passes the current notification toggle state to configured batch submission', async () => {
+    vi.mocked(agentApi.getSkills).mockResolvedValue({
+      default_skill_id: 'bull_trend',
+      skills: [{ id: 'bull_trend', name: '默认多头趋势', description: '趋势分析' }],
+    });
     vi.mocked(historyApi.getList).mockResolvedValue({
       total: 0,
       page: 1,
@@ -1638,6 +1642,8 @@ describe('HomePage', () => {
       </MemoryRouter>,
     );
 
+    fireEvent.click(await screen.findByRole('button', { name: '策略' }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /自动匹配/ }));
     fireEvent.click(await screen.findByLabelText('推送通知'));
     fireEvent.click(screen.getByRole('button', { name: '批量分析配置' }));
     fireEvent.click(await screen.findByRole('button', { name: '确认提交' }));
@@ -1648,6 +1654,7 @@ describe('HomePage', () => {
         notify: false,
       }));
     });
+    expect(vi.mocked(analysisApi.analyzeAsync).mock.calls[0]?.[0]).not.toHaveProperty('autoMatch');
   });
 
   it('keeps report language unset when only the UI language is English', async () => {
@@ -2098,6 +2105,10 @@ describe('HomePage', () => {
   });
 
   it('excludes watchlist rows with active tasks from pending batch submissions', async () => {
+    vi.mocked(agentApi.getSkills).mockResolvedValue({
+      default_skill_id: 'bull_trend',
+      skills: [{ id: 'bull_trend', name: '默认多头趋势', description: '趋势分析' }],
+    });
     const activeTask = {
       taskId: 'task-600519',
       stockCode: '600519',
@@ -2161,6 +2172,8 @@ describe('HomePage', () => {
       </MemoryRouter>,
     );
 
+    fireEvent.click(await screen.findByRole('button', { name: '策略' }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /自动匹配/ }));
     fireEvent.click(await screen.findByRole('button', { name: '自选' }));
 
     const analyzePendingButton = screen.getByRole('button', { name: '仅未分析' });
@@ -2170,6 +2183,7 @@ describe('HomePage', () => {
     await waitFor(() => {
       expect(analysisApi.analyzeAsync).toHaveBeenCalledWith(expect.objectContaining({
         stockCodes: ['AAPL'],
+        autoMatch: true,
       }));
     });
     expect(analysisApi.analyzeAsync).toHaveBeenCalledTimes(1);
@@ -2216,6 +2230,10 @@ describe('HomePage', () => {
   });
 
   it('reanalyzes with current auto-match selection instead of the historical strategy', async () => {
+    vi.mocked(agentApi.getSkills).mockResolvedValue({
+      default_skill_id: 'bull_trend',
+      skills: [{ id: 'bull_trend', name: '默认多头趋势', description: '趋势分析' }],
+    });
     vi.mocked(historyApi.getList).mockResolvedValue({
       total: 1,
       page: 1,
@@ -2244,10 +2262,12 @@ describe('HomePage', () => {
       </MemoryRouter>,
     );
 
+    fireEvent.click(await screen.findByRole('button', { name: '策略' }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /自动匹配/ }));
     fireEvent.click(await screen.findByRole('button', { name: '重新分析' }));
 
     const request = vi.mocked(analysisApi.analyzeAsync).mock.calls.at(-1)?.[0];
-    expect(request).toEqual(expect.objectContaining({ stockCode: '600519' }));
+    expect(request).toEqual(expect.objectContaining({ stockCode: '600519', autoMatch: true }));
     expect(request).not.toHaveProperty('skills');
   });
 
@@ -2335,15 +2355,15 @@ describe('HomePage', () => {
     });
   });
 
-  it('shows auto match by default without sending the fallback as an explicit selection', async () => {
+  it('shows the configured default and puts Bull Trend first without explicitly sending that selection', async () => {
     vi.mocked(agentApi.getSkills).mockResolvedValue({
-      default_skill_id: 'bull_trend',
+      default_skill_id: 'growth_quality',
       default_skill_source: 'saved',
-      saved_default_skill_id: 'bull_trend',
+      saved_default_skill_id: 'growth_quality',
       default_skill_warning: null,
       skills: [
-        { id: 'bull_trend', name: '默认多头趋势', description: '趋势分析' },
         { id: 'growth_quality', name: '成长质量', description: '成长股分析' },
+        { id: 'bull_trend', name: '默认多头趋势', description: '趋势分析' },
       ],
     });
     vi.mocked(historyApi.getList).mockResolvedValue({
@@ -2363,7 +2383,17 @@ describe('HomePage', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByRole('button', { name: '策略' })).toHaveTextContent('自动匹配（默认）');
+    const trigger = await screen.findByRole('button', { name: '策略' });
+    expect(trigger).toHaveTextContent('成长质量');
+    fireEvent.click(trigger);
+    const options = screen.getAllByRole('menuitemradio');
+    expect(options[0]).toHaveTextContent('默认多头趋势');
+    expect(options[1]).toHaveTextContent('自动匹配');
+    expect(options[2]).toHaveAttribute('aria-checked', 'true');
+    fireEvent.click(options[1]);
+    expect(trigger).toHaveTextContent('自动匹配');
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /成长质量.*默认/ }));
     const input = screen.getByPlaceholderText('输入股票代码或名称，如 600519、贵州茅台、AAPL');
     fireEvent.change(input, { target: { value: '600519' } });
     fireEvent.click(screen.getByRole('button', { name: '分析' }));
@@ -2372,6 +2402,7 @@ describe('HomePage', () => {
     const request = vi.mocked(analysisApi.analyzeAsync).mock.calls.at(-1)?.[0];
     expect(request).toEqual(expect.objectContaining({ stockCode: '600519' }));
     expect(request).not.toHaveProperty('skills');
+    expect(request).not.toHaveProperty('autoMatch');
   });
 
   it('sets a strategy as the server default and refreshes the default marker', async () => {
@@ -2404,7 +2435,7 @@ describe('HomePage', () => {
     );
 
     fireEvent.click(await screen.findByRole('button', { name: '策略' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: '将“成长质量”设为兜底策略' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '将“成长质量”设为默认策略' }));
 
     await waitFor(() => {
       expect(systemConfigApi.update).toHaveBeenCalledWith({
@@ -2414,8 +2445,8 @@ describe('HomePage', () => {
         items: [{ key: 'DEFAULT_ANALYSIS_SKILL', value: 'growth_quality' }],
       });
     });
-    expect(await screen.findByText('兜底策略已更新')).toBeInTheDocument();
-    expect(screen.getByRole('menuitemradio', { name: /成长质量.*兜底/ })).toBeInTheDocument();
+    expect(await screen.findByText('默认策略已更新')).toBeInTheDocument();
+    expect(screen.getByRole('menuitemradio', { name: /成长质量.*默认/ })).toHaveAttribute('aria-checked', 'true');
   });
 
   it('restores following the system default from the homepage menu', async () => {
@@ -2448,14 +2479,14 @@ describe('HomePage', () => {
     );
 
     fireEvent.click(await screen.findByRole('button', { name: '策略' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: '恢复系统兜底链路' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '恢复系统默认' }));
 
     await waitFor(() => {
       expect(systemConfigApi.update).toHaveBeenCalledWith(expect.objectContaining({
         items: [{ key: 'DEFAULT_ANALYSIS_SKILL', value: '' }],
       }));
     });
-    expect(await screen.findByText('兜底策略已更新')).toBeInTheDocument();
+    expect(await screen.findByText('默认策略已更新')).toBeInTheDocument();
   });
 
   it('keeps the existing default marker when quick-save fails', async () => {
@@ -2478,11 +2509,11 @@ describe('HomePage', () => {
     );
 
     fireEvent.click(await screen.findByRole('button', { name: '策略' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: '将“成长质量”设为兜底策略' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '将“成长质量”设为默认策略' }));
 
-    expect(await screen.findByText('兜底策略未保存')).toBeInTheDocument();
+    expect(await screen.findByText('默认策略未保存')).toBeInTheDocument();
     expect(agentApi.getSkills).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole('menuitemradio', { name: /默认多头趋势.*兜底/ })).toBeInTheDocument();
+    expect(screen.getByRole('menuitemradio', { name: /默认多头趋势.*默认/ })).toBeInTheDocument();
   });
 
   it('supports keyboard navigation in the strategy menu', async () => {
@@ -2509,14 +2540,14 @@ describe('HomePage', () => {
     const trigger = await screen.findByRole('button', { name: '策略' });
     fireEvent.keyDown(trigger, { key: 'ArrowDown' });
 
-    const defaultOption = await screen.findByRole('menuitemradio', { name: /自动匹配/ });
+    const defaultOption = await screen.findByRole('menuitemradio', { name: /默认多头趋势/ });
     await waitFor(() => {
       expect(defaultOption).toHaveFocus();
     });
 
     const menu = screen.getByRole('menu');
     fireEvent.keyDown(menu, { key: 'ArrowDown' });
-    expect(screen.getByRole('menuitemradio', { name: /默认多头趋势/ })).toHaveFocus();
+    expect(screen.getByRole('menuitemradio', { name: /自动匹配/ })).toHaveFocus();
 
     fireEvent.keyDown(menu, { key: 'End' });
     expect(screen.getByRole('menuitemradio', { name: /成长质量/ })).toHaveFocus();

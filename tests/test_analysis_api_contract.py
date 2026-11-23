@@ -1219,7 +1219,7 @@ class AnalysisApiContractTestCase(unittest.TestCase):
 
         )
 
-    def test_analysis_service_passes_request_skills_to_pipeline(self) -> None:
+    def test_analysis_service_passes_request_strategy_options_to_pipeline(self) -> None:
         service = object.__new__(AnalysisService)
         pipeline_instance = MagicMock()
         pipeline_instance.process_single_stock.return_value = object()
@@ -1234,10 +1234,12 @@ class AnalysisApiContractTestCase(unittest.TestCase):
                 report_type="full",
                 query_id="q1",
                 skills=request_skills,
+                auto_match=True,
             )
 
         self.assertEqual(result, {"stock_code": "600519"})
         self.assertEqual(pipeline_cls.call_args.kwargs["analysis_skills"], request_skills)
+        self.assertIs(pipeline_cls.call_args.kwargs["auto_match"], True)
 
     def test_report_type_full_is_preserved_in_response_metadata(self) -> None:
         service = AnalysisService()
@@ -1297,10 +1299,13 @@ class AnalysisApiContractTestCase(unittest.TestCase):
                         force_refresh=False,
                         notify=True,
                         analysis_phase="auto",
+                        auto_match=True,
                     ),
                 )
 
         self.assertEqual(ctx.exception.status_code, 500)
+        self.assertIs(service_instance.analyze_stock.call_args.kwargs["auto_match"], True)
+        self.assertNotIn("analysis_target", service_instance.analyze_stock.call_args.kwargs)
         self.assertEqual(
             ctx.exception.detail,
             {
@@ -2906,6 +2911,7 @@ class AnalysisApiContractTestCase(unittest.TestCase):
             "stock_code": "600519",
             "async_mode": True,
             "reportLanguage": "en",
+            "auto_match": True,
         })
 
         with patch("api.v1.endpoints.analysis.get_task_queue", return_value=queue):
@@ -2922,6 +2928,7 @@ class AnalysisApiContractTestCase(unittest.TestCase):
             force_refresh=False,
             notify=True,
             report_language="en",
+            auto_match=True,
         )
 
     def test_trigger_analysis_async_passes_and_returns_analysis_phase(self) -> None:
@@ -3517,6 +3524,7 @@ class BatchTaskQueueContractTestCase(unittest.TestCase):
             query_source="portfolio",
             portfolio_context=portfolio_context,
             skills=request_skills,
+            auto_match=True,
         )
         request_skills.append("mutated_after_submit")
         portfolio_context["quantity"] = 999
@@ -3533,6 +3541,7 @@ class BatchTaskQueueContractTestCase(unittest.TestCase):
         self.assertEqual(accepted[0].portfolio_context["quantity"], 100)
         self.assertEqual(accepted[0].copy().portfolio_context["quantity"], 100)
         self.assertEqual(accepted[0].skills, ["growth_quality"])
+        self.assertIs(accepted[0].copy().auto_match, True)
         self.assertIs(executor.calls[0][1][5], accepted[0].skills)
         self.assertIsNone(executor.calls[0][1][6])
 
@@ -3541,6 +3550,7 @@ class BatchTaskQueueContractTestCase(unittest.TestCase):
         with patch("src.services.analysis_service.AnalysisService", return_value=service_instance):
             executor.calls[0][0](*executor.calls[0][1])
 
+        self.assertIs(service_instance.analyze_stock.call_args.kwargs["auto_match"], True)
         self.assertIs(
             service_instance.analyze_stock.call_args.kwargs["skills"],
             accepted[0].skills,

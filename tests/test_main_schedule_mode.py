@@ -811,7 +811,7 @@ class MainScheduleModeTestCase(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         pipeline_run_kwargs = pipeline_class.return_value.run.call_args.kwargs
         self.assertEqual(pipeline_run_kwargs["stock_codes"], ["AAPL", "HK00700"])
-        self.assertIsNone(pipeline_run_kwargs["analysis_targets"])
+        self.assertNotIn("analysis_targets", pipeline_run_kwargs)
 
     def test_schedule_mode_with_bad_stocks_token_reaches_scheduler(self) -> None:
         """Review 反例：`--schedule --stocks 930956.CSI` 不因坏 token 分类退出，
@@ -2508,7 +2508,6 @@ class MainScheduleModeTestCase(unittest.TestCase):
             send_notification=True,
             merge_notification=True,
             current_time=unittest.mock.ANY,
-            analysis_targets=None,
         )
         notifier_message = pipeline.notifier.send.call_args.args[0]
         self.assertIn("## 完整大盘复盘", notifier_message)
@@ -2618,7 +2617,7 @@ class MainScheduleModeTestCase(unittest.TestCase):
         self.assertIs(call_args.args[1], run_market_review)
         self.assertEqual(call_args.kwargs["trigger_source"], "schedule")
 
-    def test_run_full_analysis_keeps_targets_aligned_after_trading_day_filter(self) -> None:
+    def test_run_full_analysis_uses_plain_stock_path_after_filtering_out_index(self) -> None:
         args = self._make_args(dry_run=True, no_market_review=True)
         config = self._make_config(
             trading_day_check_enabled=True,
@@ -2653,7 +2652,7 @@ class MainScheduleModeTestCase(unittest.TestCase):
 
         run_kwargs = pipeline.run.call_args.kwargs
         self.assertEqual(run_kwargs["stock_codes"], ["AAPL"])
-        self.assertEqual(run_kwargs["analysis_targets"], [targets[1]])
+        self.assertNotIn("analysis_targets", run_kwargs)
 
     def test_market_review_mode_uses_shared_runtime_assembly(self) -> None:
         args = self._make_args(market_review=True)

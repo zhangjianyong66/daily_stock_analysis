@@ -24,6 +24,7 @@ export interface AnalysisRequest {
   selectionSource?: 'manual' | 'autocomplete' | 'import' | 'image';
   notify?: boolean;
   skills?: string[];
+  autoMatch?: boolean;
   reportLanguage?: ReportLanguage;
 }
 

@@ -80,6 +80,8 @@ type StockAnalysisNavigationState = {
 const DUPLICATE_BANNER_AUTO_DISMISS_MS = 5000;
 const BATCH_ANALYSIS_CHUNK_SIZE = 50;
 const TODAY_ANALYSIS_PAGE_SIZE = 100;
+const BULL_TREND_SKILL_ID = 'bull_trend';
+const AUTO_MATCH_OPTION_ID = '';
 const SERVER_LOCAL_DATE_TIME_PATTERN = /^\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/;
 
 type BatchAnalyzeStatus = {
@@ -227,7 +229,7 @@ const HomePage: React.FC = () => {
   const [marketReviewReport, setMarketReviewReport] = useState<string | null>(null);
   const [marketReviewPayload, setMarketReviewPayload] = useState<MarketReviewPayload | null>(null);
   const [analysisSkills, setAnalysisSkills] = useState<SkillInfo[]>([]);
-  const [selectedStrategyId, setSelectedStrategyId] = useState('');
+  const [strategyOverride, setStrategyOverride] = useState<string | null>(null);
   const [effectiveDefaultStrategyId, setEffectiveDefaultStrategyId] = useState('');
   const [savedDefaultStrategyId, setSavedDefaultStrategyId] = useState('');
   const [defaultStrategyWarning, setDefaultStrategyWarning] = useState<string | null>(null);
@@ -426,10 +428,10 @@ const HomePage: React.FC = () => {
   }, [strategyMenuOpen]);
 
   useEffect(() => {
-    if (selectedStrategyId && !analysisSkills.some((skill) => skill.id === selectedStrategyId)) {
-      setSelectedStrategyId('');
+    if (strategyOverride && !analysisSkills.some((skill) => skill.id === strategyOverride)) {
+      setStrategyOverride(null);
     }
-  }, [analysisSkills, selectedStrategyId]);
+  }, [analysisSkills, strategyOverride]);
 
   const reportLanguage = normalizeReportLanguage(selectedReport?.meta.reportLanguage);
   const liveMarketReviewLanguage = normalizeReportLanguage(marketReviewPayload?.language);
@@ -443,22 +445,32 @@ const HomePage: React.FC = () => {
     closeHistoryTrend();
   }, [closeHistoryTrend, isHistoryTrendOpen, isHistoryTrendUnavailable]);
 
-  const selectedAnalysisSkills = useMemo(
-    () => (selectedStrategyId ? [selectedStrategyId] : undefined),
-    [selectedStrategyId],
-  );
-  const strategyOptions = useMemo(
-    () => [
-      { id: '', name: t('home.defaultStrategyName'), description: t('home.defaultStrategyDescription') },
-      ...analysisSkills.map((skill) => ({
-        id: skill.id,
-        name: skill.name,
-        description: skill.description,
-        usageScenarios: (skill.usage_scenarios || []).slice(0, 3),
-      })),
-    ],
-    [analysisSkills, t],
-  );
+  const selectedStrategyId = strategyOverride ?? (effectiveDefaultStrategyId || BULL_TREND_SKILL_ID);
+  const strategyRequestOptions = useMemo(() => {
+    if (strategyOverride === null) return {};
+    if (strategyOverride === AUTO_MATCH_OPTION_ID) return { autoMatch: true };
+    return { skills: [strategyOverride] };
+  }, [strategyOverride]);
+  const strategyOptions = useMemo(() => {
+    const options = analysisSkills.map((skill) => ({
+      id: skill.id,
+      name: skill.name,
+      description: skill.description,
+      usageScenarios: (skill.usage_scenarios || []).slice(0, 3),
+    }));
+    const bullTrendIndex = options.findIndex((option) => option.id === BULL_TREND_SKILL_ID);
+    const bullTrend = bullTrendIndex >= 0 ? options.splice(bullTrendIndex, 1) : [];
+    return [
+      ...bullTrend,
+      {
+        id: AUTO_MATCH_OPTION_ID,
+        name: t('home.autoMatchStrategyName'),
+        description: t('home.autoMatchStrategyDescription'),
+        usageScenarios: [],
+      },
+      ...options,
+    ];
+  }, [analysisSkills, t]);
   const selectedStrategyOption = useMemo(
     () => strategyOptions.find((option) => option.id === selectedStrategyId),
     [selectedStrategyId, strategyOptions],
@@ -470,9 +482,9 @@ const HomePage: React.FC = () => {
     }
   }, []);
   const selectStrategy = useCallback((strategyId: string) => {
-    setSelectedStrategyId(strategyId);
+    setStrategyOverride(strategyId !== AUTO_MATCH_OPTION_ID && strategyId === effectiveDefaultStrategyId ? null : strategyId);
     setStrategyMenuOpen(false);
-  }, []);
+  }, [effectiveDefaultStrategyId]);
   const saveDefaultStrategy = useCallback(async (strategyId: string) => {
     if (savingDefaultStrategyId !== null) {
       return;
@@ -491,7 +503,7 @@ const HomePage: React.FC = () => {
       });
       const refreshed = await loadAnalysisSkills();
       const defaultName = refreshed.skills.find((skill) => skill.id === refreshed.default_skill_id)?.name
-        || t('home.defaultStrategyName');
+        || refreshed.default_skill_id;
       setStrategyDefaultNotice({
         variant: 'success',
         title: t('home.defaultStrategySavedTitle'),
@@ -791,10 +803,10 @@ const HomePage: React.FC = () => {
         stockName,
         originalQuery: query,
         selectionSource: selectionSource ?? 'manual',
-        skills: selectedAnalysisSkills,
+        ...strategyRequestOptions,
       });
     },
-    [query, selectedAnalysisSkills, submitAnalysis],
+    [query, strategyRequestOptions, submitAnalysis],
   );
 
   useEffect(() => {
@@ -833,9 +845,9 @@ const HomePage: React.FC = () => {
       originalQuery: selectedReport.meta.stockCode,
       selectionSource: 'manual',
       forceRefresh: true,
-      skills: selectedAnalysisSkills,
+      ...strategyRequestOptions,
     });
-  }, [selectedAnalysisSkills, selectedReport, submitAnalysis]);
+  }, [strategyRequestOptions, selectedReport, submitAnalysis]);
 
   const openTaskRunFlow = useCallback((task: TaskInfo) => {
     const stock = task.stockName || task.stockCode || task.taskId;
@@ -1259,7 +1271,7 @@ const HomePage: React.FC = () => {
             stockCodes: chunk,
             reportType: 'detailed',
             notify,
-            skills: selectedAnalysisSkills,
+            ...strategyRequestOptions,
           });
           const counts = countBatchAccepted(result);
           acceptedCount += counts.accepted;
@@ -1329,7 +1341,7 @@ const HomePage: React.FC = () => {
     notify,
     pendingWatchlistCodes,
     refreshActiveTasks,
-    selectedAnalysisSkills,
+    strategyRequestOptions,
     t,
     watchlistTodayStatusBlocked,
     watchlistState.watchlistCodes,
@@ -1466,7 +1478,7 @@ const HomePage: React.FC = () => {
                     className="home-surface-button flex h-11 w-full min-w-0 items-center gap-1.5 rounded-xl px-3 text-xs text-foreground disabled:cursor-not-allowed disabled:opacity-60 min-[360px]:max-w-[8.5rem] sm:max-w-[11rem] lg:h-10"
                   >
                     <SlidersHorizontal className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
-                    <span className="truncate">{selectedStrategyOption?.name || t('home.defaultStrategyName')}</span>
+                    <span className="truncate">{selectedStrategyOption?.name || t('home.strategy')}</span>
                   </button>
                   {strategyMenuOpen ? (
                     <div
@@ -1486,10 +1498,10 @@ const HomePage: React.FC = () => {
                       {strategyOptions.map((option, index) => {
                         const selected = selectedStrategyId === option.id;
                         const isEffectiveDefault = Boolean(option.id) && effectiveDefaultStrategyId === option.id;
-                        const isSaving = savingDefaultStrategyId === (option.id || '__follow_system__');
+                        const isSaving = savingDefaultStrategyId === option.id;
                         return (
                           <div
-                            key={option.id || 'default'}
+                            key={option.id || 'auto-match'}
                             className="flex items-stretch gap-1 rounded-lg transition-colors hover:bg-hover"
                           >
                             <button
@@ -1515,7 +1527,7 @@ const HomePage: React.FC = () => {
                                   ) : null}
                                 </span>
                                 <span className="mt-0.5 line-clamp-2 block text-xs leading-5 text-muted-text">{option.description}</span>
-                                {'usageScenarios' in option && option.usageScenarios?.length ? (
+                                {option.usageScenarios.length ? (
                                   <span className="mt-1 flex flex-wrap gap-1">
                                     {option.usageScenarios.map((scenario: string) => (
                                       <span key={scenario} className="rounded border border-subtle px-1.5 py-0.5 text-[10px] leading-4 text-secondary-text">{scenario}</span>
@@ -1541,7 +1553,7 @@ const HomePage: React.FC = () => {
                                 )}
                               </button>
                             ) : null}
-                            {!option.id && savedDefaultStrategyId ? (
+                            {isEffectiveDefault && savedDefaultStrategyId ? (
                               <button
                                 type="button"
                                 role="menuitem"
@@ -1551,7 +1563,7 @@ const HomePage: React.FC = () => {
                                 onClick={() => void saveDefaultStrategy('')}
                                 className="flex w-9 flex-shrink-0 items-center justify-center rounded-lg text-muted-text transition-colors hover:bg-primary/10 hover:text-primary disabled:cursor-wait disabled:opacity-50"
                               >
-                                {isSaving ? (
+                              {savingDefaultStrategyId === '__follow_system__' ? (
                                   <RefreshCw className="h-4 w-4 animate-spin" aria-hidden="true" />
                                 ) : (
                                   <RotateCcw className="h-4 w-4" aria-hidden="true" />

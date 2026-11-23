@@ -34,6 +34,7 @@ export const analysisApi = {
       original_query: data.originalQuery,
       selection_source: data.selectionSource,
       ...(data.skills !== undefined && { skills: data.skills }),
+      ...(data.autoMatch !== undefined && { auto_match: data.autoMatch }),
       report_language: data.reportLanguage,
       ...(data.notify !== undefined && { notify: data.notify }),
     };
@@ -70,6 +71,7 @@ export const analysisApi = {
       original_query: data.originalQuery,
       selection_source: data.selectionSource,
       ...(data.skills !== undefined && { skills: data.skills }),
+      ...(data.autoMatch !== undefined && { auto_match: data.autoMatch }),
       report_language: data.reportLanguage,
       ...(data.notify !== undefined && { notify: data.notify }),
     };
